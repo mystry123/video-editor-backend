@@ -4,7 +4,7 @@ import { validate } from '../middleware/validate.middleware';
 import * as webhookController from '../controllers/webhook.controller';
 import { createWebhookSchema, updateWebhookSchema } from '../validators/webhook.validator';
 
-const router = Router();
+const router: Router = Router();
 
 router.use(requireAuth);
 

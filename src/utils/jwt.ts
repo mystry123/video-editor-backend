@@ -2,6 +2,9 @@ import jwt, { SignOptions } from 'jsonwebtoken';
 import crypto from 'crypto';
 import { env } from '../config/env';
 
+// Type alias for JWT StringValue
+type JWTStringValue = Parameters<typeof jwt.sign>[2]['expiresIn'];
+
 export interface TokenPayload {
   userId: string;
   email: string;
@@ -17,7 +20,7 @@ export interface TokenPair {
 // Generate access token (short-lived)
 export function generateAccessToken(payload: TokenPayload): string {
   const options: SignOptions = {
-    expiresIn: env.jwtExpiresIn,
+    expiresIn: env.jwtExpiresIn as JWTStringValue,
     issuer: 'video-editor-api',
   };
   return jwt.sign(payload, env.jwtSecret, options);
@@ -26,7 +29,7 @@ export function generateAccessToken(payload: TokenPayload): string {
 // Generate refresh token (long-lived)
 export function generateRefreshToken(payload: TokenPayload): string {
   const options: SignOptions = {
-    expiresIn: env.jwtRefreshExpiresIn,
+    expiresIn: env.jwtRefreshExpiresIn as JWTStringValue,
     issuer: 'video-editor-api',
   };
   return jwt.sign(

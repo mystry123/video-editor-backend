@@ -6,7 +6,7 @@ import transcriptionRoutes from './transcription.routes';
 import renderRoutes from './render.routes';
 import webhookRoutes from './webhook.routes';
 
-const router = Router();
+const router: Router = Router();
 
 router.use('/auth', authRoutes);
 router.use('/templates', templateRoutes);

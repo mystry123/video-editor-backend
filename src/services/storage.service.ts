@@ -49,3 +49,9 @@ export async function deleteFromS3(key: string) {
     })
   );
 }
+
+export async function copyToCDN(sourceKey: string, destinationKey: string): Promise<string> {
+  // For now, return the S3 URL directly since the file is already in S3
+  // In a real implementation, you might copy to a CDN bucket
+  return `https://${env.s3Bucket}.s3.${env.awsRegion}.amazonaws.com/${destinationKey}`;
+}
