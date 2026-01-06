@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Router as ExpressRouter } from 'express';
 import authRoutes from './auth.routes';
 import templateRoutes from './template.routes';
 import fileRoutes from './file.routes';
@@ -6,7 +6,7 @@ import transcriptionRoutes from './transcription.routes';
 import renderRoutes from './render.routes';
 import webhookRoutes from './webhook.routes';
 
-const router: Router = Router();
+const router: ExpressRouter = Router();
 
 router.use('/auth', authRoutes);
 router.use('/templates', templateRoutes);

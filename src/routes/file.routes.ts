@@ -1,11 +1,11 @@
-import { Router } from 'express';
+import { Router, type Router as ExpressRouter } from 'express';
 import { requireAuth } from '../middleware/auth.middleware';
 import { uploadLimiter } from '../middleware/rateLimit.middleware';
 import { validate } from '../middleware/validate.middleware';
 import * as fileController from '../controllers/file.controller';
 import { getUploadUrlSchema } from '../validators/file.validator';
 
-const router: Router = Router();
+const router: ExpressRouter = Router();
 
 router.use(requireAuth);
 

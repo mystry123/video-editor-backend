@@ -83,7 +83,7 @@ export async function startRemotionRender(job: any): Promise<RenderResult> {
       elements: job.inputProps.elements || []
     },
     codec: job.outputFormat === 'mp4' ? 'h264' : job.outputFormat,
-    framesPerLambda: 500,
+    framesPerLambda: 60,
     outName: `renders/${job.userId}/${job._id}.${job.outputFormat}`,
     maxRetries: 3,
     imageFormat: 'png',

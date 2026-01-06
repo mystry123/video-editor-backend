@@ -1,14 +1,13 @@
-import 'dotenv/config';
 import app from './app';
 import { connectDatabase } from './config/database';
 import { startWorkers } from './queues';
 import { logger } from './utils/logger';
 import { env } from './config/env';
-import dotenv from 'dotenv';
-import path from 'path';
+import * as dotenv from 'dotenv';
+import * as path from 'path';
 
-// Load environment variables
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
+// Load environment variables from project root
+dotenv.config();
 
 async function bootstrap(): Promise<void> {
   // Connect to MongoDB

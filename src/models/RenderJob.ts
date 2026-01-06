@@ -29,39 +29,11 @@ export interface IRenderJob extends Document {
   chunks?: number;
   timeToRenderFrames?: number;
   timeToFinish?: number;
-  timeToFinishChunks?: number;
-  timeToEncode?: number;
-  outputSizeInBytes?: number;
-  estimatedBillingDurationInMilliseconds?: number;
-  timeToCombine?: number;
-  combinedFrames?: number;
-  lambdasInvoked?: number;
-  fatalErrorEncountered?: boolean;
-  renderSize?: number;
-  currentTime?: number;
-  type?: string;
   encodingStatus?: {
     framesEncoded: number;
     combinedFrames: number;
     timeToCombine: number | null;
   };
-  cleanup?: {
-    doneIn: number;
-    filesDeleted: number;
-    minFilesToDelete: number;
-  };
-  mostExpensiveFrameRanges?: Array<{
-    timeInMilliseconds: number;
-    chunk: number;
-    frameRange: [number, number];
-  }>;
-  outKey?: string;
-  outBucket?: string;
-  timeoutTimestamp?: number;
-  compositionValidated?: number;
-  functionLaunched?: number;
-  serveUrlOpened?: number;
-  artifacts?: any[];
   renderErrors?: any[];
   renderMetadata?: any;
   createdAt: Date;
@@ -101,39 +73,11 @@ const RenderJobSchema = new Schema<IRenderJob>(
     chunks: { type: Number },
     timeToRenderFrames: { type: Number },
     timeToFinish: { type: Number },
-    timeToFinishChunks: { type: Number },
-    timeToEncode: { type: Number },
-    outputSizeInBytes: { type: Number },
-    estimatedBillingDurationInMilliseconds: { type: Number },
-    timeToCombine: { type: Number },
-    combinedFrames: { type: Number },
-    lambdasInvoked: { type: Number },
-    fatalErrorEncountered: { type: Boolean },
-    renderSize: { type: Number },
-    currentTime: { type: Number },
-    type: { type: String },
     encodingStatus: {
       framesEncoded: { type: Number },
       combinedFrames: { type: Number },
       timeToCombine: { type: Number },
     },
-    cleanup: {
-      doneIn: { type: Number },
-      filesDeleted: { type: Number },
-      minFilesToDelete: { type: Number },
-    },
-    mostExpensiveFrameRanges: [{
-      timeInMilliseconds: { type: Number },
-      chunk: { type: Number },
-      frameRange: [{ type: Number }],
-    }],
-    outKey: { type: String },
-    outBucket: { type: String },
-    timeoutTimestamp: { type: Number },
-    compositionValidated: { type: Number },
-    functionLaunched: { type: Number },
-    serveUrlOpened: { type: Number },
-    artifacts: [{ type: Schema.Types.Mixed }],
     renderErrors: [{ type: Schema.Types.Mixed }],
     renderMetadata: { type: Schema.Types.Mixed },
   },

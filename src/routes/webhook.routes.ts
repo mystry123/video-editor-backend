@@ -1,10 +1,10 @@
-import { Router } from 'express';
+import { Router, type Router as ExpressRouter } from 'express';
 import { requireAuth } from '../middleware/auth.middleware';
 import { validate } from '../middleware/validate.middleware';
 import * as webhookController from '../controllers/webhook.controller';
 import { createWebhookSchema, updateWebhookSchema } from '../validators/webhook.validator';
 
-const router: Router = Router();
+const router: ExpressRouter = Router();
 
 router.use(requireAuth);
 

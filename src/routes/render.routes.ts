@@ -1,11 +1,11 @@
-import { Router } from 'express';
+import { Router, type Router as ExpressRouter } from 'express';
 import { requireAuth } from '../middleware/auth.middleware';
 import { renderLimiter, progressLimiter } from '../middleware/rateLimit.middleware';
 import { validate } from '../middleware/validate.middleware';
 import * as renderController from '../controllers/render.controller';
 import { startRenderSchema } from '../validators/render.validator';
 
-const router: Router = Router();
+const router: ExpressRouter = Router();
 
 router.use(requireAuth);
 

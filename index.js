@@ -10,13 +10,15 @@ const lambda_client_1 = require("@remotion/lambda-client");
 const dotenv_1 = __importDefault(require("dotenv"));
 const path_1 = __importDefault(require("path"));
 // Load environment variables from .env file
-dotenv_1.default.config({ path: path_1.default.resolve(__dirname, '../.env') });
+dotenv_1.default.config()
 const deployLambdaFunction = async () => {
     try {
         // Step 1: Deploy a function
         console.log('Deploying Lambda function...');
         // Make sure AWS SDK can find credentials
         process.env.AWS_REGION = 'ap-northeast-2';
+
+        console.log(".env",process.env)
         // const {functionName} = await deployFunction({
         //     region: 'ap-south-1',
         //     timeoutInSeconds: 10 * 60, // do this 15 min
@@ -135,7 +137,7 @@ const deployLambdaFunction = async () => {
                 codec: 'h264',
                 imageFormat: 'jpeg',
                 maxRetries: 3,
-                framesPerLambda: 1000,
+                framesPerLambda: 40,
               audioCodec: 'mp3',
               chromiumOptions: {
                 gl: 'swangle',

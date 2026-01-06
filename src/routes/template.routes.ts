@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Router as ExpressRouter } from 'express';
 import { requireAuth } from '../middleware/auth.middleware';
 import { validate } from '../middleware/validate.middleware';
 import * as templateController from '../controllers/template.controller';
@@ -8,7 +8,7 @@ import {
   listTemplatesSchema,
 } from '../validators/template.validator';
 
-const router: Router = Router();
+const router: ExpressRouter = Router();
 
 router.use(requireAuth);
 
