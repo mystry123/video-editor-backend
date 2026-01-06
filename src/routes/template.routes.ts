@@ -8,7 +8,7 @@ import {
   listTemplatesSchema,
 } from '../validators/template.validator';
 
-const router = Router();
+const router: Router = Router();
 
 router.use(requireAuth);
 

@@ -25,7 +25,7 @@ export interface ITranscription extends Document {
   words?: ITranscriptionWord[];
   speakers?: ITranscriptionSpeaker[];
   language?: string;
-  model: string;
+  transcriptionModel: string;
   status: TranscriptionStatus;
   error?: string;
   duration?: number;
@@ -59,7 +59,7 @@ const TranscriptionSchema = new Schema<ITranscription>(
       },
     ],
     language: { type: String },
-    model: { type: String, default: 'scribe_v1' },
+    transcriptionModel: { type: String, default: 'scribe_v1' },
     status: {
       type: String,
       enum: ['pending', 'processing', 'completed', 'failed'],

@@ -5,7 +5,7 @@ import { validate } from '../middleware/validate.middleware';
 import * as fileController from '../controllers/file.controller';
 import { getUploadUrlSchema } from '../validators/file.validator';
 
-const router = Router();
+const router: Router = Router();
 
 router.use(requireAuth);
 

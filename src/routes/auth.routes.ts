@@ -1,4 +1,5 @@
 import { Router } from 'express';
+const router: Router = Router();
 import { requireAuth, optionalAuth, requireCookieAuth } from '../middleware/auth.middleware';
 import { validate } from '../middleware/validate.middleware';
 import * as authController from '../controllers/auth.controller';
@@ -12,8 +13,6 @@ import {
   createApiKeySchema,
   oauthTokenSchema,
 } from '../validators/auth.validator';
-
-const router = Router();
 
 // ============================================
 // PUBLIC ROUTES (No authentication required)

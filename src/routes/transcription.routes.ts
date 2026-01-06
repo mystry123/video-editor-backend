@@ -4,7 +4,7 @@ import { validate } from '../middleware/validate.middleware';
 import * as transcriptionController from '../controllers/transcription.controller';
 import { createTranscriptionSchema } from '../validators/transcription.validator';
 
-const router = Router();
+const router: Router = Router();
 
 router.use(requireAuth);
 

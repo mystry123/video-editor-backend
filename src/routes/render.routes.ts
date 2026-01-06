@@ -5,7 +5,7 @@ import { validate } from '../middleware/validate.middleware';
 import * as renderController from '../controllers/render.controller';
 import { startRenderSchema } from '../validators/render.validator';
 
-const router = Router();
+const router: Router = Router();
 
 router.use(requireAuth);
 
