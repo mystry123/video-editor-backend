@@ -11,14 +11,14 @@ const router: ExpressRouter = Router();
 router.use(requireAuth);
 // router.use(attachUsageSummary);
 
-router.post('/', renderLimiter, checkRenderQuota, validate(startRenderSchema), renderController.startRender);
+router.post('/', renderLimiter, validate(startRenderSchema), renderController.startRender);
 router.get('/', renderController.listRenderJobs);
 router.get('/:id', renderController.getRenderStatus);
 router.get('/:id/progress', progressLimiter, renderController.streamProgress);
 router.post('/:id/cancel', renderController.cancelRender);
 
 // Zapier-friendly endpoints
-router.post('/zapier/render', renderLimiter, checkRenderQuota, renderController.zapierRender);
+router.post('/zapier/render', renderLimiter, renderController.zapierRender);
 router.get('/zapier/:id/poll', renderController.zapierPoll);
 
 export default router;
