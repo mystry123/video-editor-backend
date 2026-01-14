@@ -515,11 +515,8 @@ export class CaptionProjectController {
       
       await CaptionProject.deleteOne({ _id: id });
       
-      // Optionally delete the template created for this project
-      if (project.templateId) {
-        const Template = (await import('../models/Template')).Template;
-        await Template.deleteOne({ _id: project.templateId });
-      }
+      // Note: templateId is not part of CaptionProject schema
+      // If templates need cleanup, it should be handled separately
       
       res.json({
         success: true,
