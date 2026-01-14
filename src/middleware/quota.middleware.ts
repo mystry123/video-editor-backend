@@ -10,13 +10,17 @@ export interface AuthenticatedRequest extends Request {
   user?: {
     _id: string | Types.ObjectId;
     role: string;
-    storageUsed?: number;
+    email: string;
+    plan?: string;
+  };
+  userId?: string;
+  file?: {
+    size: number;
+    [key: string]: any;
   };
   videoMetadata?: {
-    duration: number;
-    width?: number;
-    height?: number;
     size?: number;
+    [key: string]: any;
   };
   usageSummary?: UsageSummary;
   quotaContext?: QuotaContext;
@@ -256,11 +260,12 @@ const quotaCheckers: Record<
     return {
       allowed: remaining > 0,
       currentUsage: count,
-      limit: quota.maxCaptionProjects, 
+      limit: quota.maxCaptionProjects,
+      remaining,
       message: remaining <= 0
-        ? `Monthly export limit reached (${quota.maxCaptionExports}). Upgrade for more exports.`
+        ? `Monthly caption project limit reached (${quota.maxCaptionProjects}). Upgrade for more projects.`
         : undefined,
-      code: QUOTA_ERROR_CODES.captionExports,
+      code: QUOTA_ERROR_CODES.captionProjects,
     };
   },
 
@@ -352,6 +357,48 @@ const quotaCheckers: Record<
         ? `Custom preset limit reached (${quota.maxCustomPresets}). Delete existing presets or upgrade.`
         : undefined,
       code: QUOTA_ERROR_CODES.customPresets,
+    };
+  },
+
+  // Caption render minutes
+  captionRenderMinutes: async (userId, quota) => {
+    if (isUnlimited(quota.maxCaptionRenderMinutes)) {
+      return { allowed: true, currentUsage: 0, limit: -1, remaining: -1 };
+    }
+    
+    const used = await usageFetchers.getCaptionRenderMinutesUsed(userId, getStartOfMonth());
+    const remaining = quota.maxCaptionRenderMinutes - used;
+    
+    return {
+      allowed: remaining > 0,
+      currentUsage: used,
+      limit: quota.maxCaptionRenderMinutes,
+      remaining: Math.max(0, remaining),
+      message: remaining <= 0
+        ? `Monthly render minutes limit reached (${quota.maxCaptionRenderMinutes}). Upgrade for more render time.`
+        : undefined,
+      code: QUOTA_ERROR_CODES.captionRenderMinutes,
+    };
+  },
+
+  // Caption exports
+  captionExports: async (userId, quota) => {
+    if (isUnlimited(quota.maxCaptionExports)) {
+      return { allowed: true, currentUsage: 0, limit: -1, remaining: -1 };
+    }
+    
+    const count = await usageFetchers.getCaptionExportsCount(userId, getStartOfMonth());
+    const remaining = quota.maxCaptionExports - count;
+    
+    return {
+      allowed: remaining > 0,
+      currentUsage: count,
+      limit: quota.maxCaptionExports,
+      remaining: Math.max(0, remaining),
+      message: remaining <= 0
+        ? `Monthly export limit reached (${quota.maxCaptionExports}). Upgrade for more exports.`
+        : undefined,
+      code: QUOTA_ERROR_CODES.captionExports,
     };
   },
 };
