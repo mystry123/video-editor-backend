@@ -241,7 +241,7 @@ export class CaptionCompositionService {
       sourceElementId: videoElement.id,
       track: 2,
       time: 0,
-      duration: Math.min(captionDuration, duration),
+      duration: duration,
       
       // Position & dimensions
       x: '50%',

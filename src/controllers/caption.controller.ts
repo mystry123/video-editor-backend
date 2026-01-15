@@ -4,6 +4,8 @@ import { CaptionProject, CaptionProjectStatus } from '../models/Caption';
 import { CaptionPreset } from '../models/CaptionPreset';
 import { File } from '../models/File';
 import { Transcription } from '../models/Transcription';
+import { canTranscribe } from '../utils/checkAudioStream';
+import { logger } from '../utils/logger';
 
 // Import queue getter - lazy initialization
 let _captionQueue: any = null;
@@ -211,6 +213,15 @@ export class CaptionProjectController {
       if (file.status !== 'ready') {
         throw ApiError.badRequest(`File is not ready. Status: ${file.status}`);
       }
+
+      const validation = await canTranscribe(file.cdnUrl);
+
+      logger.info(`Validation result: ${JSON.stringify(validation)}`);
+    
+      if (!validation.canTranscribe) {
+        throw ApiError.badRequest(validation.reason || 'File cannot be transcribed');
+      }
+    
       
       // Validate presetId if provided
       if (presetId) {
