@@ -92,7 +92,7 @@ export class CaptionPresetController {
       }
 
       const presets = await CaptionPreset.find(query)
-        .sort({ isSystem: -1, usageCount: -1, createdAt: -1 })
+        .sort({ createdAt: 1 })
         .select('-__v')
         .lean();
 
