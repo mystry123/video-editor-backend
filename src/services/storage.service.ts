@@ -4,6 +4,8 @@ import {
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
+import { Upload } from '@aws-sdk/lib-storage';
+import { Readable } from 'stream';
 import { env } from '../config/env';
 
 const s3Client = new S3Client({
@@ -13,6 +15,9 @@ const s3Client = new S3Client({
     secretAccessKey: env.awsSecretAccessKey,
   },
 });
+
+// Export s3Client for use in workers
+export { s3Client };
 
 interface PresignedUploadParams {
   key: string;
@@ -51,8 +56,6 @@ export async function deleteFromS3(key: string) {
 }
 
 export async function copyToCDN(sourceKey: string, destinationKey: string): Promise<string> {
-  // For now, return the S3 URL directly since the file is already in S3
-  // In a real implementation, you might copy to a CDN bucket
   return `https://${env.s3Bucket}.s3.${env.awsRegion}.amazonaws.com/${destinationKey}`;
 }
 
@@ -67,9 +70,41 @@ export async function uploadBufferToS3(
       Key: key,
       Body: buffer,
       ContentType: contentType,
-      CacheControl: 'public, max-age=31536000', // 1 year cache
+      CacheControl: 'public, max-age=31536000',
     })
   );
+
+  return `${env.cdnUrl}/${key}`;
+}
+
+/**
+ * Upload a stream to S3 with progress tracking
+ */
+export async function uploadStreamToS3(
+  stream: Readable,
+  key: string,
+  contentType: string,
+  onProgress?: (loaded: number) => void
+): Promise<string> {
+  const upload = new Upload({
+    client: s3Client,
+    params: {
+      Bucket: env.s3Bucket,
+      Key: key,
+      Body: stream,
+      ContentType: contentType,
+    },
+  });
+
+  if (onProgress) {
+    upload.on('httpUploadProgress', (progress) => {
+      if (progress.loaded) {
+        onProgress(progress.loaded);
+      }
+    });
+  }
+
+  await upload.done();
 
   return `${env.cdnUrl}/${key}`;
 }

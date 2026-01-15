@@ -57,6 +57,7 @@ let _transcriptionQueue: Queue | null = null;
 let _fileProcessingQueue: Queue | null = null;
 let _webhookQueue: Queue | null = null;
 let _captionQueue: Queue | null = null;
+let _fileImportQueue: Queue | null = null;
 
 export function getRenderQueue(): Queue {
   if (!_renderQueue) {
@@ -105,6 +106,18 @@ export function getCaptionQueue(): Queue {
   return _captionQueue;
 }
 
+export function getFileImportQueue(): Queue {
+  if (!_fileImportQueue) {
+    _fileImportQueue = createQueue('file-import', {
+      removeOnComplete: true,
+      removeOnFail: { age: 86400, count: 20 },
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 5000 },
+    });
+  }
+  return _fileImportQueue;
+}
+
 // ============================================================================
 // Backward Compatible Exports (Proxy Objects)
 // ============================================================================
@@ -124,6 +137,7 @@ export const transcriptionQueue = createQueueProxy(getTranscriptionQueue);
 export const fileProcessingQueue = createQueueProxy(getFileProcessingQueue);
 export const webhookQueue = createQueueProxy(getWebhookQueue);
 export const captionQueue = createQueueProxy(getCaptionQueue);
+export const fileImportQueue = createQueueProxy(getFileImportQueue);
 
 // ============================================================================
 // Worker Management
@@ -159,6 +173,7 @@ export function startWorkers(): void {
     '../workers/file.worker',
     '../workers/webhook.worker',
     '../workers/caption.worker',
+    '../workers/file-import.worker',
   ];
 
   let loaded = 0;
@@ -239,6 +254,7 @@ export async function gracefulShutdown(): Promise<void> {
   _fileProcessingQueue = null;
   _webhookQueue = null;
   _captionQueue = null;
+  _fileImportQueue = null;
   workersStarted = false;
   isShuttingDown = false;
 
