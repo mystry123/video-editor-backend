@@ -24,25 +24,26 @@ app.set('trust proxy', true);
 // SECURITY MIDDLEWARE
 // GeoIP location detection using geoip-lite
 app.use((req, res, next) => {
-  const ip = req.ip || req.connection?.remoteAddress || req.socket?.remoteAddress;
-  
-  if (ip) {
-    // Handle localhost/IPv6 localhost
-    if (ip === '::1' || ip === '127.0.0.1') {
-      res.locals.geoLocation = { country: 'Local', city: 'Localhost' };
-    } else {
-      const geo = geoip.lookup(ip);
-      res.locals.geoLocation = geo ? {
-        country: geo.country,
-        city: geo.city,
-        latitude: geo.ll?.[0],
-        longitude: geo.ll?.[1],
-      } : null;
-    }
+  const ip = 
+    (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ||
+    (req.headers['x-real-ip'] as string) ||
+    req.ip;
+
+  const cleanIp = ip?.startsWith('::ffff:') ? ip.substring(7) : ip;
+
+  if (cleanIp && cleanIp !== '127.0.0.1') {
+    const geo = geoip.lookup(cleanIp);
+    res.locals.geoLocation = geo ? {
+      ip: cleanIp,
+      country: geo.country,
+      city: geo.city,
+      latitude: geo.ll?.[0],
+      longitude: geo.ll?.[1],
+    } : null;
   } else {
     res.locals.geoLocation = null;
   }
-  
+
   next();
 });
 
