@@ -10,13 +10,39 @@ import { rateLimiter } from './middleware/rateLimit.middleware';
 import { attachUsageSummary } from './middleware/quota.middleware';
 import routes from './routes';
 import { env } from './config/env';
+import { seedCaptionPresets } from './seeds/caption-presets.seed';
 
+import geoip from 'geoip-lite';
 
+// Replace your middleware with:
 const app: Express = express();
 
 // ============================================
 // SECURITY MIDDLEWARE
-// ============================================
+// GeoIP location detection using geoip-lite
+app.use((req, res, next) => {
+  const ip = req.ip || req.connection?.remoteAddress || req.socket?.remoteAddress;
+  
+  if (ip) {
+    // Handle localhost/IPv6 localhost
+    if (ip === '::1' || ip === '127.0.0.1') {
+      res.locals.geoLocation = { country: 'Local', city: 'Localhost' };
+    } else {
+      const geo = geoip.lookup(ip);
+      res.locals.geoLocation = geo ? {
+        country: geo.country,
+        city: geo.city,
+        latitude: geo.ll?.[0],
+        longitude: geo.ll?.[1],
+      } : null;
+    }
+  } else {
+    res.locals.geoLocation = null;
+  }
+  
+  next();
+});
+
 
 // Helmet for security headers
 app.use(helmet());
@@ -73,6 +99,7 @@ app.get('/health', (_req: Request, res: Response) => {
 // ============================================
 
 app.use('/api/v1', routes); // Re-enabled with only project routes
+
 
 // ============================================
 // 404 HANDLER

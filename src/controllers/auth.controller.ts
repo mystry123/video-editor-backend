@@ -1,6 +1,7 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
-import { User, IUser, OAuthProvider } from '../models/User';
+import { User, IUser } from '../models/User';
+import { UserLoginHistory } from '../models/UserLoginHistory';
 import { ApiKey } from '../models/ApiKey';
 import { ApiError } from '../utils/ApiError';
 import { generateApiKey } from '../utils/helpers';
@@ -85,8 +86,28 @@ function formatUserResponse(user: IUser, includeLinkedProviders = false): UserRe
   return response;
 }
 
+// Helper function to extract device info from user agent
+function extractDeviceInfo(userAgent: string): string {
+  if (!userAgent) return 'unknown';
+  
+  const ua = userAgent.toLowerCase();
+  if (ua.includes('mobile') || ua.includes('android') || ua.includes('iphone')) {
+    if (ua.includes('iphone')) return 'iPhone';
+    if (ua.includes('android')) return 'Android';
+    return 'Mobile';
+  }
+  if (ua.includes('tablet') || ua.includes('ipad')) {
+    return 'Tablet';
+  }
+  if (ua.includes('windows nt')) return 'Windows';
+  if (ua.includes('mac os')) return 'MacOS';
+  if (ua.includes('linux')) return 'Linux';
+  
+  return 'Desktop';
+}
+
 // Login user: generate tokens, return in response (no cookies)
-async function loginUser(user: IUser, res: Response): Promise<AuthResponse> {
+async function loginUser(user: IUser, req: any, res: Response, saveMetadata: boolean = false, loginType: 'password' | 'oauth_google' | 'oauth_apple' | 'oauth_facebook' | 'signup' = 'password'): Promise<AuthResponse> {
   const tokenPayload = {
     userId: user._id.toString(),
     email: user.email,
@@ -96,13 +117,39 @@ async function loginUser(user: IUser, res: Response): Promise<AuthResponse> {
   const tokens = generateTokenPair(tokenPayload);
   const hashedRefresh = hashRefreshToken(tokens.refreshToken);
 
-  // Debug: Login token generation
-  console.log('LOGIN TOKEN DEBUG:', {
-    generatedRefreshToken: tokens.refreshToken,
-    generatedRefreshTokenLength: tokens.refreshToken.length,
-    hashedRefreshToken: hashedRefresh,
-    hashedRefreshPrefix: hashedRefresh.substring(0, 10) + '...',
-  });
+  // Only save metadata for explicit login (not OAuth/signup unless specified)
+  if (saveMetadata) {
+    const metaData = {
+      ip: res.locals?.clientIP || 
+           req.ip || 
+           req.connection?.remoteAddress || 
+           req.socket?.remoteAddress ||
+           'unknown',
+      userAgent: res.locals?.userAgent || req.get?.('User-Agent') || 'unknown',
+      timestamp: new Date(),
+      device: extractDeviceInfo(req.get?.('User-Agent') || ''),
+      location: res.locals?.geoLocation || null,
+      success: true,
+      loginType,
+    };
+
+    // Debug: Login token generation
+    console.log('LOGIN TOKEN DEBUG:', {
+      generatedRefreshToken: tokens.refreshToken,
+      generatedRefreshTokenLength: tokens.refreshToken.length,
+      hashedRefreshToken: hashedRefresh,
+      hashedRefreshPrefix: hashedRefresh.substring(0, 10) + '...',
+      metaData,
+    });
+
+    // Save login metadata in separate collection
+    try {
+      await UserLoginHistory.addLoginEvent(user._id.toString(), metaData);
+    } catch (error) {
+      console.error('Failed to save login metadata:', error);
+      // Don't fail the login if metadata saving fails
+    }
+  }
 
   // Store hashed refresh token (keep last 5 for multi-device support)
   await User.findByIdAndUpdate(user._id, {
@@ -212,8 +259,8 @@ export const signup = async (
       authProvider: 'local',
     });
 
-    // Login and set cookies
-    const result = await loginUser(user, res);
+    // Login and set cookies (save metadata for login tracking)
+    const result = await loginUser(user, req, res, true, 'password');
 
     // Send welcome email (non-blocking)
     sendWelcomeEmail(user.email, user.name).catch((err) =>
@@ -260,7 +307,7 @@ export const login = async (
     }
 
     // Login and set cookies
-    const result = await loginUser(user, res);
+    const result = await loginUser(user, req, res, true, 'password');
 
     res.json({
       message: 'Login successful',
@@ -522,7 +569,7 @@ export const changePassword = async (
     await user.save();
 
     // Issue new tokens
-    const result = await loginUser(user, res);
+    const result = await loginUser(user, req, res, true, 'password');
 
     res.json({
       message: 'Password changed successfully',
@@ -565,7 +612,7 @@ export const googleCallback = async (
 
     const userInfo = await verifyGoogleCode(code);
     const user = await handleOAuthUser(userInfo);
-    await loginUser(user, res);
+    await loginUser(user, req, res, false);
 
     // Redirect to frontend (clean URL, tokens in cookies)
     res.redirect(`${env.frontendUrl}/auth/callback?success=true`);
@@ -593,7 +640,7 @@ export const googleToken = async (
       : await verifyGoogleCode(code);
 
     const user = await handleOAuthUser(userInfo);
-    const result = await loginUser(user, res);
+    const result = await loginUser(user, req, res, true, 'oauth_google');
 
     res.json(result);
   } catch (error) {
@@ -643,7 +690,7 @@ export const appleCallback = async (
 
     const userInfo = await verifyAppleCode(code, id_token, userData);
     const user = await handleOAuthUser(userInfo);
-    await loginUser(user, res);
+    await loginUser(user, req, res, false);
 
     // Redirect to frontend
     res.redirect(`${env.frontendUrl}/auth/callback?success=true`);
@@ -671,7 +718,7 @@ export const appleToken = async (
       : await verifyAppleCode(code, undefined, userData);
 
     const user = await handleOAuthUser(userInfo);
-    const result = await loginUser(user, res);
+    const result = await loginUser(user, req, res, true, 'oauth_apple');
 
     res.json(result);
   } catch (error) {
@@ -711,7 +758,7 @@ export const facebookCallback = async (
 
     const userInfo = await verifyFacebookCode(code);
     const user = await handleOAuthUser(userInfo);
-    await loginUser(user, res);
+    await loginUser(user, req, res, false);
 
     // Redirect to frontend
     res.redirect(`${env.frontendUrl}/auth/callback?success=true`);
@@ -739,7 +786,7 @@ export const facebookToken = async (
       : await verifyFacebookCode(code);
 
     const user = await handleOAuthUser(userInfo);
-    const result = await loginUser(user, res);
+    const result = await loginUser(user, req, res, true, 'oauth_facebook');
 
     res.json(result);
   } catch (error) {
