@@ -1,6 +1,6 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
-import { User, IUser } from '../models/User';
+import { User, IUser, OAuthProvider } from '../models/User';
 import { UserLoginHistory } from '../models/UserLoginHistory';
 import { ApiKey } from '../models/ApiKey';
 import { ApiError } from '../utils/ApiError';
