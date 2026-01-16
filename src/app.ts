@@ -18,6 +18,9 @@ import geoip from 'geoip-lite';
 const app: Express = express();
 
 // ============================================
+
+
+app.set('trust proxy', true);
 // SECURITY MIDDLEWARE
 // GeoIP location detection using geoip-lite
 app.use((req, res, next) => {
