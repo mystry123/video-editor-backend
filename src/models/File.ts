@@ -7,6 +7,18 @@ export interface IFileMetadata {
   hasAudio?: boolean;
 }
 
+export interface IReframeData {
+  status?: 'pending' | 'processing' | 'completed' | 'failed';
+  layoutDecision?: unknown;
+  zones?: unknown[];
+  sceneStats?: unknown;
+  fps?: number;
+  videoWidth?: number;
+  videoHeight?: number;
+  error?: string;
+  processedAt?: Date;
+}
+
 export interface IFile extends Document {
   userId: mongoose.Types.ObjectId;
   name: string;
@@ -25,6 +37,7 @@ export interface IFile extends Document {
   sourceId?: string;
   importProgress?: number;
   importError?: string;
+  reframe?: Map<string, IReframeData>;
   createdAt: Date;
   updatedAt: Date;
 }
