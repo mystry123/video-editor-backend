@@ -8,6 +8,7 @@ import webhookRoutes from './webhook.routes';
 import captionRoutes from './caption.routes';
 import captionPresetRoutes from './captionpreset.routes';
 import projectRoutes from './project.routes';
+import reframeRoutes from './reframe.routes';
 const router: ExpressRouter = Router();
 
 router.use('/auth', authRoutes);
@@ -20,5 +21,6 @@ router.use('/webhooks', webhookRoutes);
 router.use('/caption-presets', captionPresetRoutes);
 router.use('/caption', captionRoutes);
 router.use('/projects',projectRoutes)
+router.use('/reframe', reframeRoutes);
 
 export default router;

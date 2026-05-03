@@ -1,0 +1,221 @@
+### Render API — variable demo
+### Replace these once before running:
+@host = http://localhost:3000
+@apiKey = YOUR_API_KEY_HERE
+@templateId = YOUR_TEMPLATE_ID_HERE
+
+###############################################################################
+# 1. Render with no overrides — uses template defaults
+###############################################################################
+POST {{host}}/api/v1/render
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "templateId": "{{templateId}}"
+}
+
+###############################################################################
+# 2. Override a TEXT element by name (string → element.text)
+#    The template must have an element with name = "headline".
+###############################################################################
+POST {{host}}/api/v1/render
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "templateId": "{{templateId}}",
+  "variables": {
+    "headline": "Black Friday — 40% off everything"
+  }
+}
+
+###############################################################################
+# 3. Override a CAPTION element's full text (regenerates display)
+###############################################################################
+POST {{host}}/api/v1/render
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "templateId": "{{templateId}}",
+  "variables": {
+    "captions": "Welcome back. Today we're shipping something new."
+  }
+}
+
+###############################################################################
+# 4. Override an IMAGE element (string → element.src; must be http(s))
+###############################################################################
+POST {{host}}/api/v1/render
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "templateId": "{{templateId}}",
+  "variables": {
+    "logo": "https://cdn.example.com/brand/logo-dark.png",
+    "hero": "https://cdn.example.com/products/sku-9912.jpg"
+  }
+}
+
+###############################################################################
+# 5. Override a VIDEO element
+###############################################################################
+POST {{host}}/api/v1/render
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "templateId": "{{templateId}}",
+  "variables": {
+    "bRoll": "https://cdn.example.com/clips/skyline-4k.mp4"
+  }
+}
+
+###############################################################################
+# 6. Override an AUDIO element (voiceover, music bed, etc.)
+###############################################################################
+POST {{host}}/api/v1/render
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "templateId": "{{templateId}}",
+  "variables": {
+    "voiceover": "https://cdn.example.com/tts/run_4f8c2.mp3",
+    "music": "https://cdn.example.com/music/uplifting-loop.mp3"
+  }
+}
+
+###############################################################################
+# 7. Override a LOTTIE element (string → element.source)
+###############################################################################
+POST {{host}}/api/v1/render
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "templateId": "{{templateId}}",
+  "variables": {
+    "intro_anim": "https://cdn.example.com/lottie/checkmark.json"
+  }
+}
+
+###############################################################################
+# 8. Override a GIF element (string → element.source)
+###############################################################################
+POST {{host}}/api/v1/render
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "templateId": "{{templateId}}",
+  "variables": {
+    "reaction": "https://cdn.example.com/gifs/celebrate.gif"
+  }
+}
+
+###############################################################################
+# 9. OBJECT override — deep-merge any property on an element
+#    Use this when you need to change more than one field
+#    (text + fill color + font size + position, animations, anything).
+###############################################################################
+POST {{host}}/api/v1/render
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "templateId": "{{templateId}}",
+  "variables": {
+    "headline": {
+      "text": "Limited drop",
+      "fillColor": "#ffd166",
+      "fontSize": 96,
+      "fontWeight": 800,
+      "x": "50%",
+      "y": "30%"
+    }
+  }
+}
+
+###############################################################################
+# 10. Object override on an IMAGE — replace src AND change fit/timing
+###############################################################################
+POST {{host}}/api/v1/render
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "templateId": "{{templateId}}",
+  "variables": {
+    "hero": {
+      "src": "https://cdn.example.com/products/sku-9912.jpg",
+      "fit": "cover",
+      "time": 0,
+      "duration": 5
+    }
+  }
+}
+
+###############################################################################
+# 11. Object override on a SHAPE / RECTANGLE — change fill + stroke + size
+###############################################################################
+POST {{host}}/api/v1/render
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "templateId": "{{templateId}}",
+  "variables": {
+    "cta_box": {
+      "fillColor": "#22c55e",
+      "strokeColor": "#0a0a0a",
+      "strokeWidth": 3,
+      "width": "60%",
+      "height": "12%"
+    }
+  }
+}
+
+###############################################################################
+# 12. Combine multiple element overrides + a webhook callback
+###############################################################################
+POST {{host}}/api/v1/render
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "templateId": "{{templateId}}",
+  "webhookUrl": "https://your-app.example.com/webhooks/shotline",
+  "variables": {
+    "headline": "Shipping today",
+    "subhead": "Order before 5pm",
+    "logo": "https://cdn.example.com/brand/logo-dark.png",
+    "voiceover": "https://cdn.example.com/tts/run_4f8c2.mp3",
+    "cta_box": {
+      "fillColor": "#22c55e",
+      "text": "Shop now"
+    }
+  }
+}
+
+###############################################################################
+# 13. Negative — bad URL on a media element returns 400
+###############################################################################
+POST {{host}}/api/v1/render
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "templateId": "{{templateId}}",
+  "variables": {
+    "logo": "not-a-url"
+  }
+}
+
+###############################################################################
+# 14. Poll status (ack returns id; use it here)
+###############################################################################
+GET {{host}}/api/v1/render/RENDER_JOB_ID_HERE
+X-API-Key: {{apiKey}}

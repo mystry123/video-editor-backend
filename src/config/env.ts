@@ -48,7 +48,10 @@ export const env = {
   remotionAwsSecretAccessKey:process.env.REMOTION_AWS_SECRET_ACCESS_KEY || '',
   s3Bucket: process.env.S3_BUCKET || '',
   cdnUrl: process.env.CDN_URL || '',
-   apiBaseUrl: process.env.API_BASE_URL || 'http://localhost:3000',
+  apiBaseUrl: process.env.API_BASE_URL || 'http://localhost:3000',
+  
+  // YOLO Reframe Service
+  yoloServiceUrl: process.env.YOLO_SERVICE_URL || 'http://localhost:8000',
   remotionWebhookSecret: process.env.REMOTION_WEBHOOK_SECRET || '',
 
   

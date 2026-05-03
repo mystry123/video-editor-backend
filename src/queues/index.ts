@@ -58,6 +58,7 @@ let _fileProcessingQueue: Queue | null = null;
 let _webhookQueue: Queue | null = null;
 let _captionQueue: Queue | null = null;
 let _fileImportQueue: Queue | null = null;
+let _reframeQueue: Queue | null = null;
 
 export function getRenderQueue(): Queue {
   if (!_renderQueue) {
@@ -118,6 +119,17 @@ export function getFileImportQueue(): Queue {
   return _fileImportQueue;
 }
 
+export function getReframeQueue(): Queue {
+  if (!_reframeQueue) {
+    _reframeQueue = createQueue('reframe', {
+      attempts: 2,
+      backoff: { type: 'exponential', delay: 5000 },
+      removeOnComplete: { age: 3600, count: 20 },
+    });
+  }
+  return _reframeQueue;
+}
+
 // ============================================================================
 // Backward Compatible Exports (Proxy Objects)
 // ============================================================================
@@ -138,6 +150,7 @@ export const fileProcessingQueue = createQueueProxy(getFileProcessingQueue);
 export const webhookQueue = createQueueProxy(getWebhookQueue);
 export const captionQueue = createQueueProxy(getCaptionQueue);
 export const fileImportQueue = createQueueProxy(getFileImportQueue);
+export const reframeQueue = createQueueProxy(getReframeQueue);
 
 // ============================================================================
 // Worker Management
@@ -174,6 +187,7 @@ export function startWorkers(): void {
     '../workers/webhook.worker',
     '../workers/caption.worker',
     '../workers/file-import.worker',
+    '../workers/reframe.worker',
   ];
 
   let loaded = 0;
@@ -255,6 +269,7 @@ export async function gracefulShutdown(): Promise<void> {
   _webhookQueue = null;
   _captionQueue = null;
   _fileImportQueue = null;
+  _reframeQueue = null;
   workersStarted = false;
   isShuttingDown = false;
 

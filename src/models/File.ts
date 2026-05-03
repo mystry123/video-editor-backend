@@ -61,6 +61,21 @@ const FileSchema = new Schema<IFile>(
     sourceId: { type: String },
     importProgress: { type: Number, default: 0 },
     importError: { type: String },
+    // AI Reframe data — keyed by aspect ratio (e.g., "9_16", "1_1", "4_5")
+    reframe: {
+      type: Map,
+      of: new Schema({
+        status: { type: String, enum: ['pending', 'processing', 'completed', 'failed'] },
+        layoutDecision: { type: Schema.Types.Mixed },
+        zones: [{ type: Schema.Types.Mixed }],
+        sceneStats: { type: Schema.Types.Mixed },
+        fps: { type: Number },
+        videoWidth: { type: Number },
+        videoHeight: { type: Number },
+        error: { type: String },
+        processedAt: { type: Date },
+      }, { _id: false }),
+    },
   },
   { timestamps: true }
 );

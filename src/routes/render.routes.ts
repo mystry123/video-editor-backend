@@ -11,7 +11,8 @@ const router: ExpressRouter = Router();
 router.use(requireAuth);
 // router.use(attachUsageSummary);
 
-router.post('/', renderLimiter, validate(startRenderSchema), renderController.startRender);
+router.post('/', renderLimiter, checkRenderQuota, validate(startRenderSchema), renderController.startRender);
+router.post('/reframe', renderLimiter, checkRenderQuota, renderController.startReframeRender);
 router.get('/', renderController.listRenderJobs);
 router.get('/:id', renderController.getRenderStatus);
 router.get('/:id/progress', progressLimiter, renderController.streamProgress);

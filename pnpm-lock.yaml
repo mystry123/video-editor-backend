@@ -104,6 +104,9 @@ importers:
       redis:
         specifier: ^5.10.0
         version: 5.10.0
+      swagger-ui-express:
+        specifier: ^5.0.1
+        version: 5.0.1(express@4.22.1)
       uuid:
         specifier: ^9.0.1
         version: 9.0.1
@@ -147,6 +150,9 @@ importers:
       '@types/nodemailer':
         specifier: ^6.4.14
         version: 6.4.21
+      '@types/swagger-ui-express':
+        specifier: ^4.1.8
+        version: 4.1.8
       '@types/uuid':
         specifier: ^9.0.7
         version: 9.0.8
@@ -979,21 +985,25 @@ packages:
     resolution: {integrity: sha512-KV4OvEx+K6df1oD8yuVLyl7Sa0ZJtlB5yvWMm7MTtXmZYHWe7h3kzKgncHTe5mn45ROw3c3SgnAhD8MnZMlvBQ==}
     cpu: [arm64]
     os: [linux]
+    libc: [glibc]
 
   '@remotion/compositor-linux-arm64-musl@4.0.400':
     resolution: {integrity: sha512-5/ck0uOINOYMb8uJ8rI7pTfywAqSDVFntZ1zZ5HhSVCe6P16/3kuENXsv4RZARbPlylT5sEJZwYfxh3YABP/0Q==}
     cpu: [arm64]
     os: [linux]
+    libc: [musl]
 
   '@remotion/compositor-linux-x64-gnu@4.0.400':
     resolution: {integrity: sha512-zfzd6xZCEpWDLV/TYHSD65KESArGwqSjg6sIC0DpCQ746l/tQZRhwzALkTLs55HoZuCurZQ/E5Aerc6hB6Id1w==}
     cpu: [x64]
     os: [linux]
+    libc: [glibc]
 
   '@remotion/compositor-linux-x64-musl@4.0.400':
     resolution: {integrity: sha512-IzB9lwiPlxj7JA/LnxsqdkuXZhynqdpaUyao7hp20o/bg9lMlPRFEjMlUx9FGL1izXlhpKC53oHgyzXCiaDbCQ==}
     cpu: [x64]
     os: [linux]
+    libc: [musl]
 
   '@remotion/compositor-win32-x64-msvc@4.0.400':
     resolution: {integrity: sha512-WE8y682o0DIU69GCZ6sqEzfn2L6zHJPFeTkIE6ewfWcDXWT4YrZiYQsIylXcpzuUzTHRk3mbLYBaPSwAtWQ6cA==}
@@ -1066,6 +1076,9 @@ packages:
     resolution: {integrity: sha512-UHVY6ilS3D85iZ/PCM8xebuESlJkGyCXOEYYXO3PiJ5W5Rh9GXIkCKJaVwKr8NpI+qxJppHX0mXhlY95R2VQGg==}
     peerDependencies:
       zod: 3.22.3
+
+  '@scarf/scarf@1.4.0':
+    resolution: {integrity: sha512-xxeapPiUXdZAE3che6f3xogoJPeZgig6omHEy1rIY5WVsB3H2BHNnZH+gHG6x91SCWyQCzWGsuL2Hh3ClO5/qQ==}
 
   '@smithy/abort-controller@4.0.1':
     resolution: {integrity: sha512-fiUIYgIgRjMWznk6iLJz35K2YxSLHzLBA/RC6lBrKfQ8fHbPfvk7Pk9UvpKoHgJjI18MnbPuEju53zcVy6KF1g==}
@@ -1447,6 +1460,9 @@ packages:
 
   '@types/serve-static@1.15.10':
     resolution: {integrity: sha512-tRs1dB+g8Itk72rlSI2ZrW6vZg0YrLI81iQSTkMmOqnqCaNr/8Ek4VwWcN5vZgCYWbg/JJSGBlUaYGAOP73qBw==}
+
+  '@types/swagger-ui-express@4.1.8':
+    resolution: {integrity: sha512-AhZV8/EIreHFmBV5wAs0gzJUNq9JbbSXgJLQubCC0jtIo6prnI9MIRRxnU4MZX9RB9yXxF1V4R7jtLl/Wcj31g==}
 
   '@types/uuid@9.0.8':
     resolution: {integrity: sha512-jg+97EGIcY9AGHJJRaaPVgetKDsrTgbRjQ5Msgjh/DQKEFl0DtyRr/VCOyD1T2R1MNeWPK/u7JoGhlDZnKBAfA==}
@@ -2746,6 +2762,15 @@ packages:
   supports-color@8.1.1:
     resolution: {integrity: sha512-MpUEN2OodtUzxvKQl72cUF7RQ5EiHsGvSsVG0ia9c5RbWGL2CI4C7EpPS8UTBIplnlzZiNuV56w+FuNxy3ty2Q==}
     engines: {node: '>=10'}
+
+  swagger-ui-dist@5.32.5:
+    resolution: {integrity: sha512-7/FQfWe9A4qoyYFdAwy0chD0uDYidDp/ZT9VQ9LZlgD4AnnHJk8/+ytAA1HkJYOPySmK6helPDdJQMlcumt7HA==}
+
+  swagger-ui-express@5.0.1:
+    resolution: {integrity: sha512-SrNU3RiBGTLLmFU8GIJdOdanJTl4TOmT27tt3bWWHppqYmAZ6IDuEuBvMU6nZq0zLEe6b/1rACXCgLZqO6ZfrA==}
+    engines: {node: '>= v0.10.32'}
+    peerDependencies:
+      express: '>=4.0.0 || >=5.0.0-beta'
 
   tapable@2.3.0:
     resolution: {integrity: sha512-g9ljZiwki/LfxmQADO3dEY1CbpmXT5Hm2fJ+QaGKwSXUylMybePR7/67YW7jOrrvjEgL1Fmz5kzyAjWVWLlucg==}
@@ -4674,6 +4699,8 @@ snapshots:
       - react
       - react-dom
 
+  '@scarf/scarf@1.4.0': {}
+
   '@smithy/abort-controller@4.0.1':
     dependencies:
       '@smithy/types': 4.11.0
@@ -5255,6 +5282,11 @@ snapshots:
       '@types/http-errors': 2.0.5
       '@types/node': 20.19.27
       '@types/send': 0.17.6
+
+  '@types/swagger-ui-express@4.1.8':
+    dependencies:
+      '@types/express': 4.17.25
+      '@types/serve-static': 1.15.10
 
   '@types/uuid@9.0.8': {}
 
@@ -6657,6 +6689,15 @@ snapshots:
   supports-color@8.1.1:
     dependencies:
       has-flag: 4.0.0
+
+  swagger-ui-dist@5.32.5:
+    dependencies:
+      '@scarf/scarf': 1.4.0
+
+  swagger-ui-express@5.0.1(express@4.22.1):
+    dependencies:
+      express: 4.22.1
+      swagger-ui-dist: 5.32.5
 
   tapable@2.3.0: {}
 

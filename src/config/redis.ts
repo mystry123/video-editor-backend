@@ -16,9 +16,12 @@ export const redisConnectionOptions: RedisOptions = {
   enableReadyCheck: false,
   lazyConnect: true,
   connectTimeout: 10000,
-  commandTimeout: 30000,
+  // NOTE: Do NOT set commandTimeout here — BullMQ workers use blocking
+  // commands (BRPOPLPUSH) that intentionally wait for long periods.
+  // A commandTimeout would kill those connections during idle periods.
   family: 4,
-  keepAlive: 30000,
+  keepAlive: 60000, // 60s keepAlive to prevent macOS TCP idle drops
+  enableOfflineQueue: true,
   retryStrategy: (times: number) => {
     if (times > 20) {
       logger.error(`Redis: Max retries (${times}) reached`);

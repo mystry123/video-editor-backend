@@ -30,6 +30,7 @@ export interface IRenderJob extends Document {
   serveUrl?: string;
   webhookUrl?: string;
   webhookSent: boolean;
+  variables?: Record<string, unknown>;
   
   // Cost fields
   estimatedCost?: number;
@@ -105,6 +106,7 @@ const RenderJobSchema = new Schema<IRenderJob>(
     serveUrl: { type: String, select: false },
     webhookUrl: { type: String, select: false },
     webhookSent: { type: Boolean, default: false, select: false },
+    variables: { type: Schema.Types.Mixed, select: false },
     
     // Cost fields - hidden
     estimatedCost: { type: Number, select: false },

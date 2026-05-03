@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
+import swaggerUi from 'swagger-ui-express';
 
 import { errorHandler } from './middleware/error.middleware';
 import { rateLimiter } from './middleware/rateLimit.middleware';
@@ -11,6 +12,7 @@ import { attachUsageSummary } from './middleware/quota.middleware';
 import routes from './routes';
 import { env } from './config/env';
 import { seedCaptionPresets } from './seeds/caption-presets.seed';
+import { openApiSpec } from './docs/openapi';
 
 import geoip from 'geoip-lite';
 
@@ -48,8 +50,13 @@ app.use((req, res, next) => {
 });
 
 
-// Helmet for security headers
-app.use(helmet());
+// Helmet for security headers (relaxed CSP so Swagger UI assets load)
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+  })
+);
 
 // CORS configuration
 app.use(
@@ -96,6 +103,21 @@ app.get('/health', (_req: Request, res: Response) => {
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
   });
+});
+
+// ============================================
+// API DOCS (public)
+// ============================================
+
+app.use(
+  '/api/v1/docs',
+  swaggerUi.serve,
+  swaggerUi.setup(openApiSpec, {
+    customSiteTitle: 'Shotline Render API',
+  })
+);
+app.get('/api/v1/docs.json', (_req: Request, res: Response) => {
+  res.json(openApiSpec);
 });
 
 // ============================================
