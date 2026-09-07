@@ -73,9 +73,13 @@ async function processTranscriptionJob(job: Job<TranscriptionJobData>) {
 
     log.info(`Completed: ${result.words?.length || 0} words`);
 
-    // Update with results
+    // Update with results.
+    // The `status` filter matters: a user can correct the transcript through
+    // PATCH /transcriptions/:id/words while this job is still running, which
+    // marks it completed. Without the guard this write would silently replace
+    // their edits with the machine transcript.
     await Transcription.updateOne(
-      { _id: transcriptionId },
+      { _id: transcriptionId, status: { $ne: 'completed' } },
       {
         status: 'completed',
         text: result.text,

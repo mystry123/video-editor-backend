@@ -1082,9 +1082,22 @@ export async function seedCaptionPresets(): Promise<void> {
   try {
     logger.info('Starting caption presets seed...');
 
+    // Idempotent: only insert presets that are not already there. A plain
+    // insertMany would add a fresh duplicate set every time this ran.
+    const existingNames = new Set(
+      (await CaptionPreset.find({}, { name: 1 }).lean()).map((p) => p.name)
+    );
+    const missing = CAPTION_PRESETS.filter((p) => !existingNames.has(p.name));
+
+    if (missing.length === 0) {
+      logger.info(
+        `Caption presets already seeded (${existingNames.size} present) - nothing to do`
+      );
+      return;
+    }
 
     // Insert new presets
-    const insertedPresets = await CaptionPreset.insertMany(CAPTION_PRESETS);
+    const insertedPresets = await CaptionPreset.insertMany(missing);
     logger.info(`Inserted ${insertedPresets.length} caption presets`);
 
     // Log preset names

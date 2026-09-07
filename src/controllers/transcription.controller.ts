@@ -1,6 +1,6 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
-import { Transcription } from '../models/Transcription';
+import { Transcription, ITranscriptionWord } from '../models/Transcription';
 import { File } from '../models/File';
 import { User } from '../models/User';
 import { transcriptionQueue } from '../queues';
@@ -27,8 +27,23 @@ export const createTranscription = async (
 
     const existing = await Transcription.findOne({ fileId });
 
-    console.log(existing);
     if (existing) {
+      // A previous run that failed should be retryable - otherwise the only
+      // way back is deleting the document by hand.
+      if (existing.status === 'failed') {
+        existing.status = 'pending';
+        existing.error = undefined;
+        await existing.save();
+
+        await transcriptionQueue.add('transcribe', {
+          transcriptionId: existing._id.toString(),
+          fileUrl: file.cdnUrl,
+        });
+
+        res.status(202).json(existing);
+        return;
+      }
+
       res.status(200).json(existing);
       return;
     }
@@ -97,6 +112,59 @@ export const getTranscriptionByFile = async (
     if (!transcription) {
       throw ApiError.notFound('Transcription not found');
     }
+
+    res.json(transcription);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * PATCH /api/transcriptions/:id/words
+ *
+ * Replace the word list after the user has corrected it in the editor, so the
+ * render uses exactly the captions they previewed.
+ */
+export const updateTranscriptionWords = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const userId = req.userId!;
+    const { words } = req.body as {
+      words: Array<{
+        text: string;
+        start: number;
+        end: number;
+        type?: ITranscriptionWord['type'];
+        speaker_id?: string;
+      }>;
+    };
+
+    const transcription = await Transcription.findOne({ _id: id, userId });
+    if (!transcription) {
+      throw ApiError.notFound('Transcription not found');
+    }
+
+    const normalized: ITranscriptionWord[] = words.map((w) => ({
+      text: w.text,
+      start: w.start,
+      end: Math.max(w.end, w.start),
+      type: w.type || 'word',
+      ...(w.speaker_id ? { speaker_id: w.speaker_id } : {}),
+    }));
+
+    transcription.words = normalized;
+    transcription.text = normalized
+      .filter((w) => w.type === 'word')
+      .map((w) => w.text)
+      .join(' ');
+    // The corrected list is authoritative even if the original run failed.
+    transcription.status = 'completed';
+
+    await transcription.save();
 
     res.json(transcription);
   } catch (error) {

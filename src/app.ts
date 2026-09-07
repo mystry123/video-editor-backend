@@ -11,7 +11,6 @@ import { rateLimiter } from './middleware/rateLimit.middleware';
 import { attachUsageSummary } from './middleware/quota.middleware';
 import routes from './routes';
 import { env } from './config/env';
-import { seedCaptionPresets } from './seeds/caption-presets.seed';
 import { openApiSpec } from './docs/openapi';
 
 import geoip from 'geoip-lite';
