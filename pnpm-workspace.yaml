@@ -1,5 +1,10 @@
+# Build scripts pnpm is allowed to run. Both ffmpeg binaries are listed so the
+# same file works on arm64 macOS (dev) and x64 Linux (EC2) — pnpm only installs
+# the one matching the host platform, and @ffmpeg-installer/ffmpeg needs its
+# postinstall to run or the bundled binary is left non-executable.
 allowBuilds:
-  '@ffmpeg-installer/darwin-arm64': set this to true or false
-  '@scarf/scarf': set this to true or false
-  esbuild: set this to true or false
-  msgpackr-extract: set this to true or false
+  '@ffmpeg-installer/darwin-arm64': true
+  '@ffmpeg-installer/linux-x64': true
+  '@scarf/scarf': false
+  esbuild: true
+  msgpackr-extract: true
