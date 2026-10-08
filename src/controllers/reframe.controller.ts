@@ -11,13 +11,15 @@ import { getEffectiveQuota } from '../config/quotas';
 import { ApiError } from '../utils/ApiError';
 import { logger } from '../utils/logger';
 import { Transcription } from '../models/Transcription';
-import { getAnalysis, outputHeightFor, planAnalysis, reframeEngineConfigured } from '../services/reframeEngine.service';
+import { getAnalysis, outputHeightFor, planAnalysis, REFRAME_CAPTIONS, reframeEngineConfigured } from '../services/reframeEngine.service';
+import type { ReframeCaptions } from '../services/reframeEngine.service';
 
 const VALID_RATIOS = ['9:16', '1:1', '4:5', '16:9', '2:3'];
 const ZOOMS = ['sharp', 'balanced', 'tight'] as const;
 
-function sameOptions(a: any, b: { zoom: string; keepText: string[] }): boolean {
-  return a?.zoom === b.zoom && JSON.stringify([...(a?.keepText || [])].sort()) === JSON.stringify([...b.keepText].sort());
+function sameOptions(a: any, b: { zoom: string; keepText: string[]; captions: string }): boolean {
+  return a?.zoom === b.zoom && (a?.captions || 'keep') === b.captions
+    && JSON.stringify([...(a?.keepText || [])].sort()) === JSON.stringify([...b.keepText].sort());
 }
 
 /** The v2 fields the editor needs from a stored reframe. */
@@ -26,6 +28,7 @@ function v2Response(data: any) {
     engine: 'v2',
     result: data.result || null,
     text: data.text || [],
+    pictureCaptions: Boolean(data.pictureCaptions),
     options: data.options || null,
     quality: data.quality || null,
   };
@@ -47,6 +50,7 @@ export const createReframe = async (
     const keepText: string[] = Array.isArray(req.body.keepText)
       ? req.body.keepText.filter((t: unknown) => typeof t === 'string').slice(0, 10)
       : [];
+    const captions: ReframeCaptions = REFRAME_CAPTIONS.includes(req.body.captions) ? req.body.captions : 'keep';
 
     if (!fileId || !aspectRatio || !elementId) {
       throw ApiError.badRequest('fileId, aspectRatio, and elementId are required');
@@ -85,7 +89,7 @@ export const createReframe = async (
       const quota = getEffectiveQuota(user);
       const quality = quota.reframeQuality || 'standard';
       const outputHeight = outputHeightFor(quota.maxResolution);
-      const options = { zoom, keepText };
+      const options = { zoom, keepText, captions };
       const current = (file as any).reframe?.get?.(reframeKey) || (file as any).reframe?.[reframeKey];
 
       if (current?.status === 'completed' && current.engine === 'v2' && sameOptions(current.options, options) && current.quality === quality) {
@@ -105,11 +109,12 @@ export const createReframe = async (
       if (analysis?.id && analysis.quality === quality && sameTranscript) {
         try {
           const [result, status] = await Promise.all([
-            planAnalysis(analysis.id, { ratio: aspectRatio, zoom: options.zoom as any, keepText, outputHeight }),
+            planAnalysis(analysis.id, { ratio: aspectRatio, zoom: options.zoom as any, keepText, outputHeight, captions }),
             getAnalysis(analysis.id),
           ]);
           const blob = { status: 'completed', engine: 'v2', analysisId: analysis.id, quality, options, result,
-                         text: status.text || [], progress: 1, processedAt: new Date() };
+                         text: status.text || [], pictureCaptions: Boolean(status.pictureCaptions),
+                         progress: 1, processedAt: new Date() };
           await File.updateOne({ _id: fileId }, { $set: { [`reframe.${reframeKey}`]: blob } });
           res.status(200).json({ status: 'already_done', ...v2Response(blob), message: 'Reframed from the existing analysis' });
           return;
@@ -132,7 +137,7 @@ export const createReframe = async (
           reframeQueue,
           'reframe',
           { fileId: fileId.toString(), videoUrl: file.cdnUrl, aspectRatio, elementId, userId: userId.toString(),
-            engine: 'v2', quality, outputHeight, zoom, keepText },
+            engine: 'v2', quality, outputHeight, zoom, keepText, captions },
           { jobId: `reframe-${fileId}-${reframeKey}` }
         );
       } catch (error) {

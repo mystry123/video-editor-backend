@@ -17,6 +17,8 @@ import { ensureShareTokens, outputFields, publicRender } from '../services/rende
 import { logger } from '../utils/logger';
 import { getEffectiveQuota } from '../config/quotas';
 import { planRenderOutput } from '../utils/renderDimensions';
+import { Transcription } from '../models/Transcription';
+import { replacementCaptionElements } from '../services/reframeCaptions.service';
 
 /** Queues a render job; if the queue is unreachable, marks it failed and returns 503. */
 async function queueRender(jobId: string, priority: number): Promise<void> {
@@ -232,7 +234,7 @@ export const startReframeRender = async (
     // would have produced: project settings sized to the target ratio, plus a
     // single full-canvas video element carrying the reframeData (zones).
     const videoUrl = file.cdnUrl || file.url;
-    const inputProps = {
+    const inputProps: { project: Record<string, unknown>; elements: any[] } = {
       project: {
         width: dims.width,
         height: dims.height,
@@ -270,6 +272,20 @@ export const startReframeRender = async (
         },
       ],
     };
+
+    // Burned-in captions replaced: Shotline captions from the transcript for
+    // exactly the times the engine left the old ones out of the frame.
+    const replaced = isV2 && reframeBlob.result?.captions?.mode === 'replace' ? reframeBlob.result.captions.replaced : null;
+    if (Array.isArray(replaced) && replaced.length) {
+      const transcription = await Transcription.findOne({ fileId: file._id, status: 'completed' }).select('words').lean();
+      if (transcription?.words?.length) {
+        inputProps.elements.push(
+          ...(replacementCaptionElements(transcription.words as any, replaced, dims.width / dims.height) as any[])
+        );
+      } else {
+        logger.warn('[render] Captions were to be replaced but the file has no transcript', { fileId: String(file._id) });
+      }
+    }
 
     const reframeQuota = getEffectiveQuota(user);
     const reframeOutput = planRenderOutput(dims.width, dims.height, reframeQuota.maxResolution);
