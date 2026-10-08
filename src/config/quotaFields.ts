@@ -18,7 +18,8 @@ export type QuotaFieldType =
   | 'boolean'
   | 'resolution'   // one tier
   | 'resolutions'  // list of tiers
-  | 'policy';      // over-resolution policy
+  | 'policy'       // over-resolution policy
+  | 'quality';     // AI reframe analysis quality
 
 export type QuotaFieldGroup = 'rendering' | 'storage' | 'captions' | 'features';
 
@@ -46,6 +47,7 @@ export const QUOTA_FIELDS: QuotaFieldDef[] = [
 
   { key: 'maxStorage', label: 'Storage', description: 'Total size of uploaded media.', type: 'bytes', group: 'storage' },
   { key: 'maxVideoUploadSize', label: 'Max upload size', description: 'Largest single video file.', type: 'bytes', group: 'storage' },
+  { key: 'reframeQuality', label: 'Reframe quality', description: 'How closely AI reframe analyses videos. Higher finds smaller faces and places cuts more precisely, and takes longer.', type: 'quality', group: 'features' },
   { key: 'maxReframeSeconds', label: 'Max reframe length', description: 'Longest video AI reframe can analyze.', type: 'seconds', group: 'features' },
   { key: 'maxVideoDuration', label: 'Max video length', description: 'Longest video that can be captioned.', type: 'seconds', group: 'storage' },
   { key: 'maxTemplates', label: 'Projects', description: 'Number of saved projects.', type: 'count', group: 'storage' },
@@ -77,6 +79,7 @@ const VALUE_SCHEMAS: Record<QuotaFieldType, z.ZodTypeAny> = {
   resolution: z.enum(RESOLUTION_TIERS),
   resolutions: z.array(z.enum(RESOLUTION_TIERS)).min(1).transform((list) => Array.from(new Set(list))),
   policy: z.enum(['downscale', 'block']),
+  quality: z.enum(['standard', 'high', 'max']),
 };
 
 /** Validates one limit's value. Returns the parsed value or an error message. */

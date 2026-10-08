@@ -13,8 +13,10 @@ export interface UserQuota {
   allowedCaptionResolutions: string[]; // Which resolutions can they use
   maxVideoUploadSize: number;        // Max video file size for captions
   maxVideoDuration: number;          // Max video duration in seconds
-  /** Longest video AI reframe accepts, in seconds (the YOLO service times out on longer ones). */
+  /** Longest video AI reframe accepts, in seconds. */
   maxReframeSeconds: number;
+  /** How closely AI reframe analyses a video: higher finds smaller faces and places cuts more precisely, and takes longer. */
+  reframeQuality: ReframeQuality;
   customPresetsAllowed: boolean;     // Can create custom presets
   maxCustomPresets: number;          // How many custom presets
   priorityRendering: boolean;        // Priority queue for rendering
@@ -24,6 +26,7 @@ export interface UserQuota {
 }
 
 export type OverResolutionPolicy = 'downscale' | 'block';
+export type ReframeQuality = 'standard' | 'high' | 'max';
 
 export const USER_QUOTAS: Record<string, UserQuota> = {
   free: {
@@ -42,6 +45,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxVideoUploadSize: 100 * 1024 * 1024, // 100MB
     maxVideoDuration: 60,              // 1 minute max
     maxReframeSeconds: 300,
+    reframeQuality: 'standard',
     customPresetsAllowed: false,
     maxCustomPresets: 0,
     priorityRendering: false,
@@ -64,6 +68,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxVideoUploadSize: 500 * 1024 * 1024, // 500MB
     maxVideoDuration: 600,             // 10 minutes max
     maxReframeSeconds: 300,
+    reframeQuality: 'high',
     customPresetsAllowed: true,
     maxCustomPresets: 10,
     priorityRendering: false,
@@ -86,6 +91,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxVideoUploadSize: 2 * 1024 * 1024 * 1024, // 2GB
     maxVideoDuration: 3600,            // 1 hour max
     maxReframeSeconds: 300,
+    reframeQuality: 'high',
     customPresetsAllowed: true,
     maxCustomPresets: -1,              // Unlimited
     priorityRendering: true,
@@ -108,6 +114,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxVideoUploadSize: -1,
     maxVideoDuration: -1,
     maxReframeSeconds: 300,
+    reframeQuality: 'max',
     customPresetsAllowed: true,
     maxCustomPresets: -1,
     priorityRendering: true,

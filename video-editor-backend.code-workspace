@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "../video-editor-frontend"
+		},
+		{
+			"path": "../shotline-reframe"
 		}
 	]
 }

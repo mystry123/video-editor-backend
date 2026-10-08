@@ -17,6 +17,14 @@ import {
   sampleEveryFor,
 } from '../services/reframe.service';
 import { createWorker, createJobLogger } from '../utils/worker.utils';
+import {
+  getAnalysis,
+  planAnalysis,
+  reframeEngineConfigured,
+  submitAnalysis,
+  type ReframeQuality,
+  type ReframeZoom,
+} from '../services/reframeEngine.service';
 import { logger } from '../utils/logger';
 
 // ============================================================================
@@ -26,9 +34,89 @@ import { logger } from '../utils/logger';
 interface ReframeJobData {
   fileId: string;
   videoUrl: string;
-  aspectRatio: '9:16' | '1:1' | '4:5' | '16:9';
+  aspectRatio: '9:16' | '1:1' | '4:5' | '16:9' | '2:3';
   elementId: string;    // frontend element ID to update
   userId: string;
+  // Engine v2 (reframe service) only:
+  engine?: 'v2';
+  quality?: ReframeQuality;
+  outputHeight?: number;
+  zoom?: ReframeZoom;
+  keepText?: string[];
+}
+
+// ============================================================================
+// Engine v2: the reframe service
+// ============================================================================
+
+const POLL_MS = 2000;
+const MAX_POLL_ERRORS = 10;
+
+async function processReframeV2(job: Job<ReframeJobData>) {
+  const { fileId, videoUrl, aspectRatio } = job.data;
+  const key = aspectRatio.replace(':', '_');
+  const log = createJobLogger('Reframe v2', fileId);
+  const quality = job.data.quality || 'standard';
+
+  // The transcript (when there is one) lets the engine follow whoever speaks.
+  const transcription = await Transcription.findOne({ fileId, status: 'completed' }).select('words updatedAt').lean();
+  const words = transcription?.words?.map((w) => ({ text: w.text, start: w.start, end: w.end, type: w.type, speaker_id: w.speaker_id }));
+
+  const submitted = await submitAnalysis({ videoUrl, words, quality });
+  log.info(`Analysis ${submitted.id} (${submitted.status})`);
+  await File.updateOne(
+    { _id: fileId },
+    { $set: { [`reframe.${key}.status`]: 'processing', [`reframe.${key}.engine`]: 'v2', [`reframe.${key}.analysisId`]: submitted.id } }
+  );
+
+  // Wait for the analysis, reporting its stage. Long videos take a while, but
+  // never longer than this.
+  const deadline = Date.now() + 45 * 60_000;
+  let status = submitted;
+  let errors = 0;
+  let lastStage = '';
+  while (status.status !== 'done') {
+    if (status.status === 'failed') {
+      throw new UnrecoverableError(status.error || 'The video could not be analysed.');
+    }
+    if (Date.now() > deadline) throw new UnrecoverableError('Analysis took too long.');
+    await new Promise((r) => setTimeout(r, POLL_MS));
+    try {
+      status = await getAnalysis(submitted.id);
+      errors = 0;
+    } catch (error: any) {
+      if (++errors >= MAX_POLL_ERRORS) throw error; // service unreachable: let the queue retry
+      continue;
+    }
+    const progress = Math.round((status.progress || 0) * 100);
+    if (status.stageLabel && (status.stageLabel !== lastStage || progress % 10 === 0)) {
+      lastStage = status.stageLabel;
+      await File.updateOne(
+        { _id: fileId, [`reframe.${key}.status`]: 'processing' },
+        { $set: { [`reframe.${key}.stage`]: status.stageLabel, [`reframe.${key}.progress`]: status.progress || 0 } }
+      );
+      await job.updateProgress(progress);
+    }
+  }
+
+  const options = { zoom: job.data.zoom || 'balanced', keepText: job.data.keepText || [] };
+  const result = await planAnalysis(submitted.id, {
+    ratio: aspectRatio, zoom: options.zoom, keepText: options.keepText, outputHeight: job.data.outputHeight || 1080,
+  });
+  await File.updateOne(
+    { _id: fileId },
+    {
+      $set: {
+        [`reframe.${key}`]: {
+          status: 'completed', engine: 'v2', analysisId: submitted.id, quality, options, result,
+          text: status.text || [], progress: 1, processedAt: new Date(),
+        },
+        reframeAnalysis: { id: submitted.id, quality, transcriptAt: transcription?.updatedAt ?? null },
+      },
+    }
+  );
+  log.info(`Done: ${(result as any).segments?.length ?? 0} segments`);
+  return { success: true, engine: 'v2', analysisId: submitted.id };
 }
 
 // ============================================================================
@@ -36,6 +124,19 @@ interface ReframeJobData {
 // ============================================================================
 
 async function processReframeJob(job: Job<ReframeJobData>) {
+  if (job.data.engine === 'v2' && reframeEngineConfigured()) {
+    try {
+      return await processReframeV2(job);
+    } catch (error: any) {
+      const key = job.data.aspectRatio.replace(':', '_');
+      if (error instanceof UnrecoverableError) {
+        await markReframeFailed(job.data.fileId, key, error.message);
+      } else if (isFinalAttempt(job)) {
+        await markReframeFailed(job.data.fileId, key);
+      }
+      throw error;
+    }
+  }
   const { fileId, videoUrl, aspectRatio, elementId, userId } = job.data;
   const log = createJobLogger('Reframe', fileId);
 
