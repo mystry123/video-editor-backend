@@ -1,0 +1,20 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RunOnlyTheDeployDocumentOnTheProdBox",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": [
+        "arn:aws:ec2:ap-south-1:563235961017:instance/i-02e37278036b76a67",
+        "arn:aws:ssm:ap-south-1:563235961017:document/Shotline-Deploy"
+      ]
+    },
+    {
+      "Sid": "ReadDeployResults",
+      "Effect": "Allow",
+      "Action": ["ssm:GetCommandInvocation", "ssm:ListCommandInvocations"],
+      "Resource": "*"
+    }
+  ]
+}

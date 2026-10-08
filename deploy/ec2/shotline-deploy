@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Deploy one shotline app on the production EC2 box, rolling back if unhealthy.
+#
+#   shotline-deploy <backend|frontend> <commit-sha>
+#
+# Installed by hand at /var/www/shotline/bin/shotline-deploy (source of truth:
+# video-editor-backend/deploy/ec2/). Run as `ubuntu`; GitHub Actions calls it
+# through the Shotline-Deploy SSM document. Code comes only from GitHub.
+#
+# Steps: fetch; refuse commits not on origin/main; (backend) wait for running
+# jobs to finish; check out; install; build; pm2 reload; health check. If the
+# health check fails, the previous commit is redeployed the same way.
+set -euo pipefail
+
+app="${1:-}"; sha="${2:-}"
+case "$app" in backend|frontend) ;; *) echo "usage: shotline-deploy <backend|frontend> <sha>" >&2; exit 2 ;; esac
+[[ "$sha" =~ ^[0-9a-f]{7,40}$ ]] || { echo "not a commit sha: $sha" >&2; exit 2; }
+
+ROOT=/var/www/shotline
+DIR="$ROOT/$app"
+LOG="$ROOT/deploys.log"
+HEALTH_TRIES="${HEALTH_TRIES:-60}"            # × 2 s
+QUEUE_WAIT_S="${QUEUE_WAIT_S:-600}"
+if [[ "$app" == backend ]]; then
+  HEALTH_URL=http://127.0.0.1:4000/health
+else
+  HEALTH_URL=http://127.0.0.1:3000/
+fi
+
+log() { echo "$(date -u +%FT%TZ) [$app] $*" | tee -a "$LOG"; }
+
+exec 9>"$ROOT/.deploy-$app.lock"
+flock -n 9 || { echo "Another $app deploy is running" >&2; exit 3; }
+
+cd "$DIR"
+git fetch --quiet --prune origin
+target="$(git rev-parse --verify "${sha}^{commit}")"
+if ! git merge-base --is-ancestor "$target" origin/main; then
+  log "refused $target: not on origin/main"; exit 4
+fi
+previous="$(git rev-parse HEAD)"
+
+# pm2 apps this deploy reloads (a separate worker app is reloaded with the backend).
+apps=("shotline-$app")
+if [[ "$app" == backend ]] && pm2 describe shotline-worker >/dev/null 2>&1; then apps+=(shotline-worker); fi
+
+# Reloading the backend interrupts running render/reframe/transcription jobs:
+# wait (up to QUEUE_WAIT_S) until no BullMQ job is active.
+wait_for_idle_jobs() {
+  [[ "$app" == backend ]] && command -v redis-cli >/dev/null || return 0
+  local waited=0 active
+  while :; do
+    active=0
+    while read -r key; do
+      [[ -n "$key" ]] && active=$((active + $(redis-cli LLEN "$key" 2>/dev/null || echo 0)))
+    done < <(redis-cli --scan --pattern 'bull:*:active' 2>/dev/null)
+    (( active == 0 )) && return 0
+    (( waited >= QUEUE_WAIT_S )) && { log "still $active active job(s) after ${QUEUE_WAIT_S}s; deploying anyway"; return 0; }
+    (( waited == 0 )) && log "waiting for $active active job(s) to finish"
+    sleep 15; waited=$((waited + 15))
+  done
+}
+
+install_commit() {
+  # -B keeps the checkout on `main` (pointing at the deployed commit).
+  git checkout --quiet --force -B main "$1"
+  if [[ "$app" == backend ]] && ! grep -q "linux-x64': true" pnpm-workspace.yaml; then
+    log "pnpm-workspace.yaml doesn't allow the linux-x64 ffmpeg postinstall; refusing"; return 1
+  fi
+  pnpm install --frozen-lockfile
+  if [[ "$app" == frontend ]]; then
+    NODE_OPTIONS=--max-old-space-size=3072 pnpm run build
+  else
+    pnpm run build
+  fi
+  pm2 reload "${apps[@]}" --update-env
+  pm2 save >/dev/null
+}
+
+healthy() {
+  for _ in $(seq "$HEALTH_TRIES"); do
+    curl -fsS --max-time 3 -o /dev/null "$HEALTH_URL" && return 0
+    sleep 2
+  done
+  return 1
+}
+
+# The server once carried a hand-edited pnpm-workspace.yaml; the repo's copy is
+# correct now. Keep a backup of any local change before it's replaced.
+if ! git diff --quiet -- pnpm-workspace.yaml 2>/dev/null; then
+  mkdir -p "$ROOT/backups"; cp pnpm-workspace.yaml "$ROOT/backups/pnpm-workspace.yaml.$(date +%s)"
+fi
+
+wait_for_idle_jobs
+log "deploying $target (was $previous)"
+if install_commit "$target" && healthy; then
+  log "deployed $target"
+  exit 0
+fi
+
+log "health check failed for $target; rolling back to $previous"
+pm2 logs "${apps[0]}" --nostream --lines 30 2>&1 | tail -30 || true
+if install_commit "$previous" && healthy; then
+  log "rolled back to $previous"
+else
+  log "ROLLBACK FAILED: $previous is not healthy either"
+fi
+exit 1
