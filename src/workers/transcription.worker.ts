@@ -5,9 +5,9 @@ import { Transcription } from '../models/Transcription';
 import { createElevenLabsTranscription } from '../services/transcription.service';
 import { triggerWebhooks } from '../services/webhook.service';
 import { createWorker, createJobLogger, sleep, retryWithBackoff } from '../utils/worker.utils';
-import { quotaService } from '../services/quota.service';
 import { logger } from '../utils/logger';
 import { isFinalAttempt, transition } from '../utils/jobs';
+import { releaseUsage, settleUsage } from '../services/usage.service';
 
 // ============================================================================
 // Types
@@ -52,6 +52,7 @@ async function processTranscriptionJob(job: Job<TranscriptionJobData>) {
     const error = 'File URL required';
     log.error(error);
     await Transcription.updateOne({ _id: transcriptionId }, { status: 'failed', error });
+    await releaseUsage('transcriptionMinutes', transcriptionId, 'missing_url');
     return { success: false, reason: 'missing_url' };
   }
 
@@ -92,17 +93,11 @@ async function processTranscriptionJob(job: Job<TranscriptionJobData>) {
       }
     );
 
-    // Update quota usage
-    const userId = transcription.userId.toString();
-    const minutesUsed = (result.audio_duration || 0) / 60;
-    await quotaService.addTranscriptionMinutes(
-      userId,
-      minutesUsed,
-      transcriptionId
-    );
+    // Charge the real audio length (settles the reservation from the request).
+    await settleUsage(transcription.userId, 'transcriptionMinutes', transcriptionId, result.audio_duration || 0);
 
     // Trigger webhooks (async)
-    triggerWebhooks(userId, 'transcription.completed', {
+    triggerWebhooks(transcription.userId.toString(), 'transcription.completed', {
       transcriptionId,
       text: result.text,
       wordCount: result.words?.length || 0,
@@ -124,6 +119,7 @@ async function processTranscriptionJob(job: Job<TranscriptionJobData>) {
         status: 'failed',
         error: TRANSCRIPTION_FAILED_MESSAGE,
       });
+      await releaseUsage('transcriptionMinutes', transcriptionId, 'transcription_failed');
     }
     throw error;
   }
@@ -144,6 +140,7 @@ const transcriptionWorker = createWorker({
       status: 'failed',
       error: TRANSCRIPTION_FAILED_MESSAGE,
     });
+    await releaseUsage('transcriptionMinutes', job.data.transcriptionId, 'transcription_crashed');
   },
   concurrency: 2, // Low concurrency due to API rate limits
   lockDuration: 300000, // 5 minutes (API can be slow)

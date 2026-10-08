@@ -1,5 +1,6 @@
 import { Response, NextFunction } from 'express';
 import { enqueueJob } from '../utils/jobs';
+import { releaseAllUsage, releaseUsage, reserveUsage } from '../services/usage.service';
 import { Types } from 'mongoose';
 import { AuthRequest } from '../types';
 import { RenderJob } from '../models/RenderJob';
@@ -22,6 +23,7 @@ async function queueRender(jobId: string, priority: number): Promise<void> {
     await enqueueJob(renderQueue, 'render', { jobId }, { jobId: `render-${jobId}`, priority });
   } catch (error) {
     await RenderJob.updateOne({ _id: jobId }, { status: 'failed', error: 'Rendering is temporarily unavailable. Try again in a minute.' });
+    await releaseUsage('renderMinutes', jobId, 'enqueue_failed');
     throw error;
   }
 }
@@ -171,7 +173,13 @@ export const startRender = async (
     const output = planRenderOutput(Number(project.width), Number(project.height), quota.maxResolution);
     assertResolutionAllowed(output, quota);
 
+    // Reserve the render minutes up front (atomic against the monthly limit),
+    // so parallel requests can't all slip under it. Refunded if it fails.
+    const renderJobId = new Types.ObjectId();
+    await reserveUsage(user._id, 'renderMinutes', String(renderJobId), Number(project.duration), quota.maxRenderMinutes);
+
     const renderJob = await RenderJob.create({
+      _id: renderJobId,
       userId: user._id,
       templateId: template?._id,
       inputProps,
@@ -303,7 +311,11 @@ export const startReframeRender = async (
     const reframeOutput = planRenderOutput(dims.width, dims.height, reframeQuota.maxResolution);
     assertResolutionAllowed(reframeOutput, reframeQuota);
 
+    const reframeJobId = new Types.ObjectId();
+    await reserveUsage(user._id, 'renderMinutes', String(reframeJobId), Number(duration), reframeQuota.maxRenderMinutes);
+
     const renderJob = await RenderJob.create({
+      _id: reframeJobId,
       userId: user._id,
       inputProps,
       outputFormat: 'mp4',
@@ -463,7 +475,12 @@ export const cancelRender = async (
 
     if (!job) throw ApiError.notFound('Job not found or cannot be cancelled');
 
-    await RenderJob.updateOne({ _id: id }, { status: 'cancelled' });
+    const cancelled = await RenderJob.findOneAndUpdate(
+      { _id: id, status: { $in: ['pending', 'queued', 'rendering'] } },
+      { status: 'cancelled', completedAt: new Date() }
+    );
+    // Refund the reserved minutes (no-op if the render already completed and was charged).
+    if (cancelled) await releaseAllUsage(String(cancelled._id), 'cancelled');
 
     res.json({ success: true });
   } catch (error) {

@@ -6,9 +6,12 @@
 // that record's queue job is still waiting or running, so it never interferes
 // with work in progress.
 
+import { Types } from 'mongoose';
 import { RenderJob } from '../models/RenderJob';
 import { Transcription } from '../models/Transcription';
-import { CaptionProject } from '../models/Caption';
+import { ACTIVE_CAPTION_STATES, CaptionProject } from '../models/Caption';
+import { UsageEntry } from '../models/Usage';
+import { releaseUsage, settleUsage } from './usage.service';
 import { File } from '../models/File';
 import {
   getCaptionQueue,
@@ -170,6 +173,46 @@ async function sweepFiles(counts: Record<string, number>) {
 // ---------------------------------------------------------------------------
 
 /** Runs every repair step once; returns what was fixed. */
+// ---------------------------------------------------------------------------
+// Usage reservations whose charge or refund was lost
+// ---------------------------------------------------------------------------
+
+/** Where a reservation's work ended up: 'done' (charge), 'gone' (refund) or still running. */
+async function reservationOutcome(kind: string, jobId: string): Promise<'done' | 'gone' | 'running'> {
+  const finalState = (status: string | undefined, done: string[], active: string[]) =>
+    status && done.includes(status) ? 'done' : status && active.includes(status) ? 'running' : 'gone';
+  if (kind === 'renderMinutes') {
+    const job = Types.ObjectId.isValid(jobId) ? await RenderJob.findById(jobId).select('status').lean() : null;
+    return finalState(job?.status, ['completed'], ['pending', 'queued', 'rendering']);
+  }
+  if (kind === 'transcriptionMinutes') {
+    const t = Types.ObjectId.isValid(jobId) ? await Transcription.findById(jobId).select('status').lean() : null;
+    return finalState(t?.status, ['completed'], ['pending', 'processing']);
+  }
+  if (kind === 'captionRenderMinutes' || kind === 'captionExports') {
+    const projectId = jobId.replace(/^caption-(render|export)-/, '');
+    const p = Types.ObjectId.isValid(projectId) ? await CaptionProject.findById(projectId).select('status').lean() : null;
+    return finalState(p?.status, ['completed'], ACTIVE_CAPTION_STATES);
+  }
+  return 'running'; // unknown kinds are left alone
+}
+
+async function sweepUsage(counts: Record<string, number>) {
+  const stale = await UsageEntry.find({ state: 'reserved', updatedAt: { $lt: ago(STUCK_AFTER_MS) } })
+    .limit(BATCH)
+    .lean();
+  for (const entry of stale) {
+    const outcome = await reservationOutcome(entry.kind, entry.jobId);
+    if (outcome === 'done') {
+      await settleUsage(entry.userId, entry.kind, entry.jobId);
+      counts.reservationsSettled = (counts.reservationsSettled || 0) + 1;
+    } else if (outcome === 'gone') {
+      await releaseUsage(entry.kind, entry.jobId, 'sweep');
+      counts.reservationsReleased = (counts.reservationsReleased || 0) + 1;
+    }
+  }
+}
+
 export async function runMaintenanceSweep(): Promise<Record<string, number>> {
   const counts: Record<string, number> = {};
   const steps: Array<[string, (c: Record<string, number>) => Promise<void>]> = [
@@ -178,6 +221,8 @@ export async function runMaintenanceSweep(): Promise<Record<string, number>> {
     ['captions', sweepCaptions],
     ['reframes', sweepReframes],
     ['files', sweepFiles],
+    // Last, so records the steps above just failed get their minutes back.
+    ['usage', sweepUsage],
   ];
   // One failing step must not stop the others.
   for (const [name, step] of steps) {

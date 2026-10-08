@@ -1,11 +1,15 @@
 // workers/caption.worker.ts
 import { enqueueJob, transition } from '../utils/jobs';
+import { releaseUsage, reserveUsage, settleUsage } from '../services/usage.service';
+import { Types } from 'mongoose';
+import { getEffectiveQuota } from '../config/quotas';
 
 import { Job } from 'bullmq';
-import { CaptionProject, ICaptionProject } from '../models/Caption';
+import { ACTIVE_CAPTION_STATES, CaptionProject, ICaptionProject } from '../models/Caption';
 import { Transcription } from '../models/Transcription';
 import { File } from '../models/File';
 import { Template } from '../models/Template';
+import { User } from '../models/User';
 import { RenderJob } from '../models/RenderJob';
 import { CaptionCompositionService } from '../services/captioncomposition.service';
 import { CaptionGenerationOutput } from '../types/composition';
@@ -191,13 +195,24 @@ async function processCaptionJob(job: Job<CaptionJobData>) {
           log.info('Found in-progress transcription');
           transcriptionId = transcription._id.toString();
         } else {
-          // Create new
-          const newTranscription = await Transcription.create({
-            userId,
-            fileId,
-            status: 'pending',
-          });
-          transcriptionId = newTranscription._id.toString();
+          // Create one, or retry a failed one (fileId is unique, so creating a
+          // second would fail on every attempt). Its minutes are reserved
+          // against the owner's transcription limit first.
+          const failed = await Transcription.findOne({ fileId, status: 'failed' }).select('_id').lean();
+          const newId = failed ? failed._id : new Types.ObjectId();
+          const owner = await User.findById(userId);
+          if (!(await reserveOrFail(projectId, () =>
+            reserveUsage(userId, 'transcriptionMinutes', String(newId), Number(file.metadata?.duration) || 0,
+              owner ? getEffectiveQuota(owner).maxTranscriptionMinutes : 0)
+          ))) {
+            return { success: false, stage: 'transcription', reason: 'quota' };
+          }
+          if (failed) {
+            await Transcription.updateOne({ _id: newId }, { status: 'pending', $unset: { error: '' } });
+          } else {
+            await Transcription.create({ _id: newId, userId, fileId, status: 'pending' });
+          }
+          transcriptionId = String(newId);
 
           await enqueueJob(
             transcriptionQueue,
@@ -270,6 +285,26 @@ async function processCaptionJob(job: Job<CaptionJobData>) {
     );
 
     const composition = compositionResult.composition;
+
+    // Reserve the caption render minutes (keyed by project, so a retried
+    // pipeline reuses the same reservation). Out of minutes fails the project
+    // with a clear message instead of rendering for free.
+    // The export itself is counted too (settled when the project completes).
+    const owner = await User.findById(userId);
+    const ownerQuota = owner ? getEffectiveQuota(owner) : null;
+    const reserved =
+      (await reserveOrFail(projectId, () =>
+        reserveUsage(userId, 'captionExports', `caption-export-${projectId}`, 1, ownerQuota?.maxCaptionExports ?? 0)
+      )) &&
+      (await reserveOrFail(projectId, () =>
+        reserveUsage(userId, 'captionRenderMinutes', `caption-render-${projectId}`, Number(composition.project?.duration) || 0,
+          ownerQuota?.maxCaptionRenderMinutes ?? 0)
+      ));
+    if (!reserved) {
+      await releaseUsage('captionExports', `caption-export-${projectId}`, 'quota');
+      return { success: false, stage: 'rendering', reason: 'quota' };
+    }
+
     const renderJob = await RenderJob.create({
       userId,
       captionProjectId: projectId,
@@ -292,6 +327,7 @@ async function processCaptionJob(job: Job<CaptionJobData>) {
         { _id: projectId },
         { status: 'failed', error: renderResult.error }
       );
+      await releaseCaptionUsage(projectId, 'render_failed');
       return { success: false, stage: 'rendering' };
     }
 
@@ -302,13 +338,18 @@ async function processCaptionJob(job: Job<CaptionJobData>) {
     log.info('Completed!');
 
     // Only an active project completes: a cancellation (status failed) wins.
-    await transition(CaptionProject, projectId, ACTIVE_CAPTION_STATES, {
+    const completed = await transition(CaptionProject, projectId, ACTIVE_CAPTION_STATES, {
       status: 'completed',
       outputUrl: renderResult.outputUrl,
       thumbnailUrl: renderResult.thumbnailUrl,
       renderCompletedAt: new Date(),
       progress: 100,
     });
+    if (completed) {
+      await settleUsage(userId, 'captionExports', `caption-export-${projectId}`);
+    } else {
+      await releaseUsage('captionExports', `caption-export-${projectId}`, 'cancelled');
+    }
 
     return {
       success: true,
@@ -319,16 +360,37 @@ async function processCaptionJob(job: Job<CaptionJobData>) {
     log.error(`Error: ${error.message}`);
 
     await transition(CaptionProject, projectId, ACTIVE_CAPTION_STATES, { status: 'failed', error: error.message });
+    await releaseCaptionUsage(projectId, 'caption_failed');
 
     throw error;
   }
 }
 
-const ACTIVE_CAPTION_STATES = ['pending', 'transcribing', 'generating', 'rendering'];
 
 // ============================================================================
 // Create Worker
 // ============================================================================
+
+/** Refunds a caption project's reserved render minutes and export. */
+async function releaseCaptionUsage(projectId: string, reason: string): Promise<void> {
+  await releaseUsage('captionRenderMinutes', `caption-render-${projectId}`, reason);
+  await releaseUsage('captionExports', `caption-export-${projectId}`, reason);
+}
+
+/**
+ * Runs a reservation; when the user is out of quota, fails the project with
+ * the quota message and returns false (other errors are thrown for a retry).
+ */
+async function reserveOrFail(projectId: string, reserve: () => Promise<void>): Promise<boolean> {
+  try {
+    await reserve();
+    return true;
+  } catch (error: any) {
+    if (error?.statusCode !== 403) throw error;
+    await transition(CaptionProject, projectId, ACTIVE_CAPTION_STATES, { status: 'failed', error: error.message });
+    return false;
+  }
+}
 
 const captionWorker = createWorker({
   name: 'caption',
@@ -339,6 +401,7 @@ const captionWorker = createWorker({
       status: 'failed',
       error: 'Captioning stopped unexpectedly. Try again.',
     });
+    await releaseCaptionUsage(job.data.projectId, 'caption_crashed');
   },
   concurrency: 5,
   lockDuration: 120000, // 2 minutes

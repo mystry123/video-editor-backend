@@ -6,6 +6,9 @@ import { File } from '../models/File';
 import { User } from '../models/User';
 import { transcriptionQueue } from '../queues';
 import { ApiError } from '../utils/ApiError';
+import { Types } from 'mongoose';
+import { getEffectiveQuota } from '../config/quotas';
+import { releaseUsage, reserveUsage } from '../services/usage.service';
 
 /** Queues a transcription; if the queue is unreachable, marks it failed and returns 503. */
 async function queueTranscription(transcriptionId: string, fileUrl: string): Promise<void> {
@@ -16,8 +19,19 @@ async function queueTranscription(transcriptionId: string, fileUrl: string): Pro
       { _id: transcriptionId, status: 'pending' },
       { status: 'failed', error: 'Transcription is temporarily unavailable. Try again in a minute.' }
     );
+    await releaseUsage('transcriptionMinutes', transcriptionId, 'enqueue_failed');
     throw error;
   }
+}
+
+/**
+ * Reserves the file's length in transcription minutes for this transcription
+ * (atomic against the monthly limit). Settled with the real audio length when
+ * it finishes, refunded if it fails.
+ */
+async function reserveTranscription(user: any, file: any, transcriptionId: string): Promise<void> {
+  const seconds = Number(file.metadata?.duration) || 0;
+  await reserveUsage(user._id, 'transcriptionMinutes', transcriptionId, seconds, getEffectiveQuota(user).maxTranscriptionMinutes);
 }
 
 export const createTranscription = async (
@@ -45,6 +59,7 @@ export const createTranscription = async (
       // A previous run that failed should be retryable - otherwise the only
       // way back is deleting the document by hand.
       if (existing.status === 'failed') {
+        await reserveTranscription(user, file, existing._id.toString());
         existing.status = 'pending';
         existing.error = undefined;
         await existing.save();
@@ -59,11 +74,21 @@ export const createTranscription = async (
       return;
     }
 
-    const transcription = await Transcription.create({
-      userId: user._id,
-      fileId,
-      status: 'pending',
-    });
+    const transcriptionId = new Types.ObjectId();
+    await reserveTranscription(user, file, String(transcriptionId));
+
+    let transcription;
+    try {
+      transcription = await Transcription.create({ _id: transcriptionId, userId: user._id, fileId, status: 'pending' });
+    } catch (error: any) {
+      await releaseUsage('transcriptionMinutes', String(transcriptionId), 'create_failed');
+      // A parallel request created it first: return that one.
+      if (error?.code === 11000) {
+        res.status(200).json(await Transcription.findOne({ fileId }));
+        return;
+      }
+      throw error;
+    }
 
     await queueTranscription(transcription._id.toString(), file.cdnUrl!);
 
