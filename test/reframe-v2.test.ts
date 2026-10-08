@@ -87,5 +87,8 @@ describe('AI reframe with the engine service', () => {
     const job = await RenderJob.findById(res.body.id).select('+inputProps');
     const captions = job!.inputProps.elements.filter((e: any) => e.type === 'caption');
     expect(captions.map((c: any) => [c.time, c.transcription.words.map((w: any) => w.word)])).toEqual([[0, ['Hello']], [10, ['bye']]]);
+    // The editor previews the same captions.
+    const status = await api().get(`/api/v1/reframe/status/${f._id}/16:9`).set(auth);
+    expect(status.body.captionElements).toEqual(JSON.parse(JSON.stringify(captions)));
   });
 });

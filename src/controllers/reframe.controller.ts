@@ -13,6 +13,7 @@ import { logger } from '../utils/logger';
 import { Transcription } from '../models/Transcription';
 import { getAnalysis, outputHeightFor, planAnalysis, REFRAME_CAPTIONS, reframeEngineConfigured } from '../services/reframeEngine.service';
 import type { ReframeCaptions } from '../services/reframeEngine.service';
+import { replacementCaptionElements } from '../services/reframeCaptions.service';
 
 const VALID_RATIOS = ['9:16', '1:1', '4:5', '16:9', '2:3'];
 const ZOOMS = ['sharp', 'balanced', 'tight'] as const;
@@ -32,6 +33,19 @@ function v2Response(data: any) {
     options: data.options || null,
     quality: data.quality || null,
   };
+}
+
+/**
+ * Shotline captions that replace burned-in ones, as the render will add them:
+ * the editor previews exactly these (empty unless captions were replaced).
+ */
+async function captionPreview(fileId: unknown, data: any, aspectRatio: string): Promise<Record<string, unknown>[]> {
+  const ranges = data?.result?.captions?.mode === 'replace' ? data.result.captions.replaced : null;
+  if (data?.status !== 'completed' || !Array.isArray(ranges) || !ranges.length) return [];
+  const transcription = await Transcription.findOne({ fileId, status: 'completed' }).select('words').lean();
+  if (!transcription?.words?.length) return [];
+  const [a, b] = aspectRatio.split(':').map(Number);
+  return replacementCaptionElements(transcription.words as any, ranges, a > 0 && b > 0 ? a / b : 1);
 }
 
 /**
@@ -93,7 +107,9 @@ export const createReframe = async (
       const current = (file as any).reframe?.get?.(reframeKey) || (file as any).reframe?.[reframeKey];
 
       if (current?.status === 'completed' && current.engine === 'v2' && sameOptions(current.options, options) && current.quality === quality) {
-        res.status(200).json({ status: 'already_done', ...v2Response(current), message: 'Reframe already processed for this ratio' });
+        res.status(200).json({ status: 'already_done', ...v2Response(current),
+                               captionElements: await captionPreview(fileId, current, aspectRatio),
+                               message: 'Reframe already processed for this ratio' });
         return;
       }
       if (current?.status === 'processing' || current?.status === 'pending') {
@@ -116,7 +132,9 @@ export const createReframe = async (
                          text: status.text || [], pictureCaptions: Boolean(status.pictureCaptions),
                          progress: 1, processedAt: new Date() };
           await File.updateOne({ _id: fileId }, { $set: { [`reframe.${reframeKey}`]: blob } });
-          res.status(200).json({ status: 'already_done', ...v2Response(blob), message: 'Reframed from the existing analysis' });
+          res.status(200).json({ status: 'already_done', ...v2Response(blob),
+                                 captionElements: await captionPreview(fileId, blob, aspectRatio),
+                                 message: 'Reframed from the existing analysis' });
           return;
         } catch (error: any) {
           // Expired or unknown analysis: analyse again below. Anything else
@@ -241,6 +259,7 @@ export const getReframeStatus = async (
         error: reframeData.error || null,
         processedAt: reframeData.processedAt || null,
         ...v2Response(reframeData),
+        captionElements: await captionPreview(fileId, reframeData, aspectRatio),
       });
       return;
     }
