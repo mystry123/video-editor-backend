@@ -6,6 +6,8 @@ export interface TokenPayload {
   userId: string;
   email: string;
   role: string;
+  /** Session id (models/Session). Absent only on tokens issued before sessions existed. */
+  sid?: string;
 }
 
 export interface TokenPair {
@@ -23,11 +25,25 @@ export function generateAccessToken(payload: TokenPayload): string {
   return jwt.sign(payload, env.jwtSecret, options);
 }
 
+/**
+ * Short-lived token the browser uses for direct upload calls, since it can't
+ * read the httpOnly session cookies. Only routes that opt in accept it
+ * (see allowUploadTickets), and it dies with its session.
+ */
+export function generateUploadTicket(payload: TokenPayload): { ticket: string; expiresIn: number } {
+  const expiresIn = 15 * 60;
+  const ticket = jwt.sign({ ...payload, tokenType: 'upload' }, env.jwtSecret, { expiresIn, issuer: 'video-editor-api' });
+  return { ticket, expiresIn };
+}
+
 // Generate refresh token (long-lived)
 export function generateRefreshToken(payload: TokenPayload): string {
   const options: SignOptions = {
     expiresIn: env.jwtRefreshExpiresIn as any,
     issuer: 'video-editor-api',
+    // Unique per token: two tokens issued in the same second with the same
+    // payload would otherwise be identical, defeating rotation.
+    jwtid: crypto.randomUUID(),
   };
   return jwt.sign(
     { ...payload, tokenType: 'refresh' },

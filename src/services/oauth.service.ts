@@ -1,8 +1,10 @@
 import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
 import fetch from 'node-fetch';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
+import { ApiError } from '../utils/ApiError';
 
 // ============================================
 // TYPES
@@ -12,10 +14,24 @@ export interface OAuthUserInfo {
   provider: 'google' | 'apple' | 'facebook';
   providerId: string;
   email: string;
+  /** Whether the provider says the user proved they own `email`. Only verified emails may be linked to an existing account. */
+  emailVerified: boolean;
   name?: string;
   avatarUrl?: string;
   accessToken?: string;
   refreshToken?: string;
+}
+
+const PROVIDER_NAMES = { google: 'Google', apple: 'Apple', facebook: 'Facebook' } as const;
+
+/** Client-facing error for a failed provider check; the cause is logged, not returned. */
+function oauthFailure(provider: keyof typeof PROVIDER_NAMES, error: unknown): ApiError {
+  const message = (error as Error)?.message || '';
+  logger.warn(`${PROVIDER_NAMES[provider]} sign-in verification failed`, { error: message });
+  if (/not configured/i.test(message)) {
+    return ApiError.withCode(503, 'OAUTH_NOT_CONFIGURED', `${PROVIDER_NAMES[provider]} sign-in isn't available right now.`);
+  }
+  return ApiError.withCode(400, 'OAUTH_INVALID_TOKEN', `We couldn't verify your ${PROVIDER_NAMES[provider]} sign-in. Try again.`);
 }
 
 // ============================================
@@ -41,8 +57,14 @@ export function getGoogleAuthUrl(): string {
 }
 
 // Verify Google OAuth code and get user info
+function assertGoogleConfigured(): void {
+  // Without a client id, verifyIdToken would not check the audience.
+  if (!env.googleClientId) throw new Error('Google sign-in is not configured');
+}
+
 export async function verifyGoogleCode(code: string): Promise<OAuthUserInfo> {
   try {
+    assertGoogleConfigured();
     const { tokens } = await googleClient.getToken(code);
     googleClient.setCredentials(tokens);
 
@@ -60,20 +82,21 @@ export async function verifyGoogleCode(code: string): Promise<OAuthUserInfo> {
       provider: 'google',
       providerId: payload.sub,
       email: payload.email,
+      emailVerified: payload.email_verified === true,
       name: payload.name,
       avatarUrl: payload.picture,
       accessToken: tokens.access_token || undefined,
       refreshToken: tokens.refresh_token || undefined,
     };
   } catch (error) {
-    logger.error('Google OAuth error:', error);
-    throw new Error('Failed to verify Google authentication', { cause: error });
+    throw oauthFailure('google', error);
   }
 }
 
 // Verify Google ID token (for mobile/frontend token flow)
 export async function verifyGoogleIdToken(idToken: string): Promise<OAuthUserInfo> {
   try {
+    assertGoogleConfigured();
     const ticket = await googleClient.verifyIdToken({
       idToken,
       audience: env.googleClientId,
@@ -88,12 +111,12 @@ export async function verifyGoogleIdToken(idToken: string): Promise<OAuthUserInf
       provider: 'google',
       providerId: payload.sub,
       email: payload.email,
+      emailVerified: payload.email_verified === true,
       name: payload.name,
       avatarUrl: payload.picture,
     };
   } catch (error) {
-    logger.error('Google ID token verification error:', error);
-    throw new Error('Invalid Google ID token', { cause: error });
+    throw oauthFailure('google', error);
   }
 }
 
@@ -115,6 +138,30 @@ function generateAppleClientSecret(): string {
   });
 
   return token;
+}
+
+// Apple's signing keys; jose fetches and caches them, refetching on unknown key ids.
+const APPLE_ISSUER = 'https://appleid.apple.com';
+const appleKeys = createRemoteJWKSet(new URL('https://appleid.apple.com/auth/keys'));
+
+/**
+ * Verifies an Apple identity token: signature against Apple's published keys,
+ * expiry, issuer and audience (our Service ID). Only then are its claims used.
+ */
+export async function verifyAppleIdentityToken(
+  idToken: string,
+  keys: Parameters<typeof jwtVerify>[1] = appleKeys
+): Promise<{ sub: string; email?: string; emailVerified: boolean }> {
+  if (!env.appleClientId) throw new Error('Apple sign-in is not configured');
+  const { payload } = await jwtVerify(idToken, keys as any, {
+    issuer: APPLE_ISSUER,
+    audience: env.appleClientId,
+    algorithms: ['RS256'],
+  });
+  if (!payload.sub) throw new Error('Apple token has no subject');
+  const email = typeof payload.email === 'string' ? payload.email : undefined;
+  const verified = payload.email_verified === true || payload.email_verified === 'true';
+  return { sub: payload.sub, email, emailVerified: !!email && verified };
 }
 
 // Get Apple OAuth URL
@@ -160,12 +207,8 @@ export async function verifyAppleCode(
       throw new Error(tokens.error_description || tokens.error);
     }
 
-    // Decode the ID token to get user info
-    const decoded = jwt.decode(tokens.id_token || idToken) as any;
-
-    if (!decoded || !decoded.sub) {
-      throw new Error('Invalid Apple token');
-    }
+    // Verify the identity token (even the one from Apple's token endpoint).
+    const identity = await verifyAppleIdentityToken(tokens.id_token || idToken || '');
 
     // Build name from user data (only provided on first sign-in)
     let name: string | undefined;
@@ -176,58 +219,30 @@ export async function verifyAppleCode(
 
     return {
       provider: 'apple',
-      providerId: decoded.sub,
-      email: decoded.email,
+      providerId: identity.sub,
+      email: identity.email || '',
+      emailVerified: identity.emailVerified,
       name,
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
     };
   } catch (error) {
-    logger.error('Apple OAuth error:', error);
-    throw new Error('Failed to verify Apple authentication', { cause: error });
+    throw oauthFailure('apple', error);
   }
 }
 
 // Verify Apple ID token (for mobile/frontend token flow)
 export async function verifyAppleIdToken(idToken: string): Promise<OAuthUserInfo> {
   try {
-    // Fetch Apple's public keys
-    const keysResponse = await fetch('https://appleid.apple.com/auth/keys');
-    const { keys } = await keysResponse.json() as any;
-
-    // Decode token header to get key ID
-    const header = jwt.decode(idToken, { complete: true })?.header;
-    if (!header) throw new Error('Invalid token');
-
-    // Find matching key
-    const key = keys.find((k: any) => k.kid === header.kid);
-    if (!key) throw new Error('Key not found');
-
-    // Convert JWK to PEM (simplified - use jose library in production)
-    // For production, use: import { createPublicKey } from 'crypto';
-    
-    const decoded = jwt.decode(idToken) as any;
-    
-    if (!decoded || !decoded.sub) {
-      throw new Error('Invalid Apple token');
-    }
-
-    // Verify audience and issuer
-    if (decoded.aud !== env.appleClientId) {
-      throw new Error('Invalid audience');
-    }
-    if (decoded.iss !== 'https://appleid.apple.com') {
-      throw new Error('Invalid issuer');
-    }
-
+    const identity = await verifyAppleIdentityToken(idToken);
     return {
       provider: 'apple',
-      providerId: decoded.sub,
-      email: decoded.email,
+      providerId: identity.sub,
+      email: identity.email || '',
+      emailVerified: identity.emailVerified,
     };
   } catch (error) {
-    logger.error('Apple ID token verification error:', error);
-    throw new Error('Invalid Apple ID token', { cause: error });
+    throw oauthFailure('apple', error);
   }
 }
 
@@ -280,13 +295,14 @@ export async function verifyFacebookCode(code: string): Promise<OAuthUserInfo> {
       provider: 'facebook',
       providerId: userData.id,
       email: userData.email,
+      // Facebook only returns an email the user has confirmed with Facebook.
+      emailVerified: !!userData.email,
       name: userData.name,
       avatarUrl: userData.picture?.data?.url,
       accessToken: tokens.access_token,
     };
   } catch (error) {
-    logger.error('Facebook OAuth error:', error);
-    throw new Error('Failed to verify Facebook authentication', { cause: error });
+    throw oauthFailure('facebook', error);
   }
 }
 
@@ -301,8 +317,13 @@ export async function verifyFacebookAccessToken(accessToken: string): Promise<OA
     const debugResponse = await fetch(debugUrl.toString());
     const debugData = await debugResponse.json() as any;
 
+    if (!env.facebookAppId || !env.facebookAppSecret) throw new Error('Facebook sign-in is not configured');
     if (!debugData.data?.is_valid) {
       throw new Error('Invalid Facebook token');
+    }
+    // A valid token issued to some other Facebook app must not sign anyone in here.
+    if (String(debugData.data.app_id) !== String(env.facebookAppId)) {
+      throw new Error('Facebook token was issued for a different app');
     }
 
     // Get user info
@@ -321,12 +342,12 @@ export async function verifyFacebookAccessToken(accessToken: string): Promise<OA
       provider: 'facebook',
       providerId: userData.id,
       email: userData.email,
+      emailVerified: !!userData.email,
       name: userData.name,
       avatarUrl: userData.picture?.data?.url,
       accessToken,
     };
   } catch (error) {
-    logger.error('Facebook token verification error:', error);
-    throw new Error('Invalid Facebook access token', { cause: error });
+    throw oauthFailure('facebook', error);
   }
 }

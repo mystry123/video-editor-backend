@@ -112,7 +112,10 @@ export async function analyzeVideoForReframe(
       file_duration: fileDuration,
       has_audio: hasAudio,
     },
-    { timeout: 300_000 } // 5 min timeout for long videos
+    {
+      timeout: 300_000, // 5 min timeout for long videos
+      headers: env.yoloSharedSecret ? { 'X-Internal-Token': env.yoloSharedSecret } : undefined,
+    }
   );
 
   return response.data as ReframeAnalysis;

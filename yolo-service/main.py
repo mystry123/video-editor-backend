@@ -1,7 +1,8 @@
 # yolo-service/main.py
 # AI Reframe Microservice: YOLO person detection + Bedrock Claude layout reasoning
 
-from fastapi import FastAPI, HTTPException
+import hmac
+from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 from typing import Optional
 import cv2
@@ -487,8 +488,29 @@ def health():
     }
 
 
+# Only the Shotline backend should call this service. When YOLO_SHARED_SECRET
+# is set (it should be in production, with the same value as the backend's),
+# requests must carry it in X-Internal-Token.
+SHARED_SECRET = os.environ.get("YOLO_SHARED_SECRET", "")
+# Optional comma-separated URL prefixes video_url must start with (e.g. the CDN).
+ALLOWED_URL_PREFIXES = [p.strip() for p in os.environ.get("YOLO_ALLOWED_URL_PREFIXES", "").split(",") if p.strip()]
+
+if not SHARED_SECRET:
+    print("WARNING: YOLO_SHARED_SECRET is not set; /detect accepts unauthenticated requests.")
+
+
+def check_request(token: Optional[str], video_url: str) -> None:
+    if SHARED_SECRET and not hmac.compare_digest(token or "", SHARED_SECRET):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    # OpenCV/FFmpeg can open local files and other schemes; only http(s) media.
+    if not (video_url.startswith("https://") or video_url.startswith("http://")):
+        raise HTTPException(status_code=400, detail="video_url must be an http(s) URL")
+    if ALLOWED_URL_PREFIXES and not any(video_url.startswith(prefix) for prefix in ALLOWED_URL_PREFIXES):
+        raise HTTPException(status_code=400, detail="video_url is not on an allowed host")
+
+
 @app.post("/detect", response_model=DetectResponse)
-def detect_subjects(req: DetectRequest):
+def detect_subjects(req: DetectRequest, x_internal_token: Optional[str] = Header(default=None)):
     """
     Process a video URL:
     1. Run YOLO person detection on sampled frames
@@ -496,6 +518,7 @@ def detect_subjects(req: DetectRequest):
     3. Call Bedrock Claude Haiku for intelligent layout decision
     4. Return detections + layout decision
     """
+    check_request(x_internal_token, req.video_url)
     try:
         cap = cv2.VideoCapture(req.video_url)
 
@@ -684,4 +707,5 @@ def detect_subjects(req: DetectRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Local-only by default; the backend calls it on the same machine.
+    uvicorn.run(app, host=os.environ.get("YOLO_HOST", "127.0.0.1"), port=int(os.environ.get("YOLO_PORT", "8000")))

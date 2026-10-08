@@ -17,6 +17,24 @@ export interface ITemplate extends Document {
   updatedAt: Date;
 }
 
+// Project settings as saved by the editor. The listed fields get defaults;
+// `strict: false` keeps any other setting the editor adds (e.g.
+// backgroundColorOpacity) instead of silently dropping it on save.
+const ProjectSettingsSchema = new Schema(
+  {
+    width: { type: Number, default: 1920 },
+    height: { type: Number, default: 1080 },
+    name: { type: String, default: 'New Project' },
+    fps: { type: Number, default: 30 },
+    duration: { type: Number, default: 10 },
+    // A plain color, or keyframes when the background animates.
+    backgroundColor: { type: Schema.Types.Mixed, default: '#000000' },
+    outputFormat: { type: String },
+    selectedVoice: { type: String },
+  },
+  { _id: false, strict: false, minimize: false }
+);
+
 const TemplateSchema = new Schema<ITemplate>(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
@@ -24,16 +42,7 @@ const TemplateSchema = new Schema<ITemplate>(
     description: { type: String },
     thumbnail: { type: String },
     data: {
-      project: {
-        width: { type: Number, default: 1920 },
-        height: { type: Number, default: 1080 },
-        name: { type: String, default: 'New Project' },
-        fps: { type: Number, default: 30 },
-        duration: { type: Number, default: 10 },
-        backgroundColor: { type: String, default: '#000000' },
-        outputFormat: { type: String },
-        selectedVoice: { type: String },
-      },
+      project: { type: ProjectSettingsSchema, default: () => ({}) },
       elements: { type: Schema.Types.Mixed, default: [] },
     },
     isPublic: { type: Boolean, default: false, index: true },

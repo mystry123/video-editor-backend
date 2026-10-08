@@ -1,5 +1,7 @@
 import { Response, NextFunction } from 'express';
 import { v4 as uuidv4 } from 'uuid';
+import { assertPublicUrl, BlockedUrlError, safeRequest } from '../utils/safeRequest';
+import { probeMedia, storageExtension, summarizeProbe } from '../utils/media';
 import axios from 'axios';
 import { AuthRequest } from '../types';
 import { File } from '../models/File';
@@ -9,12 +11,9 @@ import { createPresignedUpload, deleteFromS3 } from '../services/storage.service
 import { quotaService } from '../services/quota.service';
 import { ApiError } from '../utils/ApiError';
 import { env } from '../config/env';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import { logger } from '../utils/logger';
 import { getFileImportQueue } from '../queues';
 
-const execAsync = promisify(exec);
 
 // ============================================
 // EXISTING METHODS
@@ -37,7 +36,12 @@ export const getUploadUrl = async (
       throw ApiError.forbidden('Storage quota exceeded');
     }
 
-    const ext = filename.split('.').pop();
+    // The extension comes from an allowlist, never from the client's filename:
+    // it ends up in the storage key and CDN URL.
+    const ext = storageExtension(mimeType, filename);
+    if (!ext) {
+      throw ApiError.withCode(400, 'UNSUPPORTED_FILE_TYPE', `Files of type "${mimeType}" can't be uploaded.`);
+    }
     const key = `users/${user._id}/uploads/${uuidv4()}.${ext}`;
 
     const { url, fields } = await createPresignedUpload({
@@ -92,28 +96,18 @@ export const completeUpload = async (
         if (!file.cdnUrl) {
           throw new Error('CDN URL not found for file');
         }
-        logger.info(`FFprobe command started for file ${file.cdnUrl}`);
-        const { stdout } = await execAsync(`ffprobe -v quiet -print_format json -show_streams "${file.cdnUrl}"`);
-    
-        const probeData = JSON.parse(stdout);
-        logger.info(`FFprobe command completed for file`);
-        
-        const videoStream = probeData.streams.find((stream: any) => stream.codec_type === 'video');
-        const audioStream = probeData.streams.find((stream: any) => stream.codec_type === 'audio');
-        
-        metadata = {
-          duration: parseFloat(videoStream?.duration || audioStream?.duration || '0'),
-          width: videoStream?.width || 0,
-          height: videoStream?.height || 0,
-          hasAudio: !!audioStream,
-        };
+        const { duration, width, height, hasAudio } = summarizeProbe(await probeMedia(file.cdnUrl));
+        metadata = { duration, width, height, hasAudio };
       } catch (error) {
-        logger.error('FFprobe failed', { fileId: file._id, error });
+        // Keep the upload usable, but record that its details are unknown so
+        // features that need duration (captions, quota) can say why.
+        logger.error('FFprobe failed', { fileId: file._id, error: (error as Error).message });
         metadata = {
           duration: 0,
           width: 0,
           height: 0,
           hasAudio: false,
+          metadataError: "We couldn't read this file's video details.",
         };
       }
     } else if (file.mimeType.startsWith('image/')) {
@@ -300,8 +294,12 @@ export const importFromUrl = async (
     if (!user) throw ApiError.notFound('User not found');
 
     // Validate URL format
-    if (!isValidUrl(url)) {
-      throw ApiError.badRequest('Invalid URL format');
+    try {
+      assertPublicUrl(url);
+    } catch (error) {
+      throw ApiError.withCode(400, 'URL_NOT_ALLOWED', (error as Error).message === 'That address is not allowed'
+        ? "That link points to a private or local address, which can't be imported."
+        : (error as Error).message);
     }
 
     // Get file info from URL using HEAD request
@@ -310,9 +308,10 @@ export const importFromUrl = async (
     let finalFilename = '';
 
     try {
-      const headResponse = await axios.head(url, {
+      const headResponse = await safeRequest(url, {
+        method: 'HEAD',
         timeout: 15000,
-        maxRedirects: 5,
+        maxRedirects: 3,
         headers: {
           'User-Agent': 'Mozilla/5.0 (compatible; ShotlineBot/1.0)',
         },
@@ -332,7 +331,10 @@ export const importFromUrl = async (
         finalFilename = filename || extractFilenameFromUrl(url) || `imported-${Date.now()}.mp4`;
       }
     } catch (error: any) {
-      logger.error('Failed to fetch URL metadata', { url, error: error.message });
+      if (error instanceof BlockedUrlError) {
+        throw ApiError.withCode(400, 'URL_NOT_ALLOWED', "That link redirects to a private or local address, which can't be imported.");
+      }
+      logger.warn('Failed to fetch URL metadata', { error: error.message });
       throw ApiError.badRequest('Could not access URL. Please check if the URL is valid and publicly accessible.');
     }
 
@@ -348,7 +350,9 @@ export const importFromUrl = async (
     }
 
     // Generate storage key
-    const ext = getExtensionFromMimeType(contentType) || 'mp4';
+    // Allowlisted extension; an unknown video/audio subtype keeps the old
+    // fixed fallback (a constant, so it's still safe in the key).
+    const ext = storageExtension(contentType, finalFilename) || (contentType.startsWith('audio/') ? 'm4a' : 'mp4');
     const key = `users/${user._id}/uploads/${uuidv4()}.${ext}`;
 
     // Create file record with processing status
@@ -462,7 +466,10 @@ export const importFromGoogleDrive = async (
     }
 
     // Generate storage key
-    const ext = getExtensionFromMimeType(finalMimeType) || finalFileName.split('.').pop() || 'mp4';
+    const ext = storageExtension(finalMimeType, finalFileName);
+    if (!ext) {
+      throw ApiError.withCode(400, 'UNSUPPORTED_FILE_TYPE', `Files of type "${finalMimeType}" can't be imported.`);
+    }
     const key = `users/${user._id}/uploads/${uuidv4()}.${ext}`;
 
     // Create file record
@@ -566,14 +573,6 @@ export const getImportStatus = async (
 // HELPER FUNCTIONS
 // ============================================
 
-function isValidUrl(string: string): boolean {
-  try {
-    const url = new URL(string);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
 
 function extractFilenameFromUrl(url: string): string {
   try {
@@ -584,23 +583,4 @@ function extractFilenameFromUrl(url: string): string {
   } catch {
     return '';
   }
-}
-
-function getExtensionFromMimeType(mimeType: string): string {
-  const mimeToExt: Record<string, string> = {
-    'video/mp4': 'mp4',
-    'video/quicktime': 'mov',
-    'video/x-msvideo': 'avi',
-    'video/x-matroska': 'mkv',
-    'video/webm': 'webm',
-    'video/mpeg': 'mpeg',
-    'video/3gpp': '3gp',
-    'audio/mpeg': 'mp3',
-    'audio/wav': 'wav',
-    'audio/ogg': 'ogg',
-    'audio/aac': 'aac',
-    'audio/flac': 'flac',
-    'audio/x-m4a': 'm4a',
-  };
-  return mimeToExt[mimeType] || '';
 }

@@ -1,4 +1,8 @@
-import fetch from 'node-fetch';
+import { BlockedUrlError, safeRequest } from '../utils/safeRequest';
+
+// Only a snippet of the receiver's reply is kept: enough to debug, not enough
+// to use webhooks to read internal services.
+const MAX_LOGGED_RESPONSE_CHARS = 300;
 import { Webhook, IWebhook } from '../models/Webhook';
 import { WebhookLog } from '../models/WebhookLog';
 import { webhookQueue } from '../queues';
@@ -46,23 +50,23 @@ export async function deliverWebhook(
   const signature = createWebhookSignature(payload, webhook.secret);
 
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
-
-    const response = await fetch(webhook.url, {
+    const response = await safeRequest<string>(webhook.url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Webhook-Signature': signature,
         'X-Webhook-Event': payload.event,
       },
-      body: JSON.stringify(payload),
-      signal: controller.signal as any,
+      data: JSON.stringify(payload),
+      timeout: 10000,
+      maxRedirects: 0,
+      maxResponseBytes: 64 * 1024,
+      responseType: 'text',
+      transformResponse: (body) => body,
+      validateStatus: () => true,
     });
-
-    clearTimeout(timeout);
-
-    const responseText = await response.text();
+    const ok = response.status >= 200 && response.status < 300;
+    const responseText = String(response.data ?? '').slice(0, MAX_LOGGED_RESPONSE_CHARS);
 
     await WebhookLog.create({
       webhookId: webhook._id,
@@ -70,7 +74,7 @@ export async function deliverWebhook(
       payload,
       statusCode: response.status,
       response: responseText,
-      success: response.ok,
+      success: ok,
     });
 
     await Webhook.updateOne(
@@ -78,21 +82,21 @@ export async function deliverWebhook(
       {
         lastTriggered: new Date(),
         $inc: {
-          successCount: response.ok ? 1 : 0,
-          failCount: response.ok ? 0 : 1,
+          successCount: ok ? 1 : 0,
+          failCount: ok ? 0 : 1,
         },
       }
     );
 
-    logger.info('Webhook delivered', { webhookId, success: response.ok });
-    return { success: response.ok };
+    logger.info('Webhook delivered', { webhookId, success: ok });
+    return { success: ok };
   } catch (error: any) {
     await WebhookLog.create({
       webhookId: webhook._id,
       event: payload.event,
       payload,
       success: false,
-      error: error.message,
+      error: error instanceof BlockedUrlError ? 'Webhook URL points to a private or local address' : error.message,
     });
 
     await Webhook.updateOne({ _id: webhook._id }, { $inc: { failCount: 1 } });

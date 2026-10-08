@@ -15,6 +15,7 @@ import {
 } from './config/redis';
 import { initializeQuotaSystem, migrateExistingUsers } from './config/quota-init';
 import { initPlans } from './services/plan.service';
+import { ffprobeAvailable } from './utils/media';
 import { logger } from './utils/logger';
 import { env } from './config/env';
 
@@ -130,6 +131,13 @@ async function bootstrap(): Promise<void> {
         process.exit(1);
       }
       logger.error('❌ Server error:', err);
+    });
+
+    // Uploads, captions and reframe all need ffprobe/ffmpeg. Missing binaries
+    // (e.g. the pnpm postinstall being skipped on deploy) otherwise only show
+    // up later as files with 0s duration.
+    ffprobeAvailable().then((ok) => {
+      if (!ok) logger.error('❌ ffprobe is not available: media uploads will have no duration/size. Check FFPROBE_PATH or the ffmpeg install.');
     });
 
     // =========================================================================

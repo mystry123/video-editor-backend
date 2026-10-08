@@ -1,13 +1,11 @@
 // workers/file.worker.ts
+import { probeMedia, summarizeProbe } from '../utils/media';
 
 import { Job } from 'bullmq';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import { File } from '../models/File';
 import { createWorker, createJobLogger, retryWithBackoff } from '../utils/worker.utils';
 import { logger } from '../utils/logger';
 
-const execAsync = promisify(exec);
 
 // ============================================================================
 // Types
@@ -44,23 +42,13 @@ async function extractMetadata(
   }
 
   try {
-    const { stdout } = await Promise.race([
-      execAsync(`ffprobe -v quiet -print_format json -show_streams -show_format "${cdnUrl}"`),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('ffprobe timeout')), 30000)
-      ),
-    ]);
-
-    const data = JSON.parse(stdout);
-    const video = data.streams?.find((s: any) => s.codec_type === 'video');
-    const audio = data.streams?.find((s: any) => s.codec_type === 'audio');
-
+    const summary = summarizeProbe(await probeMedia(cdnUrl, { timeoutMs: 30_000 }));
     const metadata: MediaMetadata = {
-      duration: parseFloat(video?.duration || audio?.duration || data.format?.duration) || 0,
-      width: video?.width || 0,
-      height: video?.height || 0,
-      codec: video?.codec_name,
-      audioCodec: audio?.codec_name,
+      duration: summary.duration,
+      width: summary.width,
+      height: summary.height,
+      codec: summary.codec,
+      audioCodec: summary.audioCodec,
     };
 
     log.info(`Metadata: ${metadata.width}x${metadata.height}, ${metadata.duration}s`);

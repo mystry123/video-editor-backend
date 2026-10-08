@@ -1,7 +1,5 @@
-import { promisify } from 'util';
-import { exec } from 'child_process';
-
-const execAsync = promisify(exec);
+import { probeMedia, runFfmpegOnUrl } from './media';
+import { logger } from './logger';
 
 interface TranscriptionValidation {
   canTranscribe: boolean;
@@ -19,11 +17,15 @@ interface TranscriptionValidation {
 export async function canTranscribe(url: string): Promise<TranscriptionValidation> {
   try {
     // 1. Check if file has audio stream and get audio details
-    const { stdout } = await execAsync(
-      `ffprobe -v error -select_streams a:0 -show_entries stream=codec_name,channels,sample_rate,duration,bit_rate -show_entries format=duration -of json "${url}"`
-    );
-    
-    const data = JSON.parse(stdout);
+    const data = await probeMedia(url, {
+      args: [
+        '-v', 'error',
+        '-select_streams', 'a:0',
+        '-show_entries', 'stream=codec_name,channels,sample_rate,duration,bit_rate',
+        '-show_entries', 'format=duration',
+        '-of', 'json',
+      ],
+    });
     
     // No audio stream found
     if (!data.streams || data.streams.length === 0) {
@@ -86,7 +88,7 @@ export async function canTranscribe(url: string): Promise<TranscriptionValidatio
     };
     
   } catch (error) {
-    console.error('Error validating transcription:', error);
+    logger.warn('Audio validation failed', { error: (error as Error).message });
     return {
       canTranscribe: false,
       reason: 'Failed to analyze audio. File may be corrupted or inaccessible.',
@@ -101,9 +103,7 @@ export async function canTranscribe(url: string): Promise<TranscriptionValidatio
 export async function detectAudioContent(url: string): Promise<boolean> {
   try {
     // Analyze first 30 seconds for audio content
-    const { stderr } = await execAsync(
-      `ffmpeg -t 30 -i "${url}" -af "volumedetect" -f null - 2>&1`
-    );
+    const stderr = await runFfmpegOnUrl(url, ['-t', '30'], ['-af', 'volumedetect', '-f', 'null', '-']);
     
     // Parse mean_volume from output
     // Example: mean_volume: -25.0 dB
@@ -124,7 +124,7 @@ export async function detectAudioContent(url: string): Promise<boolean> {
     return true;
     
   } catch (error) {
-    console.error('Error detecting audio content:', error);
+    logger.warn('Audio content detection failed', { error: (error as Error).message });
     // If detection fails, assume it has content and let transcription handle it
     return true;
   }

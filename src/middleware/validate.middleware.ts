@@ -2,6 +2,25 @@ import { Request, Response, NextFunction } from 'express';
 import { ZodError, ZodSchema } from 'zod';
 import { ApiError } from '../utils/ApiError';
 
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** Parsed values win; keys only present in the original are kept, at every depth. */
+function mergeParsed(original: unknown, parsed: unknown): unknown {
+  if (isPlainObject(original) && isPlainObject(parsed)) {
+    const result: Record<string, unknown> = { ...original };
+    for (const [key, value] of Object.entries(parsed)) {
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
+      result[key] = mergeParsed(original[key], value);
+    }
+    return result;
+  }
+  if (Array.isArray(original) && Array.isArray(parsed) && original.length === parsed.length) {
+    return parsed.map((item, i) => mergeParsed(original[i], item));
+  }
+  return parsed;
+}
+
 /**
  * Validates body, query and params against `schema`. On failure, passes a 400
  * VALIDATION_ERROR to the error handler, with the first problem as the message
@@ -20,7 +39,9 @@ export const validate = (schema: ZodSchema) => {
         params: req.params,
       });
       if (parsed?.body && typeof parsed.body === 'object' && req.body && typeof req.body === 'object') {
-        req.body = { ...req.body, ...parsed.body };
+        // Deep merge: a shallow spread would replace nested objects (e.g.
+        // data.project) with zod's stripped copies and drop their extra fields.
+        req.body = mergeParsed(req.body, parsed.body);
       }
       next();
     } catch (error) {

@@ -1,5 +1,7 @@
 import * as dotenv from 'dotenv';
-dotenv.config();
+// Tests set their own environment (vitest.config.ts) and must never pick up
+// real credentials from a developer's .env.
+if (process.env.NODE_ENV !== 'test') dotenv.config();
 
 // Development-only fallbacks. Production refuses to start with these (see below).
 const DEV_JWT_SECRET = 'your-super-secret-jwt-key-change-in-production';
@@ -56,6 +58,8 @@ export const env = {
   
   // YOLO Reframe Service
   yoloServiceUrl: process.env.YOLO_SERVICE_URL || 'http://localhost:8000',
+  // Sent as X-Internal-Token; must match the YOLO service's YOLO_SHARED_SECRET.
+  yoloSharedSecret: process.env.YOLO_SHARED_SECRET || '',
   remotionWebhookSecret: process.env.REMOTION_WEBHOOK_SECRET || '',
 
   

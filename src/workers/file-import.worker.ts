@@ -1,4 +1,9 @@
 import { Job, Worker } from 'bullmq';
+import { probeMedia, summarizeProbe } from '../utils/media';
+import { limitStream, safeRequest } from '../utils/safeRequest';
+
+// Largest file a URL import may download (bytes). Overridable for bigger plans later.
+const MAX_IMPORT_BYTES = Number(process.env.MAX_IMPORT_BYTES) || 5 * 1024 * 1024 * 1024;
 import axios from 'axios';
 import { Readable } from 'stream';
 import { S3Client } from '@aws-sdk/client-s3';
@@ -6,13 +11,10 @@ import { Upload } from '@aws-sdk/lib-storage';
 import { File } from '../models/File';
 import { quotaService } from '../services/quota.service';
 import { env } from '../config/env';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import { logger } from '../utils/logger';
 import { redisConnectionOptions } from '../config/redis';
 import { registerWorker } from '../queues';
 
-const execAsync = promisify(exec);
 
 // S3 Client
 const s3Client = new S3Client({
@@ -40,19 +42,20 @@ async function processUrlImport(job: Job): Promise<void> {
     await updateFileProgress(fileId, 5);
 
     // Download file as stream
-    const response = await axios({
+    // safeRequest refuses internal addresses on this request and on every redirect.
+    const response = await safeRequest(url, {
       method: 'get',
-      url,
       responseType: 'stream',
       timeout: 600000, // 10 minutes
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity,
+      maxRedirects: 3,
+      maxResponseBytes: Infinity,
       headers: {
         'User-Agent': 'Mozilla/5.0 (compatible; ShotlineBot/1.0)',
       },
     });
 
-    const stream = response.data as Readable;
+    // The size from the HEAD request is only a claim; cap the bytes actually streamed.
+    const stream = limitStream(response.data as Readable, MAX_IMPORT_BYTES);
     const totalSize = contentLength || parseInt(response.headers['content-length'] || '0', 10);
     const finalContentType = contentType || response.headers['content-type'] || 'video/mp4';
 
@@ -219,23 +222,8 @@ async function extractMetadata(url: string): Promise<{
   hasAudio: boolean;
 }> {
   try {
-    const { stdout } = await execAsync(
-      `ffprobe -v quiet -print_format json -show_streams -show_format "${url}"`,
-      { timeout: 60000 }
-    );
-
-    const probeData = JSON.parse(stdout);
-    const videoStream = probeData.streams?.find((s: any) => s.codec_type === 'video');
-    const audioStream = probeData.streams?.find((s: any) => s.codec_type === 'audio');
-
-    return {
-      duration: parseFloat(
-        videoStream?.duration || audioStream?.duration || probeData.format?.duration || '0'
-      ),
-      width: videoStream?.width || 0,
-      height: videoStream?.height || 0,
-      hasAudio: !!audioStream,
-    };
+    const { duration, width, height, hasAudio } = summarizeProbe(await probeMedia(url, { timeoutMs: 60_000 }));
+    return { duration, width, height, hasAudio };
   } catch (error) {
     logger.error(`[file-import] Metadata extraction failed`, { url, error });
     return {

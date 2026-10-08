@@ -23,6 +23,14 @@ async function getCaptionQueue() {
 // Types
 // ============================================================================
 
+/** Presets a user may apply: built-in, shared publicly, or their own. */
+function usablePresetFilter(presetId: string, userId: string | undefined) {
+  return {
+    _id: presetId,
+    $or: [{ isSystem: true }, { isPublic: true }, ...(userId ? [{ userId }] : [])],
+  };
+}
+
 interface AuthRequest {
   userId?: string;
   body: any;
@@ -209,7 +217,7 @@ export class CaptionProjectController {
           throw ApiError.badRequest('Invalid presetId format');
         }
         
-        const preset = await CaptionPreset.findById(presetId);
+        const preset = await CaptionPreset.findOne(usablePresetFilter(presetId, userId));
         if (!preset) {
           throw ApiError.notFound('Preset not found');
         }
@@ -537,7 +545,7 @@ export class CaptionProjectController {
       }
       
       // Verify preset exists
-      const preset = await CaptionPreset.findById(presetId);
+      const preset = await CaptionPreset.findOne(usablePresetFilter(presetId, userId));
       if (!preset) {
         throw ApiError.notFound('Preset not found');
       }

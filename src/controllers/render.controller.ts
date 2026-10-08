@@ -1,4 +1,5 @@
 import { Response, NextFunction } from 'express';
+import { Types } from 'mongoose';
 import { AuthRequest } from '../types';
 import { RenderJob } from '../models/RenderJob';
 import { Template } from '../models/Template';
@@ -8,6 +9,7 @@ import { renderQueue } from '../queues';
 import { ApiError } from '../utils/ApiError';
 import { deepMerge, estimateRenderTime, getPriority } from '../utils/helpers';
 import { logger } from '../utils/logger';
+import { assertPublicUrl } from '../utils/safeRequest';
 import { getEffectiveQuota } from '../config/quotas';
 import { planRenderOutput } from '../utils/renderDimensions';
 
@@ -33,13 +35,32 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isHttpUrl(value: unknown): value is string {
+// Fields on media elements that the renderer (Chrome in Lambda) will fetch.
+const MEDIA_URL_FIELDS = ['src', 'source', 'url', 'poster'];
+
+/** Public http(s) URL: not file://, data:, a private IP or a local hostname. */
+function isPublicMediaUrl(value: unknown): value is string {
   if (typeof value !== 'string') return false;
   try {
-    const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:';
+    assertPublicUrl(value);
+    return true;
   } catch {
     return false;
+  }
+}
+
+/** Checks every URL field on a media element after overrides are applied. */
+function assertSafeMediaElement(element: any, variableName: string): void {
+  if (!MEDIA_ELEMENT_TYPES.has(element?.type)) return;
+  for (const field of MEDIA_URL_FIELDS) {
+    const value = element[field];
+    if (value !== undefined && value !== null && value !== '' && !isPublicMediaUrl(value)) {
+      throw ApiError.withCode(
+        400,
+        'INVALID_MEDIA_URL',
+        `variables.${variableName}: "${field}" must be a public http(s) URL.`
+      );
+    }
   }
 }
 
@@ -58,7 +79,10 @@ function applyVariablesToElements(
     const elementType: string = element.type;
 
     if (isPlainObject(override)) {
-      return deepMerge(element, override);
+      // Object overrides can set any field, so validate the merged result.
+      const merged = deepMerge(element, override);
+      assertSafeMediaElement(merged, name);
+      return merged;
     }
 
     if (elementType === 'text' || elementType === 'caption') {
@@ -66,10 +90,8 @@ function applyVariablesToElements(
     }
 
     if (MEDIA_ELEMENT_TYPES.has(elementType)) {
-      if (!isHttpUrl(override)) {
-        throw ApiError.badRequest(
-          `variables.${name}: media override must be an http(s) URL`
-        );
+      if (!isPublicMediaUrl(override)) {
+        throw ApiError.withCode(400, 'INVALID_MEDIA_URL', `variables.${name}: media override must be a public http(s) URL.`);
       }
       const srcKey = elementType === 'lottie' || elementType === 'gif' ? 'source' : 'src';
       return { ...element, [srcKey]: override };
@@ -348,11 +370,15 @@ export const streamProgress = async (
   try {
     const { id } = req.params;
 
+    // Only the job's owner may stream it. (CORS is handled by the global
+    // cors() allowlist; this used to echo any Origin with credentials.)
+    if (!Types.ObjectId.isValid(id) || !(await RenderJob.exists({ _id: id, userId: req.userId }))) {
+      throw ApiError.notFound('Render job not found');
+    }
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
-    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
 
     let intervalId: NodeJS.Timeout | null = null;
     let isClosed = false;
@@ -361,7 +387,7 @@ export const streamProgress = async (
       if (isClosed) return;
 
       try {
-        const job = await RenderJob.findById(id);
+        const job = await RenderJob.findOne({ _id: id, userId: req.userId });
         
         if (!job) {
           res.write(`data: ${JSON.stringify({ error: 'Job not found' })}\n\n`);

@@ -19,6 +19,7 @@ export default defineConfig({
       S3_BUCKET: 'test-bucket',
       LOG_LEVEL: 'silent',
       CORS_ORIGIN: 'http://localhost:5720',
+      APPLE_CLIENT_ID: 'com.shotline.test',
     },
   },
 });

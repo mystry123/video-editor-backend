@@ -147,13 +147,24 @@ export const uploadLimiter:RequestHandler = createLimiter({
   message: 'Upload limit exceeded, please try again in 1 hour',
 });
 
-// Auth limiter - 10 attempts/15min per IP
+// Auth limiter - 30 attempts/15min per IP across login, signup and password reset
 export const authLimiter: RequestHandler = createLimiter({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: 30,
   prefix: 'auth',
-  message: 'Too many login attempts, please try again later',
+  message: 'Too many attempts. Wait a few minutes and try again.',
   keyGenerator: (req: Request) => req.ip || 'anonymous',
+});
+
+// Login limiter - 10 attempts/15min per IP + email, so guessing one account's
+// password is slow even from many sessions, without locking out the real owner
+// signing in from elsewhere.
+export const loginLimiter: RequestHandler = createLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  prefix: 'login',
+  message: 'Too many sign-in attempts for this account. Wait a few minutes and try again.',
+  keyGenerator: (req: Request) => `${req.ip || 'anonymous'}:${String(req.body?.email || '').toLowerCase().slice(0, 200)}`,
 });
 
 // Caption limiter - 20 captions/hour per user

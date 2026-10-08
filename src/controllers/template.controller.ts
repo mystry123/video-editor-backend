@@ -14,7 +14,7 @@ export const createTemplate = async (
 ): Promise<void> => {
   try {
     const userId = req.userId!;
-    const { name = 'New Template', description = 'New Template Description', data = { project: {}, elements: [] }, tags = [], isPublic = true } = req.body;
+    const { name = 'New Template', description = 'New Template Description', data = { project: {}, elements: [] }, tags = [], isPublic = false } = req.body;
 
 
     const user = await User.findById(userId);
@@ -77,7 +77,13 @@ export const updateTemplate = async (
   try {
     const { id } = req.params;
     const userId = req.userId!;
-    const updates = req.body;
+    // Only these fields can be changed by the owner. Spreading req.body let a
+    // request set userId (moving the template to another account), version or
+    // usage counters, or inject update operators.
+    const updates: Record<string, unknown> = {};
+    for (const field of ['name', 'description', 'data', 'tags', 'isPublic', 'thumbnail'] as const) {
+      if (req.body[field] !== undefined) updates[field] = req.body[field];
+    }
 
     const user = await User.findById(userId);
     if (!user) throw ApiError.notFound('User not found');
@@ -207,12 +213,12 @@ export const bulkDeleteTemplates = async (
     const user = await User.findById(userId);
     if (!user) throw ApiError.notFound('User not found');
 
-    const result = await Template.deleteMany({
-      _id: { $in: ids },
-      userId: user._id,
-    });
-
-    await TemplateVersion.deleteMany({ templateId: { $in: ids } });
+    // Delete only the caller's templates, and only those templates' versions
+    // (ids of other users' templates in the list are ignored).
+    const owned = await Template.find({ _id: { $in: ids }, userId: user._id }).select('_id').lean();
+    const ownedIds = owned.map((t) => t._id);
+    const result = await Template.deleteMany({ _id: { $in: ownedIds }, userId: user._id });
+    await TemplateVersion.deleteMany({ templateId: { $in: ownedIds } });
 
     res.json({ success: true, deleted: result.deletedCount });
   } catch (error) {
@@ -332,6 +338,8 @@ export const duplicateTemplate = async (
   }
 };
 
+const RENDER_SORT_FIELDS = new Set(['createdAt', 'updatedAt', 'completedAt', 'status']);
+
 export const getTemplateRenders = async (
   req: AuthRequest,
   res: Response,
@@ -365,15 +373,16 @@ export const getTemplateRenders = async (
     const limitNum = parseInt(limit as string);
 
     // Build query for renders
-    const query: any = { templateId: id };
+    // Only the caller's own renders, even on a public template others use.
+    const query: any = { templateId: id, userId: user._id };
 
-    if (status) {
+    if (typeof status === 'string' && status) {
       query.status = status;
     }
 
     const [renders, total] = await Promise.all([
       RenderJob.find(query)
-        .sort({ [sortBy as string]: sortOrder === 'desc' ? -1 : 1 })
+        .sort({ [RENDER_SORT_FIELDS.has(String(sortBy)) ? String(sortBy) : 'createdAt']: sortOrder === 'desc' ? -1 : 1 })
         .skip((pageNum - 1) * limitNum)
         .limit(limitNum)
         .select('-inputProps') // Exclude large inputProps for list view

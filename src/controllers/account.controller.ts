@@ -17,6 +17,8 @@ import { getUsageSnapshot } from '../middleware/quota.middleware';
 import { createPresignedUpload, deleteFromS3 } from '../services/storage.service';
 import { accountCleanupQueue } from '../queues';
 import { purgeUserData } from '../services/accountCleanup.service';
+import { listSessions, revokeSession } from '../services/session.service';
+import { generateUploadTicket } from '../utils/jwt';
 
 const AVATAR_TYPES: Record<string, string> = {
   'image/jpeg': 'jpg',
@@ -203,6 +205,55 @@ export const deleteAccount = async (req: AuthRequest, res: Response, next: NextF
     }
 
     res.json({ message: 'Account deleted' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /auth/sessions — devices currently signed in
+export const getSessions = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const sessions = await listSessions(req.userId!);
+    res.json({
+      data: sessions.map((session) => ({
+        id: String(session._id),
+        current: String(session._id) === req.sessionId,
+        browser: describeBrowser(session.userAgent || ''),
+        device: session.device || null,
+        location: session.location || null,
+        ip: session.ip || null,
+        method: session.method,
+        signedInAt: session.createdAt,
+        lastActiveAt: session.lastUsedAt,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// DELETE /auth/sessions/:id — sign out one device
+export const revokeSessionById = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const revoked = await revokeSession(req.params.id, 'signed_out_from_settings', req.userId);
+    if (!revoked) throw ApiError.notFound('That session has already ended.');
+    res.json({ message: 'Signed out', current: req.params.id === req.sessionId });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /auth/upload-ticket — short-lived token for browser-direct uploads
+export const createUploadTicket = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const user = req.user;
+    const { ticket, expiresIn } = generateUploadTicket({
+      userId: String(user._id),
+      email: user.email,
+      role: user.role,
+      sid: req.sessionId,
+    });
+    res.json({ ticket, expiresIn });
   } catch (error) {
     next(error);
   }
