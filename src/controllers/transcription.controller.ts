@@ -181,25 +181,51 @@ export const updateTranscriptionWords = async (
       throw ApiError.notFound('Transcription not found');
     }
 
-    const normalized: ITranscriptionWord[] = words.map((w) => ({
-      text: w.text,
-      start: w.start,
-      end: Math.max(w.end, w.start),
-      type: w.type || 'word',
-      ...(w.speaker_id ? { speaker_id: w.speaker_id } : {}),
-    }));
+    // Timing must stay usable for captions: in order, inside the media.
+    const limit = Number(transcription.duration) > 0 ? Number(transcription.duration) + 0.5 : Infinity;
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i];
+      if (i > 0 && word.start + 0.001 < words[i - 1].start) {
+        throw ApiError.withCode(422, 'INVALID_WORD_TIMING', `Word ${i + 1} ("${word.text}") starts before the word before it.`, { index: i });
+      }
+      if (word.start > limit) {
+        throw ApiError.withCode(422, 'INVALID_WORD_TIMING', `Word ${i + 1} ("${word.text}") starts after the end of the media.`, { index: i });
+      }
+    }
+
+    const normalized: ITranscriptionWord[] = words.map((w, i) => {
+      const next = words[i + 1];
+      // Small overlaps (from edits) are trimmed so the next word starts cleanly.
+      const end = Math.min(Math.max(w.end, w.start), limit, next ? Math.max(next.start, w.start) : Infinity);
+      return {
+        text: w.text,
+        start: w.start,
+        end,
+        type: w.type || 'word',
+        ...(w.speaker_id ? { speaker_id: w.speaker_id } : {}),
+      };
+    });
+    const wasTranscribing = transcription.status === 'pending' || transcription.status === 'processing';
 
     transcription.words = normalized;
     transcription.text = normalized
       .filter((w) => w.type === 'word')
       .map((w) => w.text)
       .join(' ');
-    // The corrected list is authoritative even if the original run failed.
+    // The corrected list is authoritative even if the original run failed,
+    // and a run still in progress won't replace it (isEdited).
     transcription.status = 'completed';
+    transcription.isEdited = true;
+    transcription.editedAt = new Date();
+    transcription.error = undefined;
 
     await transcription.save();
 
-    res.json(transcription);
+    res.json({
+      ...transcription.toObject(),
+      // The editor tells the user their edit was kept over the running transcription.
+      ...(wasTranscribing ? { keptOverRunningTranscription: true } : {}),
+    });
   } catch (error) {
     next(error);
   }

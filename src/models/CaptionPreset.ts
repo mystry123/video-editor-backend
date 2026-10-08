@@ -24,6 +24,9 @@ export type DisplayMode = 'word' | 'line' | 'tiktok' | 'karaoke';
  * Caption styles - text appearance
  */
 export interface ICaptionStyles {
+  // Layout
+  wordsPerLine?: number;
+  linesPerPage?: number;
   // Font
   fontFamily: string;
   fontWeight: number;
@@ -103,6 +106,7 @@ export interface ICaptionPreset extends Document {
   
   // Flags
   isSystem: boolean;          // Built-in preset (not editable by users)
+  slug?: string;              // Stable key of a system preset (the seed upserts by it)
   isPublic: boolean;          // Visible to other users
   isDefault?: boolean;        // Default preset for new projects
   
@@ -134,6 +138,9 @@ export interface ICaptionPresetModel extends Model<ICaptionPreset> {
 
 const CaptionStylesSchema = new Schema<ICaptionStyles>(
   {
+    // Layout (was stripped before: not in the schema)
+    wordsPerLine: { type: Number, min: 1, max: 20 },
+    linesPerPage: { type: Number, min: 1, max: 5 },
     // Font
     fontFamily: { type: String, required: true, default: 'Inter' },
     fontWeight: { type: Number, required: true, default: 700 },
@@ -239,6 +246,7 @@ const CaptionPresetSchema = new Schema<ICaptionPreset, ICaptionPresetModel>(
     },
     
     isSystem: { type: Boolean, default: false, index: true },
+    slug: { type: String },
     isPublic: { type: Boolean, default: false },
     isDefault: { type: Boolean, default: false },
     
@@ -266,6 +274,7 @@ const CaptionPresetSchema = new Schema<ICaptionPreset, ICaptionPresetModel>(
 // ============================================================================
 
 CaptionPresetSchema.index({ isSystem: 1, usageCount: -1 });
+CaptionPresetSchema.index({ slug: 1 }, { unique: true, partialFilterExpression: { slug: { $type: 'string' } } });
 CaptionPresetSchema.index({ userId: 1, createdAt: -1 });
 CaptionPresetSchema.index({ category: 1, isSystem: 1 });
 CaptionPresetSchema.index({ tags: 1 });

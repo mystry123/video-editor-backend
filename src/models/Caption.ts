@@ -45,6 +45,14 @@ export interface ICaptionProject extends Document {
   createdAt: Date;
   updatedAt: Date;
   renderCompletedAt?: Date;
+  composition?: any;
+  transcriptionStartedAt?: Date;
+  transcriptionCompletedAt?: Date;
+  generationStartedAt?: Date;
+  generationCompletedAt?: Date;
+  renderStartedAt?: Date;
+  failedStage?: 'transcription' | 'generation' | 'rendering';
+  cancelledAt?: Date;
 }
 
 // ============================================================================
@@ -111,7 +119,19 @@ const CaptionProjectSchema = new Schema<ICaptionProject>({
   },
   renderCompletedAt: {
     type: Date
-  }
+  },
+  // Pipeline state, so a retried job resumes instead of starting over (and
+  // never starts a second render). These were written before but dropped by
+  // the schema.
+  composition: { type: Schema.Types.Mixed, select: false },
+  transcriptionStartedAt: { type: Date },
+  transcriptionCompletedAt: { type: Date },
+  generationStartedAt: { type: Date },
+  generationCompletedAt: { type: Date },
+  renderStartedAt: { type: Date },
+  /** Stage the project failed in: transcription, generation or rendering. */
+  failedStage: { type: String, enum: ['transcription', 'generation', 'rendering'] },
+  cancelledAt: { type: Date }
 }, {
   timestamps: true,
   collection: 'captionprojects'

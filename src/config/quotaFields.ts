@@ -46,6 +46,7 @@ export const QUOTA_FIELDS: QuotaFieldDef[] = [
 
   { key: 'maxStorage', label: 'Storage', description: 'Total size of uploaded media.', type: 'bytes', group: 'storage' },
   { key: 'maxVideoUploadSize', label: 'Max upload size', description: 'Largest single video file.', type: 'bytes', group: 'storage' },
+  { key: 'maxReframeSeconds', label: 'Max reframe length', description: 'Longest video AI reframe can analyze.', type: 'seconds', group: 'features' },
   { key: 'maxVideoDuration', label: 'Max video length', description: 'Longest video that can be captioned.', type: 'seconds', group: 'storage' },
   { key: 'maxTemplates', label: 'Projects', description: 'Number of saved projects.', type: 'count', group: 'storage' },
 

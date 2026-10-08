@@ -1,8 +1,10 @@
 import { Response, NextFunction } from 'express';
-import { enqueueJob } from '../utils/jobs';
+import { enqueueJob, transition } from '../utils/jobs';
+import { RenderJob } from '../models/RenderJob';
+import { releaseUsage } from '../services/usage.service';
 import { ApiError } from '../utils/ApiError';
 import { Types } from 'mongoose';
-import { CaptionProject, CaptionProjectStatus } from '../models/Caption';
+import { ACTIVE_CAPTION_STATES, CaptionProject, CaptionProjectStatus } from '../models/Caption';
 import { CaptionPreset } from '../models/CaptionPreset';
 import { File } from '../models/File';
 import { Transcription } from '../models/Transcription';
@@ -425,42 +427,34 @@ export class CaptionProjectController {
         throw ApiError.badRequest('Invalid project ID');
       }
       
-      const project = await CaptionProject.findOne({
-        _id: id,
-        userId,
-        status: { $in: ['pending', 'transcribing', 'generating', 'rendering'] },
-      });
-      
+      // Conditional: a project that just completed (or was cancelled) stays as it is.
+      const project = await CaptionProject.findOneAndUpdate(
+        { _id: id, userId, status: { $in: ACTIVE_CAPTION_STATES } },
+        { $set: { status: 'failed', error: 'Cancelled by user', cancelledAt: new Date() } },
+        { new: false }
+      );
       if (!project) {
         throw ApiError.notFound('Project not found or cannot be cancelled');
       }
-      
-      // Update project status
-      await CaptionProject.updateOne(
-        { _id: id },
-        { status: 'failed', error: 'Cancelled by user' }
-      );
-      
-      // If there's a render job, cancel it too
+
+      // Stop its render (refunded, and a late finish deletes the file).
       if (project.renderJobId) {
-        const RenderJob = (await import('../models/RenderJob')).RenderJob;
-        await RenderJob.updateOne(
-          { _id: project.renderJobId },
-          { status: 'cancelled' }
-        );
+        await transition(RenderJob, project.renderJobId, ['pending', 'queued', 'rendering'], {
+          status: 'cancelled',
+          completedAt: new Date(),
+        });
       }
-      
-      // Remove from queue if still pending
+      await releaseUsage('captionRenderMinutes', `caption-render-${id}`, 'cancelled');
+      await releaseUsage('captionExports', `caption-export-${id}`, 'cancelled');
+
+      // Remove the pipeline job if it hasn't started (its id is caption-<projectId>).
       try {
-        const queue = await getCaptionQueue();
-        const job = await queue.getJob(id);
-        if (job) {
-          await job.remove();
-        }
-      } catch (e) {
-        // Job might not exist in queue, ignore
+        const job = await (await getCaptionQueue()).getJob(`caption-${id}`);
+        if (job && (await job.getState()) !== 'active') await job.remove();
+      } catch {
+        // Not in the queue (or running): the worker sees the cancelled status.
       }
-      
+
       res.json({
         success: true,
         message: 'Project cancelled',
@@ -553,10 +547,15 @@ export class CaptionProjectController {
         throw ApiError.notFound('Preset not found');
       }
       
-      await CaptionProject.updateOne(
-        { _id: id },
-        { presetId }
+      // Only while not rendering yet; the stored composition is for the old
+      // preset, so it's dropped and generated again.
+      const updated = await CaptionProject.updateOne(
+        { _id: id, status: { $nin: ['rendering', 'completed'] } },
+        { $set: { presetId }, $unset: { composition: '' } }
       );
+      if (updated.modifiedCount === 0) {
+        throw ApiError.badRequest('The preset can no longer be changed: rendering has started.');
+      }
       
       res.json({
         success: true,

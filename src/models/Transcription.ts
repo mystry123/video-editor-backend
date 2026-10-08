@@ -30,6 +30,9 @@ export interface ITranscription extends Document {
   error?: string;
   duration?: number;
   processedAt?: Date;
+  /** The user corrected the words; machine results never replace them. */
+  isEdited?: boolean;
+  editedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
   __v?: number;
@@ -69,6 +72,8 @@ const TranscriptionSchema = new Schema<ITranscription>(
     error: { type: String },
     duration: { type: Number },
     processedAt: { type: Date },
+    isEdited: { type: Boolean, default: false },
+    editedAt: { type: Date },
   },
   { timestamps: true }
 );

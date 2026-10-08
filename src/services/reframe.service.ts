@@ -361,3 +361,80 @@ export function detectionsToZoneKeyframes(
 
   return zones;
 }
+
+// ============================================================================
+// Inputs and layout safety (G4)
+// ============================================================================
+
+/**
+ * Closest named ratio for the source video. 4:5 is checked before the generic
+ * portrait case (it used to be classified as 9:16).
+ */
+export function detectSourceRatio(width: number, height: number): '16:9' | '1:1' | '4:5' | '9:16' {
+  const ar = width > 0 && height > 0 ? width / height : 16 / 9;
+  if (Math.abs(ar - 1) < 0.1) return '1:1';
+  if (Math.abs(ar - 4 / 5) < 0.08) return '4:5';
+  if (ar < 1) return '9:16';
+  return '16:9';
+}
+
+/**
+ * Frames between detection samples: about 300 samples per video, but never
+ * denser than every 3rd frame or sparser than every 30th.
+ */
+export function sampleEveryFor(durationSeconds: number | undefined, fps = 30): number {
+  const frames = (Number(durationSeconds) || 0) * fps;
+  if (frames <= 0) return 3;
+  return Math.max(3, Math.min(30, Math.round(frames / 300)));
+}
+
+const inUnit = (n: unknown) => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1;
+
+/** True if a layout from the reasoning model is usable (zones inside the frame and canvas). */
+export function isValidLayout(layout: LayoutDecision | null | undefined): layout is LayoutDecision {
+  if (!layout || !Array.isArray(layout.zones) || layout.zones.length === 0 || layout.zones.length > 4) return false;
+  return layout.zones.every(
+    (z) =>
+      Array.isArray(z.person_ids) &&
+      [z.crop_cx, z.crop_cy, z.crop_width, z.crop_height, z.canvas_top, z.canvas_left, z.canvas_w, z.canvas_h].every(inUnit) &&
+      z.canvas_w > 0 &&
+      z.canvas_h > 0 &&
+      z.canvas_left + z.canvas_w <= 1.001 &&
+      z.canvas_top + z.canvas_h <= 1.001
+  );
+}
+
+/**
+ * One full-canvas zone following the most-detected person (or the frame
+ * centre if nobody was detected). Used when the model's layout is missing or
+ * invalid, instead of failing the job or assuming tracker id 0 exists.
+ */
+export function fallbackLayout(detections: ReframeDetection[]): LayoutDecision {
+  const counts = new Map<number, number>();
+  for (const d of detections) counts.set(d.person_id, (counts.get(d.person_id) || 0) + 1);
+  const main = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  return {
+    layout_type: 'single_fallback',
+    reasoning: 'Fallback: following the most visible person.',
+    confidence: 0,
+    zones: [
+      {
+        zone_id: 'main',
+        person_ids: main === undefined ? [] : [main],
+        crop_cx: 0.5,
+        crop_cy: 0.5,
+        crop_width: 0.5,
+        crop_height: 0.5,
+        canvas_top: 0,
+        canvas_left: 0,
+        canvas_w: 1,
+        canvas_h: 1,
+      },
+    ],
+  };
+}
+
+/** A request that timed out: retrying would only time out again. */
+export function isTimeout(error: any): boolean {
+  return error?.code === 'ECONNABORTED' || error?.code === 'ETIMEDOUT' || /timeout/i.test(error?.message || '');
+}
