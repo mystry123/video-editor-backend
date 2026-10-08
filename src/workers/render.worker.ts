@@ -6,10 +6,10 @@ import { startRemotionRender, checkRemotionProgress } from '../services/render.s
 import { deliverWebhook } from '../services/webhook.service';
 import { generateThumbnailFromVideo } from '../services/thumbnail.service';
 import { createWorker, createJobLogger, sleep, retryWithBackoff } from '../utils/worker.utils';
-import { quotaService } from '../services/quota.service';
 import { logger } from '../utils/logger';
 import { env } from '../config/env';
 import { isFinalAttempt, transition } from '../utils/jobs';
+import { releaseUsage, settleUsage } from '../services/usage.service';
 
 // ============================================================================
 // Types
@@ -17,6 +17,25 @@ import { isFinalAttempt, transition } from '../utils/jobs';
 
 interface RenderJobData {
   jobId: string;
+}
+
+// ============================================================================
+// Helper: usage ledger key
+// ============================================================================
+
+/** Caption renders are metered per caption project; others per render job. */
+function usageKey(job: { _id: any; renderType?: string; captionProjectId?: any }): { kind: 'renderMinutes' | 'captionRenderMinutes'; jobId: string } {
+  return job.renderType === 'CaptionProject' && job.captionProjectId
+    ? { kind: 'captionRenderMinutes', jobId: `caption-render-${job.captionProjectId}` }
+    : { kind: 'renderMinutes', jobId: String(job._id) };
+}
+
+/** Refunds a render's reserved minutes after it failed for good. */
+async function refundRender(jobId: string, reason: string): Promise<void> {
+  const job = await RenderJob.findById(jobId).select('renderType captionProjectId').lean();
+  if (!job) return;
+  const usage = usageKey(job as any);
+  await releaseUsage(usage.kind, usage.jobId, reason);
 }
 
 // ============================================================================
@@ -101,6 +120,7 @@ async function pollAndComplete(
           { _id: jobId, status: 'rendering' },
           { status: 'failed', error: reason, completedAt: new Date() }
         );
+        await refundRender(jobId, 'render_failed');
         return { error: 'fatal', message: reason };
       }
 
@@ -121,21 +141,12 @@ async function pollAndComplete(
           return { skipped: true, reason: 'not_rendering' };
         }
 
-        // Update quota usage for render minutes
+        // Charge the render (settles the reservation made when it started).
         const renderJob = await RenderJob.findById(jobId).select('+inputProps');
         if (renderJob) {
-          const userId = renderJob.userId.toString();
-          const duration = (renderJob.inputProps?.project?.duration || 0) / 60; // Convert to minutes
-          const resolution = renderJob.resolution || '1080p';
-          
-          // Use caption render minutes if it's a caption render, otherwise regular render minutes
-          const quotaType = renderJob.renderType === 'CaptionProject' ? 'captionRenderMinutes' : 'renderMinutes';
-          
-          if (quotaType === 'captionRenderMinutes') {
-            await quotaService.addCaptionRenderMinutes(userId, duration, jobId, resolution);
-          } else {
-            await quotaService.addRenderMinutes(userId, duration, jobId, resolution);
-          }
+          const usage = usageKey(renderJob);
+          const seconds = Number(renderJob.inputProps?.project?.duration) || 0;
+          await settleUsage(renderJob.userId, usage.kind, usage.jobId, seconds);
         }
 
         // Generate thumbnail (async, don't wait)
@@ -176,6 +187,7 @@ async function pollAndComplete(
     error: 'The render took too long. Try a shorter video or fewer effects.',
     completedAt: new Date(),
   });
+  await refundRender(jobId, 'render_timeout');
   return { error: 'timeout' };
 }
 
@@ -266,6 +278,7 @@ async function processRenderJob(job: Job<RenderJobData>) {
         error: describeRenderError(err.message),
         completedAt: new Date(),
       });
+      await refundRender(jobId, 'render_failed');
     }
     throw err;
   }
@@ -285,6 +298,7 @@ const renderWorker = createWorker({
       error: 'The render stopped unexpectedly. Try again.',
       completedAt: new Date(),
     });
+    await refundRender(job.data.jobId, 'render_crashed');
   },
   concurrency: 3,
   lockDuration: 180000, // 3 minutes (renders are long)

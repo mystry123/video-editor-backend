@@ -3,6 +3,7 @@ import { enqueueJob } from '../utils/jobs';
 import { v4 as uuidv4 } from 'uuid';
 import { assertPublicUrl, BlockedUrlError, safeRequest } from '../utils/safeRequest';
 import { probeMedia, storageExtension, summarizeProbe } from '../utils/media';
+import { getObjectSize } from '../services/storage.service';
 import axios from 'axios';
 import { AuthRequest } from '../types';
 import { File } from '../models/File';
@@ -20,6 +21,31 @@ import { getFileImportQueue } from '../queues';
 // EXISTING METHODS
 // ============================================
 
+/**
+ * Throws a clear quota error if storing `size` more bytes (a video, if
+ * `mimeType` is video) would break the user's plan. Returns the bytes left.
+ */
+function assertCanStore(user: any, size: number, mimeType: string | undefined): number {
+  const quota = getEffectiveQuota(user);
+  const used = user.quotaUsage?.storageUsed || 0;
+  const remaining = quota.maxStorage === -1 ? Infinity : Math.max(0, quota.maxStorage - used);
+  if (mimeType?.startsWith('video/') && quota.maxVideoUploadSize !== -1 && size > quota.maxVideoUploadSize) {
+    throw ApiError.withCode(
+      403,
+      'VIDEO_UPLOAD_SIZE_EXCEEDED',
+      `Videos can be up to ${Math.round(quota.maxVideoUploadSize / (1024 * 1024))} MB on your plan.`
+    );
+  }
+  if (size > remaining) {
+    throw ApiError.withCode(
+      403,
+      'STORAGE_LIMIT_EXCEEDED',
+      `Not enough storage: this file needs ${Math.ceil(size / (1024 * 1024))} MB and you have ${Math.floor(remaining / (1024 * 1024))} MB left.`
+    );
+  }
+  return remaining;
+}
+
 export const getUploadUrl = async (
   req: AuthRequest,
   res: Response,
@@ -32,10 +58,7 @@ export const getUploadUrl = async (
     const user = await User.findById(userId);
     if (!user) throw ApiError.notFound('User not found');
 
-    const quota = getEffectiveQuota(user);
-    if (quota.maxStorage !== -1 && user.storageUsed + size > quota.maxStorage) {
-      throw ApiError.forbidden('Storage quota exceeded');
-    }
+    assertCanStore(user, size, mimeType);
 
     // The extension comes from an allowlist, never from the client's filename:
     // it ends up in the storage key and CDN URL.
@@ -118,17 +141,20 @@ export const completeUpload = async (
       };
     }
 
-    // Update file with metadata and status
-    await File.updateOne(
-      { _id: id },
-      {
-        status: 'ready',
-        metadata,
-      }
+    // Storage is charged for what actually landed in S3, not the size the
+    // browser declared, and only once: on the processing → ready transition.
+    const actualSize = await getObjectSize(file.storageKey);
+    if (actualSize === null && file.status === 'processing') {
+      throw ApiError.withCode(400, 'UPLOAD_NOT_FOUND', "The upload didn't finish. Try uploading the file again.");
+    }
+    const finished = await File.findOneAndUpdate(
+      { _id: id, status: 'processing' },
+      { status: 'ready', metadata, size: actualSize ?? file.size },
+      { new: true }
     );
-
-    // Update quota usage for storage
-    await quotaService.addStorageUsage(userId, file.size, file._id.toString());
+    if (finished) {
+      await quotaService.addStorageUsage(userId, finished.size, file._id.toString());
+    }
 
     res.json({ success: true, metadata });
   } catch (error) {
@@ -261,9 +287,19 @@ export const deleteFile = async (
     const file = await File.findOne({ _id: id, userId: user._id });
     if (!file) throw ApiError.notFound('File not found');
 
-    await deleteFromS3(file.storageKey);
-    await quotaService.removeStorageUsage(userId, file.size, file._id.toString());
-    await File.updateOne({ _id: id }, { status: 'deleted' });
+    // Mark deleted first and only refund storage for a file that was counted
+    // (ready); repeating the request can't push usage below zero.
+    const previous = await File.findOneAndUpdate(
+      { _id: id, userId: user._id, status: { $ne: 'deleted' } },
+      { status: 'deleted' },
+      { new: false }
+    );
+    if (previous?.status === 'ready') {
+      await quotaService.removeStorageUsage(userId, previous.size, file._id.toString());
+    }
+    await deleteFromS3(file.storageKey).catch((error) =>
+      logger.warn('Failed to delete file from S3; the sweep will not retry it', { fileId: id, error: error.message })
+    );
 
     res.json({ success: true });
   } catch (error) {
@@ -344,11 +380,9 @@ export const importFromUrl = async (
       throw ApiError.badRequest('URL must point to a video or audio file');
     }
 
-    // Check quota
-    const quota = getEffectiveQuota(user);
-    if (quota.maxStorage !== -1 && contentLength > 0 && user.storageUsed + contentLength > quota.maxStorage) {
-      throw ApiError.forbidden('Storage quota exceeded');
-    }
+    // Check quota. The HEAD size is only a claim, so the download itself is
+    // also capped at the storage left (see maxBytes below).
+    const remainingStorage = assertCanStore(user, contentLength, contentType);
 
     // Generate storage key
     // Allowlisted extension; an unknown video/audio subtype keeps the old
@@ -384,6 +418,7 @@ export const importFromUrl = async (
         userId: userId.toString(),
         contentType,
         contentLength,
+        maxBytes: Number.isFinite(remainingStorage) ? remainingStorage : undefined,
       },
       {
         jobId: `url-import-${file._id}`,
@@ -466,11 +501,9 @@ export const importFromGoogleDrive = async (
       throw ApiError.badRequest('File must be a video or audio file');
     }
 
-    // Check quota
-    const quota = getEffectiveQuota(user);
-    if (quota.maxStorage !== -1 && finalSize > 0 && user.storageUsed + finalSize > quota.maxStorage) {
-      throw ApiError.forbidden('Storage quota exceeded');
-    }
+    // Check quota (the Drive size can come from the client, so it's re-checked
+    // against what actually lands in S3 when the import finishes).
+    assertCanStore(user, finalSize, finalMimeType);
 
     // Generate storage key
     const ext = storageExtension(finalMimeType, finalFileName);

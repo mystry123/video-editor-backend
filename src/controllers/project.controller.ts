@@ -2,6 +2,7 @@ import { Response, NextFunction } from 'express';
 import { AuthRequest, PaginationQuery } from '../types';
 import { RenderJob, IRenderJob, RenderStatus } from '../models/RenderJob';
 import { ApiError } from '../utils/ApiError';
+import { releaseAllUsage } from '../services/usage.service';
 import { CaptionProject } from '../models';
 
 // ============================================
@@ -335,6 +336,9 @@ export const deleteProject = async (
       throw ApiError.notFound('Project not found');
     }
 
+    // Refund anything still reserved for it (no-op once charged).
+    await releaseAllUsage(String(project._id), 'deleted');
+
     // TODO: Also delete associated files from S3 if needed
     // TODO: Cancel any ongoing renders
 
@@ -365,15 +369,16 @@ export const cancel = async (
       throw ApiError.badRequest('Project cannot be cancelled in current status');
     }
 
-    // Update status to cancelled
-    const updatedProject = await RenderJob.findByIdAndUpdate(
-      id,
-      { 
-        status: 'cancelled',
-        completedAt: new Date(),
-      },
+    // Update status to cancelled (only if it's still running)
+    const updatedProject = await RenderJob.findOneAndUpdate(
+      { _id: id, status: { $in: ['pending', 'queued', 'rendering'] } },
+      { status: 'cancelled', completedAt: new Date() },
       { new: true }
     );
+    if (!updatedProject) {
+      throw ApiError.badRequest('Project cannot be cancelled in current status');
+    }
+    await releaseAllUsage(String(updatedProject._id), 'cancelled');
 
     // TODO: Actually cancel the render job in Remotion Lambda
     // TODO: Clean up any resources

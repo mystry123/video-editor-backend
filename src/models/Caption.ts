@@ -125,4 +125,7 @@ CaptionProjectSchema.index({ status: 1, createdAt: -1 });
 // Model
 // ============================================================================
 
+/** Statuses of a caption project that's still being worked on. */
+export const ACTIVE_CAPTION_STATES = ['pending', 'transcribing', 'generating', 'rendering'];
+
 export const CaptionProject = mongoose.model<ICaptionProject>('CaptionProject', CaptionProjectSchema);

@@ -66,7 +66,7 @@ describe('password', () => {
 });
 
 describe('usage', () => {
-  it('reports the plan and resets monthly counters lazily', async () => {
+  it("reports the plan and doesn't count last month's usage", async () => {
     const { user, auth } = await createUser();
     const lastMonth = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - 1, 15));
     await User.updateOne({ _id: user._id }, { $set: { 'quotaUsage.renderMinutesUsed': 9, 'quotaUsage.lastReset': lastMonth } });
@@ -75,9 +75,6 @@ describe('usage', () => {
     expect(res.status).toBe(200);
     expect(res.body.plan.key).toBe('free');
     expect(res.body.usage.renderMinutes).toBe(0);
-    const after = await User.findById(user._id);
-    expect(after!.quotaUsage.renderMinutesUsed).toBe(0);
-    expect(after!.quotaUsage.lastReset!.getTime()).toBeGreaterThan(lastMonth.getTime());
   });
 
   it('keeps counters within the same month', async () => {

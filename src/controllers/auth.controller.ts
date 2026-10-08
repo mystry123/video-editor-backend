@@ -81,7 +81,8 @@ function formatUserResponse(user: IUser, includeLinkedProviders = false): UserRe
 
   if (includeLinkedProviders) {
     response.linkedProviders = user.oauthAccounts.map((a) => a.provider);
-    response.storageUsed = user.storageUsed;
+    // The real counter (the top-level storageUsed field was never updated).
+    response.storageUsed = user.quotaUsage?.storageUsed || 0;
   }
 
   return response;

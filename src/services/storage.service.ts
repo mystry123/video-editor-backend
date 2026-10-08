@@ -3,6 +3,7 @@ import {
   PutObjectCommand,
   DeleteObjectCommand,
   DeleteObjectsCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
 } from '@aws-sdk/client-s3';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
@@ -46,6 +47,17 @@ export async function createPresignedUpload({
   });
 
   return { url, fields };
+}
+
+/** Size in bytes of an object in the media bucket, or null if it doesn't exist. */
+export async function getObjectSize(key: string): Promise<number | null> {
+  try {
+    const head = await s3Client.send(new HeadObjectCommand({ Bucket: env.s3Bucket, Key: key }));
+    return typeof head.ContentLength === 'number' ? head.ContentLength : null;
+  } catch (error: any) {
+    if (error?.$metadata?.httpStatusCode === 404 || error?.name === 'NotFound') return null;
+    throw error;
+  }
 }
 
 export async function deleteFromS3(key: string) {

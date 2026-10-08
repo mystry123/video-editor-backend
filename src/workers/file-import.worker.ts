@@ -2,6 +2,7 @@ import { Job, Worker } from 'bullmq';
 import { probeMedia, summarizeProbe } from '../utils/media';
 import { limitStream, safeRequest } from '../utils/safeRequest';
 import { isFinalAttempt } from '../utils/jobs';
+import { getObjectSize } from '../services/storage.service';
 
 // Largest file a URL import may download (bytes). Overridable for bigger plans later.
 const MAX_IMPORT_BYTES = Number(process.env.MAX_IMPORT_BYTES) || 5 * 1024 * 1024 * 1024;
@@ -56,7 +57,8 @@ async function processUrlImport(job: Job): Promise<void> {
     });
 
     // The size from the HEAD request is only a claim; cap the bytes actually streamed.
-    const stream = limitStream(response.data as Readable, MAX_IMPORT_BYTES);
+    const maxBytes = Math.min(MAX_IMPORT_BYTES, Number(job.data.maxBytes) || MAX_IMPORT_BYTES);
+    const stream = limitStream(response.data as Readable, maxBytes);
     const totalSize = contentLength || parseInt(response.headers['content-length'] || '0', 10);
     const finalContentType = contentType || response.headers['content-type'] || 'video/mp4';
 
@@ -201,20 +203,17 @@ async function finalizeImport(
   const cdnUrl = `${env.cdnUrl}/${key}`;
   const metadata = await extractMetadata(cdnUrl);
 
-  // Update file record
-  await File.updateOne(
-    { _id: fileId },
-    {
-      status: 'ready',
-      size: fileSize,
-      metadata,
-      importProgress: 100,
-    }
+  // Charge the bytes that actually landed in S3 (the HEAD size or a
+  // client-supplied Drive size is only a claim), once, on processing → ready.
+  const actualSize = (await getObjectSize(key).catch(() => null)) ?? fileSize;
+  const finished = await File.findOneAndUpdate(
+    { _id: fileId, status: 'processing' },
+    { status: 'ready', size: actualSize, metadata, importProgress: 100 },
+    { new: true }
   );
 
-  // Update quota
-  if (fileSize > 0) {
-    await quotaService.addStorageUsage(userId, fileSize, fileId);
+  if (finished && actualSize > 0) {
+    await quotaService.addStorageUsage(userId, actualSize, fileId);
   }
 }
 
