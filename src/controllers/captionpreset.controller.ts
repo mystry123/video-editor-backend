@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { sendError } from '../utils/errorResponse';
 import { Types } from 'mongoose';
 import { CaptionPreset, ICaptionStyles, IPreviewStyles } from '../models/CaptionPreset';
 import { PRESET_CATEGORIES } from '../constants/preset-categories';
@@ -130,14 +131,14 @@ export class CaptionPresetController {
       const presetId = req.params.id;
 
       if (!Types.ObjectId.isValid(presetId)) {
-        res.status(400).json({ error: 'Invalid preset ID' });
+        sendError(req, res, 400, 'Invalid preset ID', 'INVALID_ID');
         return;
       }
 
       const preset = await CaptionPreset.findById(presetId).lean();
 
       if (!preset) {
-        res.status(404).json({ error: 'Preset not found' });
+        sendError(req, res, 404, 'Preset not found', 'NOT_FOUND');
         return;
       }
 
@@ -145,7 +146,7 @@ export class CaptionPresetController {
       const userId = req.user?._id?.toString();
       if (!preset.isSystem && !preset.isPublic) {
         if (!userId || preset.userId?.toString() !== userId) {
-          res.status(403).json({ error: 'Access denied' });
+          sendError(req, res, 403, 'Access denied', 'FORBIDDEN');
           return;
         }
       }
@@ -169,7 +170,7 @@ export class CaptionPresetController {
       const userId = req.user?._id?.toString();
       
       if (!userId) {
-        res.status(401).json({ error: 'Authentication required' });
+        sendError(req, res, 401, 'Authentication required', 'AUTH_REQUIRED');
         return;
       }
 
@@ -177,9 +178,7 @@ export class CaptionPresetController {
 
       // Validate required fields
       if (!body.name || !body.styles || !body.previewStyles) {
-        res.status(400).json({ 
-          error: 'Missing required fields: name, styles, previewStyles' 
-        });
+        sendError(req, res, 400, 'Missing required fields: name, styles, previewStyles', 'VALIDATION_ERROR');
         return;
       }
 
@@ -191,9 +190,7 @@ export class CaptionPresetController {
       });
 
       if (existingPreset) {
-        res.status(409).json({ 
-          error: 'You already have a preset with this name' 
-        });
+        sendError(req, res, 409, 'You already have a preset with this name', 'DUPLICATE');
         return;
       }
 
@@ -230,12 +227,12 @@ export class CaptionPresetController {
       const presetId = req.params.id;
 
       if (!userId) {
-        res.status(401).json({ error: 'Authentication required' });
+        sendError(req, res, 401, 'Authentication required', 'AUTH_REQUIRED');
         return;
       }
 
       if (!Types.ObjectId.isValid(presetId)) {
-        res.status(400).json({ error: 'Invalid preset ID' });
+        sendError(req, res, 400, 'Invalid preset ID', 'INVALID_ID');
         return;
       }
 
@@ -243,17 +240,17 @@ export class CaptionPresetController {
       const preset = await CaptionPreset.findById(presetId);
 
       if (!preset) {
-        res.status(404).json({ error: 'Preset not found' });
+        sendError(req, res, 404, 'Preset not found', 'NOT_FOUND');
         return;
       }
 
       if (preset.isSystem) {
-        res.status(403).json({ error: 'Cannot edit system presets' });
+        sendError(req, res, 403, 'Cannot edit system presets', 'FORBIDDEN');
         return;
       }
 
       if (preset.userId?.toString() !== userId) {
-        res.status(403).json({ error: 'Access denied' });
+        sendError(req, res, 403, 'Access denied', 'FORBIDDEN');
         return;
       }
 
@@ -311,29 +308,29 @@ export class CaptionPresetController {
       const presetId = req.params.id;
 
       if (!userId) {
-        res.status(401).json({ error: 'Authentication required' });
+        sendError(req, res, 401, 'Authentication required', 'AUTH_REQUIRED');
         return;
       }
 
       if (!Types.ObjectId.isValid(presetId)) {
-        res.status(400).json({ error: 'Invalid preset ID' });
+        sendError(req, res, 400, 'Invalid preset ID', 'INVALID_ID');
         return;
       }
 
       const preset = await CaptionPreset.findById(presetId);
 
       if (!preset) {
-        res.status(404).json({ error: 'Preset not found' });
+        sendError(req, res, 404, 'Preset not found', 'NOT_FOUND');
         return;
       }
 
       if (preset.isSystem) {
-        res.status(403).json({ error: 'Cannot delete system presets' });
+        sendError(req, res, 403, 'Cannot delete system presets', 'FORBIDDEN');
         return;
       }
 
       if (preset.userId?.toString() !== userId) {
-        res.status(403).json({ error: 'Access denied' });
+        sendError(req, res, 403, 'Access denied', 'FORBIDDEN');
         return;
       }
 
@@ -360,26 +357,26 @@ export class CaptionPresetController {
       const { name } = req.body;
 
       if (!userId) {
-        res.status(401).json({ error: 'Authentication required' });
+        sendError(req, res, 401, 'Authentication required', 'AUTH_REQUIRED');
         return;
       }
 
       if (!Types.ObjectId.isValid(presetId)) {
-        res.status(400).json({ error: 'Invalid preset ID' });
+        sendError(req, res, 400, 'Invalid preset ID', 'INVALID_ID');
         return;
       }
 
       const sourcePreset = await CaptionPreset.findById(presetId).lean();
 
       if (!sourcePreset) {
-        res.status(404).json({ error: 'Preset not found' });
+        sendError(req, res, 404, 'Preset not found', 'NOT_FOUND');
         return;
       }
 
       // Check access for non-public, non-system presets
       if (!sourcePreset.isSystem && !sourcePreset.isPublic) {
         if (sourcePreset.userId?.toString() !== userId) {
-          res.status(403).json({ error: 'Access denied' });
+          sendError(req, res, 403, 'Access denied', 'FORBIDDEN');
           return;
         }
       }
@@ -417,7 +414,7 @@ export class CaptionPresetController {
       const presetId = req.params.id;
 
       if (!Types.ObjectId.isValid(presetId)) {
-        res.status(400).json({ error: 'Invalid preset ID' });
+        sendError(req, res, 400, 'Invalid preset ID', 'INVALID_ID');
         return;
       }
 
@@ -442,7 +439,7 @@ export class CaptionPresetController {
       const userId = req.user?._id?.toString();
 
       if (!userId) {
-        res.status(401).json({ error: 'Authentication required' });
+        sendError(req, res, 401, 'Authentication required', 'AUTH_REQUIRED');
         return;
       }
 

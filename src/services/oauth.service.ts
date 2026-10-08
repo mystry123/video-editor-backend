@@ -67,7 +67,7 @@ export async function verifyGoogleCode(code: string): Promise<OAuthUserInfo> {
     };
   } catch (error) {
     logger.error('Google OAuth error:', error);
-    throw new Error('Failed to verify Google authentication');
+    throw new Error('Failed to verify Google authentication', { cause: error });
   }
 }
 
@@ -93,7 +93,7 @@ export async function verifyGoogleIdToken(idToken: string): Promise<OAuthUserInf
     };
   } catch (error) {
     logger.error('Google ID token verification error:', error);
-    throw new Error('Invalid Google ID token');
+    throw new Error('Invalid Google ID token', { cause: error });
   }
 }
 
@@ -184,7 +184,7 @@ export async function verifyAppleCode(
     };
   } catch (error) {
     logger.error('Apple OAuth error:', error);
-    throw new Error('Failed to verify Apple authentication');
+    throw new Error('Failed to verify Apple authentication', { cause: error });
   }
 }
 
@@ -227,7 +227,7 @@ export async function verifyAppleIdToken(idToken: string): Promise<OAuthUserInfo
     };
   } catch (error) {
     logger.error('Apple ID token verification error:', error);
-    throw new Error('Invalid Apple ID token');
+    throw new Error('Invalid Apple ID token', { cause: error });
   }
 }
 
@@ -286,7 +286,7 @@ export async function verifyFacebookCode(code: string): Promise<OAuthUserInfo> {
     };
   } catch (error) {
     logger.error('Facebook OAuth error:', error);
-    throw new Error('Failed to verify Facebook authentication');
+    throw new Error('Failed to verify Facebook authentication', { cause: error });
   }
 }
 
@@ -327,6 +327,6 @@ export async function verifyFacebookAccessToken(accessToken: string): Promise<OA
     };
   } catch (error) {
     logger.error('Facebook token verification error:', error);
-    throw new Error('Invalid Facebook access token');
+    throw new Error('Invalid Facebook access token', { cause: error });
   }
 }

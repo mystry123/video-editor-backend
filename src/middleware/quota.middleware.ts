@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { errorBody, sendError } from '../utils/errorResponse';
 import { Types } from 'mongoose';
 import { getEffectiveQuota, getUserQuota, isUnlimited, UserQuota, type PlanOverride } from '../config/quotas';
 import { Template } from '../models/Template';
@@ -451,7 +452,7 @@ export function checkQuota(options: QuotaCheckOptions) {
   ): Promise<void> => {
     try {
       if (!req.user) {
-        res.status(401).json({ error: 'Unauthorized' });
+        sendError(req, res, 401, 'Authentication required', 'AUTH_REQUIRED');
         return;
       }
 
@@ -500,19 +501,23 @@ export function checkQuota(options: QuotaCheckOptions) {
       if (errors.length > 0) {
         const primaryError = errors[0];
         
+        // Quota errors keep `usage`/`checks` alongside the standard error fields.
         res.status(403).json({
-          error: 'Quota exceeded',
-          code: primaryError.result.code || QUOTA_ERROR_CODES[primaryError.check as QuotaCheckType],
-          message: primaryError.result.message,
+          ...errorBody(
+            req,
+            403,
+            primaryError.result.message || 'You have reached a limit on your plan.',
+            primaryError.result.code || QUOTA_ERROR_CODES[primaryError.check as QuotaCheckType]
+          ),
           checks: errors.length > 1 ? results : undefined,
           usage: {
             current: primaryError.result.currentUsage,
             limit: primaryError.result.limit,
             remaining: primaryError.result.remaining,
           },
-          allErrors: errors.length > 1 
-            ? errors.map(e => ({ 
-                check: e.check, 
+          allErrors: errors.length > 1
+            ? errors.map(e => ({
+                check: e.check,
                 message: e.result.message,
                 code: e.result.code,
               }))
@@ -662,7 +667,7 @@ export const attachUsageSummary = async (
 ): Promise<void> => {
   try {
     if (!req.user) {
-      res.status(401).json({ error: 'Unauthorized' });
+      sendError(req, res, 401, 'Authentication required', 'AUTH_REQUIRED');
       return;
     }
 

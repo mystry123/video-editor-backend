@@ -60,17 +60,7 @@ export function verifyRefreshToken(token: string): TokenPayload | null {
   try {
     const decoded = jwt.verify(token, env.jwtRefreshSecret) as any;
     
-    // Debug logging
-    console.log('JWT verification debug:', {
-      tokenLength: token.length,
-      decoded: !!decoded,
-      tokenType: decoded?.tokenType,
-      userId: decoded?.userId,
-      expectedType: 'refresh',
-    });
-    
     if (decoded.tokenType !== 'refresh') {
-      console.log('Token type mismatch:', decoded.tokenType);
       return null;
     }
     
@@ -79,8 +69,7 @@ export function verifyRefreshToken(token: string): TokenPayload | null {
       email: decoded.email,
       role: decoded.role,
     };
-  } catch (error: any) {
-    console.log('JWT verification error:', error.message);
+  } catch {
     return null;
   }
 }

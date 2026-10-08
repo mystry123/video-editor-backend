@@ -6,6 +6,8 @@ import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
 import swaggerUi from 'swagger-ui-express';
 
+import { requestId } from './middleware/requestId.middleware';
+import { sendError } from './utils/errorResponse';
 import { errorHandler } from './middleware/error.middleware';
 import { rateLimiter } from './middleware/rateLimit.middleware';
 import { attachUsageSummary } from './middleware/quota.middleware';
@@ -22,6 +24,10 @@ const app: Express = express();
 
 
 app.set('trust proxy', true);
+
+// Request id first, so every log line and error body can carry it.
+app.use(requestId);
+
 // SECURITY MIDDLEWARE
 // GeoIP location detection using geoip-lite
 app.use((req, res, next) => {
@@ -63,7 +69,8 @@ app.use(
     origin: env.corsOrigin.split(',').map((o) => o.trim()), // Support multiple origins
     credentials: true, // Required for cookies
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'X-Request-Id'],
+    exposedHeaders: ['X-Request-Id'],
   })
 );
 
@@ -80,9 +87,10 @@ app.use(cookieParser()); // Parse cookies
 // ============================================
 
 // Skip logging for health checks
+morgan.token('id', (req) => (req as any).id);
 app.use(
-  morgan('combined', {
-    skip: (req) => req.url === '/health',
+  morgan(':remote-addr - :remote-user [:date[clf]] ":method :url HTTP/:http-version" :status :res[content-length] ":user-agent" rid=:id', {
+    skip: (req) => req.url === '/health' || env.nodeEnv === 'test',
   })
 );
 
@@ -130,8 +138,8 @@ app.use('/api/v1', routes); // Re-enabled with only project routes
 // 404 HANDLER
 // ============================================
 
-app.use((_req: Request, res: Response) => {
-  res.status(404).json({ error: 'Not found' });
+app.use((req: Request, res: Response) => {
+  sendError(req, res, 404, 'Not found', 'ROUTE_NOT_FOUND');
 });
 
 // ============================================

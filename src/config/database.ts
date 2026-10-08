@@ -10,7 +10,7 @@ export async function connectDatabase(): Promise<void> {
       socketTimeoutMS: 45000,
     });
     
-    logger.info('Connected to MongoDB', { uri: env.mongodbUri });
+    logger.info('Connected to MongoDB', { host: mongoose.connection.host, db: mongoose.connection.name });
     
     mongoose.connection.on('error', (err) => {
       logger.error('MongoDB connection error:', err);

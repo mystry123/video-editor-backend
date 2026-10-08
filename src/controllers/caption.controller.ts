@@ -1,4 +1,5 @@
 import { Response, NextFunction } from 'express';
+import { ApiError } from '../utils/ApiError';
 import { Types } from 'mongoose';
 import { CaptionProject, CaptionProjectStatus } from '../models/Caption';
 import { CaptionPreset } from '../models/CaptionPreset';
@@ -29,26 +30,6 @@ interface AuthRequest {
   query: any;
 }
 
-class ApiError extends Error {
-  statusCode: number;
-  
-  constructor(statusCode: number, message: string) {
-    super(message);
-    this.statusCode = statusCode;
-  }
-  
-  static badRequest(message: string) {
-    return new ApiError(400, message);
-  }
-  
-  static notFound(message: string) {
-    return new ApiError(404, message);
-  }
-  
-  static forbidden(message: string) {
-    return new ApiError(403, message);
-  }
-}
 
 // ============================================================================
 // Status Response Builder
@@ -188,7 +169,6 @@ export class CaptionProjectController {
       const { fileId, presetId, setting, name } = req.body;
       
 
-      console.log("fileId",fileId, "setting",setting, "presetId",presetId)
       // Validate fileId
       if (!fileId) {
         throw ApiError.badRequest('fileId is required');
@@ -280,10 +260,6 @@ export class CaptionProjectController {
       });
       
     } catch (error: any) {
-      if (error instanceof ApiError) {
-        res.status(error.statusCode).json({ success: false, error: error.message });
-        return;
-      }
       next(error);
     }
   }
@@ -329,10 +305,6 @@ export class CaptionProjectController {
       });
       
     } catch (error: any) {
-      if (error instanceof ApiError) {
-        res.status(error.statusCode).json({ success: false, error: error.message });
-        return;
-      }
       next(error);
     }
   }
@@ -370,10 +342,6 @@ export class CaptionProjectController {
       });
       
     } catch (error: any) {
-      if (error instanceof ApiError) {
-        res.status(error.statusCode).json({ success: false, error: error.message });
-        return;
-      }
       next(error);
     }
   }
@@ -488,10 +456,6 @@ export class CaptionProjectController {
       });
       
     } catch (error: any) {
-      if (error instanceof ApiError) {
-        res.status(error.statusCode).json({ success: false, error: error.message });
-        return;
-      }
       next(error);
     }
   }
@@ -535,10 +499,6 @@ export class CaptionProjectController {
       });
       
     } catch (error: any) {
-      if (error instanceof ApiError) {
-        res.status(error.statusCode).json({ success: false, error: error.message });
-        return;
-      }
       next(error);
     }
   }
@@ -593,10 +553,6 @@ export class CaptionProjectController {
       });
       
     } catch (error: any) {
-      if (error instanceof ApiError) {
-        res.status(error.statusCode).json({ success: false, error: error.message });
-        return;
-      }
       next(error);
     }
   }
