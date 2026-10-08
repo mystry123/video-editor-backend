@@ -14,3 +14,7 @@ coverage/
 cookies.txt
 package-lock.json
 *.local.js
+
+# Python bytecode (yolo-service)
+__pycache__/
+*.pyc

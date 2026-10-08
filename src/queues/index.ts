@@ -63,7 +63,6 @@ function createQueue(name: string, options: any = {}): Queue {
 
 let _renderQueue: Queue | null = null;
 let _transcriptionQueue: Queue | null = null;
-let _fileProcessingQueue: Queue | null = null;
 let _webhookQueue: Queue | null = null;
 let _captionQueue: Queue | null = null;
 let _fileImportQueue: Queue | null = null;
@@ -88,13 +87,6 @@ export function getTranscriptionQueue(): Queue {
     });
   }
   return _transcriptionQueue;
-}
-
-export function getFileProcessingQueue(): Queue {
-  if (!_fileProcessingQueue) {
-    _fileProcessingQueue = createQueue('file-processing');
-  }
-  return _fileProcessingQueue;
 }
 
 export function getWebhookQueue(): Queue {
@@ -178,7 +170,6 @@ function createQueueProxy(getQueue: () => Queue) {
 
 export const renderQueue = createQueueProxy(getRenderQueue);
 export const transcriptionQueue = createQueueProxy(getTranscriptionQueue);
-export const fileProcessingQueue = createQueueProxy(getFileProcessingQueue);
 export const webhookQueue = createQueueProxy(getWebhookQueue);
 export const captionQueue = createQueueProxy(getCaptionQueue);
 export const fileImportQueue = createQueueProxy(getFileImportQueue);
@@ -216,7 +207,6 @@ export function startWorkers(): void {
   const workerModules = [
     '../workers/render.worker',
     '../workers/transcription.worker',
-    '../workers/file.worker',
     '../workers/webhook.worker',
     '../workers/caption.worker',
     '../workers/file-import.worker',
@@ -310,7 +300,6 @@ export async function gracefulShutdown(options: { workerDrainMs?: number } = {})
   // Reset
   _renderQueue = null;
   _transcriptionQueue = null;
-  _fileProcessingQueue = null;
   _webhookQueue = null;
   _captionQueue = null;
   _fileImportQueue = null;
