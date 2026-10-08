@@ -2,6 +2,8 @@ import {
   S3Client,
   PutObjectCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
+  ListObjectsV2Command,
 } from '@aws-sdk/client-s3';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { Upload } from '@aws-sdk/lib-storage';
@@ -53,6 +55,37 @@ export async function deleteFromS3(key: string) {
       Key: key,
     })
   );
+}
+
+/**
+ * Deletes every object under `prefix` in the media bucket. Safe to call again
+ * after a partial failure. Returns the number of objects deleted.
+ */
+export async function deleteS3Prefix(prefix: string): Promise<number> {
+  if (!prefix || prefix === '/' || !prefix.endsWith('/')) {
+    throw new Error(`Refusing to delete unsafe prefix "${prefix}"`);
+  }
+
+  let deleted = 0;
+  let continuationToken: string | undefined;
+  do {
+    const page = await s3Client.send(
+      new ListObjectsV2Command({ Bucket: env.s3Bucket, Prefix: prefix, ContinuationToken: continuationToken })
+    );
+    const objects = (page.Contents || []).filter((o) => o.Key).map((o) => ({ Key: o.Key! }));
+    if (objects.length > 0) {
+      const result = await s3Client.send(
+        new DeleteObjectsCommand({ Bucket: env.s3Bucket, Delete: { Objects: objects, Quiet: true } })
+      );
+      if (result.Errors?.length) {
+        throw new Error(`Failed to delete ${result.Errors.length} objects under ${prefix}: ${result.Errors[0].Message}`);
+      }
+      deleted += objects.length;
+    }
+    continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (continuationToken);
+
+  return deleted;
 }
 
 export async function copyToCDN(sourceKey: string, destinationKey: string): Promise<string> {

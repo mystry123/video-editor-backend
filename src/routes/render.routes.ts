@@ -2,7 +2,7 @@ import { Router, type Router as ExpressRouter } from 'express';
 import { requireAuth } from '../middleware/auth.middleware';
 import { renderLimiter, progressLimiter } from '../middleware/rateLimit.middleware';
 import { validate } from '../middleware/validate.middleware';
-import { checkRenderQuota, attachUsageSummary } from '../middleware/quota.middleware';
+import { checkRenderQuota, checkReframeRenderQuota, attachUsageSummary } from '../middleware/quota.middleware';
 import * as renderController from '../controllers/render.controller';
 import { startRenderSchema } from '../validators/render.validator';
 
@@ -12,7 +12,7 @@ router.use(requireAuth);
 // router.use(attachUsageSummary);
 
 router.post('/', renderLimiter, checkRenderQuota, validate(startRenderSchema), renderController.startRender);
-router.post('/reframe', renderLimiter, checkRenderQuota, renderController.startReframeRender);
+router.post('/reframe', renderLimiter, checkReframeRenderQuota, renderController.startReframeRender);
 router.get('/', renderController.listRenderJobs);
 router.get('/:id', renderController.getRenderStatus);
 router.get('/:id/progress', progressLimiter, renderController.streamProgress);

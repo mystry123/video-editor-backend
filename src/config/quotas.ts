@@ -17,7 +17,11 @@ export interface UserQuota {
   maxCustomPresets: number;          // How many custom presets
   priorityRendering: boolean;        // Priority queue for rendering
   watermarkFree: boolean;            // No watermark on exports
+  /** What happens when a render is above maxResolution. */
+  overResolution: OverResolutionPolicy;
 }
+
+export type OverResolutionPolicy = 'downscale' | 'block';
 
 export const USER_QUOTAS: Record<string, UserQuota> = {
   free: {
@@ -39,6 +43,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxCustomPresets: 0,
     priorityRendering: false,
     watermarkFree: false,
+    overResolution: 'downscale',
   },
   pro: {
     // Existing
@@ -59,6 +64,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxCustomPresets: 10,
     priorityRendering: false,
     watermarkFree: true,
+    overResolution: 'downscale',
   },
   team: {
     // Existing
@@ -79,6 +85,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxCustomPresets: -1,              // Unlimited
     priorityRendering: true,
     watermarkFree: true,
+    overResolution: 'downscale',
   },
   admin: {
     // Existing
@@ -99,11 +106,55 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxCustomPresets: -1,
     priorityRendering: true,
     watermarkFree: true,
+    overResolution: 'downscale',
   },
 };
 
+// ============================================================================
+// Plan resolution
+//
+// Plans live in the `plans` collection (editable from the admin settings) and
+// are cached in memory by services/plan.service.ts, which registers itself
+// here. USER_QUOTAS above is the seed and the fallback if the cache is empty.
+// ============================================================================
+
+type PlanResolver = (planKey: string) => UserQuota | undefined;
+let planResolver: PlanResolver | null = null;
+
+export function setPlanResolver(resolver: PlanResolver): void {
+  planResolver = resolver;
+}
+
+/** Limits for a plan, without any per-user overrides. */
 export function getUserQuota(role: string): UserQuota {
-  return USER_QUOTAS[role] || USER_QUOTAS.free;
+  return planResolver?.(role) || USER_QUOTAS[role] || USER_QUOTAS.free;
+}
+
+export interface PlanOverride {
+  _id?: unknown;
+  field: keyof UserQuota | string;
+  value: unknown;
+  expiresAt?: Date | null;
+  note?: string;
+}
+
+export function isOverrideActive(override: PlanOverride, now = new Date()): boolean {
+  return !override.expiresAt || new Date(override.expiresAt) > now;
+}
+
+/**
+ * Limits that actually apply to this user: their plan, with any unexpired
+ * per-user overrides on top. Use this wherever a user document is available.
+ */
+export function getEffectiveQuota(user: { role: string; planOverrides?: PlanOverride[] }): UserQuota {
+  const quota: UserQuota = { ...getUserQuota(user.role) };
+  const now = new Date();
+  for (const override of user.planOverrides || []) {
+    if (isOverrideActive(override, now) && override.field in quota) {
+      (quota as any)[override.field] = override.value;
+    }
+  }
+  return quota;
 }
 
 // Helper to check if a value is unlimited

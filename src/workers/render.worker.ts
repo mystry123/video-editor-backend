@@ -19,6 +19,29 @@ interface RenderJobData {
 }
 
 // ============================================================================
+// Helper: user-facing render error
+// ============================================================================
+
+/**
+ * Turns a raw Remotion/Lambda error into something safe and useful to show.
+ * Raw messages can contain AWS ARNs and stack frames, so only known patterns
+ * pass through and everything else gets a generic message.
+ */
+function describeRenderError(raw?: string): string {
+  const msg = raw || '';
+  if (/404|not found|failed to load|error loading|ERR_NAME_NOT_RESOLVED|could not be loaded/i.test(msg)) {
+    return 'A media file in this project could not be loaded. Re-upload it or remove it, then render again.';
+  }
+  if (/timeout|timed out/i.test(msg)) {
+    return 'The render took too long. Try a shorter video or fewer effects.';
+  }
+  if (/font/i.test(msg)) {
+    return 'A font in this project could not be loaded. Pick a different font and render again.';
+  }
+  return 'The render failed while processing the video. Try again, and contact support if it keeps failing.';
+}
+
+// ============================================================================
 // Helper: Poll and Complete
 // ============================================================================
 
@@ -66,6 +89,19 @@ async function pollAndComplete(
       await RenderJob.updateOne({ _id: jobId }, updateData);
 
       if (i % 5 === 0) log.info(`Progress: ${pct}%`);
+
+      // Lambda gave up — fail now with the real reason instead of polling
+      // until the 20-minute timeout.
+      if (progress.fatalErrorEncountered) {
+        const fatal = progress.errors?.find((e: any) => e?.isFatal) || progress.errors?.[0];
+        const reason = describeRenderError(fatal?.message);
+        log.error(`Fatal render error: ${fatal?.message || 'unknown'}`);
+        await RenderJob.updateOne(
+          { _id: jobId, status: 'rendering' },
+          { status: 'failed', error: reason, completedAt: new Date() }
+        );
+        return { error: 'fatal', message: reason };
+      }
 
       // Check completion
       if (progress.done && progress.outputFile) {

@@ -9,6 +9,7 @@ import captionRoutes from './caption.routes';
 import captionPresetRoutes from './captionpreset.routes';
 import projectRoutes from './project.routes';
 import reframeRoutes from './reframe.routes';
+import adminRoutes from './admin.routes';
 const router: ExpressRouter = Router();
 
 router.use('/auth', authRoutes);
@@ -22,5 +23,6 @@ router.use('/caption-presets', captionPresetRoutes);
 router.use('/caption', captionRoutes);
 router.use('/projects',projectRoutes)
 router.use('/reframe', reframeRoutes);
+router.use('/admin', adminRoutes);
 
 export default router;

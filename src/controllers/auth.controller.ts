@@ -560,7 +560,8 @@ export const changePassword = async (
     // Verify current password
     const isMatch = await user.comparePassword(currentPassword);
     if (!isMatch) {
-      throw ApiError.unauthorized('Current password is incorrect');
+      // 400, not 401: a 401 means "session expired" to the frontend and triggers a token refresh.
+      throw ApiError.withCode(400, 'WRONG_PASSWORD', 'Your current password is incorrect.');
     }
 
     // Update password and clear all sessions
@@ -805,53 +806,17 @@ export const getMe = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const user = await User.findById(req.userId);
+    const user = await User.findById(req.userId).select('+password');
     if (!user) {
       throw ApiError.notFound('User not found');
     }
 
-    res.json(formatUserResponse(user, true));
-  } catch (error) {
-    next(error);
-  }
-};
-
-// PUT /auth/me
-export const updateMe = async (
-  req: AuthRequest,
-  res: Response,
-  next: NextFunction
-): Promise<void> => {
-  try {
-    const { name, avatarUrl } = req.body;
-
-    const user = await User.findByIdAndUpdate(
-      req.userId,
-      { name, avatarUrl },
-      { new: true }
-    );
-
-    if (!user) {
-      throw ApiError.notFound('User not found');
-    }
-
-    res.json(formatUserResponse(user));
-  } catch (error) {
-    next(error);
-  }
-};
-
-// DELETE /auth/me
-export const deleteMe = async (
-  req: AuthRequest,
-  res: Response,
-  next: NextFunction
-): Promise<void> => {
-  try {
-    await User.findByIdAndDelete(req.userId);
-    await ApiKey.deleteMany({ userId: req.userId });
-
-    res.json({ message: 'Account deleted successfully' });
+    res.json({
+      ...formatUserResponse(user, true),
+      // Lets settings offer "Set password" to accounts that only use Google/Apple/Facebook.
+      hasPassword: !!user.password,
+      lastLoginAt: user.lastLoginAt,
+    });
   } catch (error) {
     next(error);
   }

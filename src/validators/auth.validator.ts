@@ -74,8 +74,31 @@ export const oauthTokenSchema = z.object({
 
 export const updateProfileSchema = z.object({
   body: z.object({
-    name: z.string().min(2).max(100).optional(),
+    name: z.string().trim().min(2, 'Name must be at least 2 characters').max(80, 'Name can be up to 80 characters').optional(),
     avatarUrl: z.string().url().optional().or(z.literal('')),
+  }),
+});
+
+export const setPasswordSchema = z.object({
+  body: z.object({
+    password: z
+      .string()
+      .min(8, 'Password must be at least 8 characters')
+      .regex(passwordRegex, passwordMessage),
+  }),
+});
+
+export const avatarUploadSchema = z.object({
+  body: z.object({
+    mimeType: z.string().min(1),
+    size: z.number().int().positive(),
+  }),
+});
+
+export const deleteAccountSchema = z.object({
+  body: z.object({
+    confirmEmail: z.string().min(1, 'Type your email to confirm'),
+    password: z.string().optional(),
   }),
 });
 

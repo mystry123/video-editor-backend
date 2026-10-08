@@ -1,6 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { Types } from 'mongoose';
-import { getUserQuota, isUnlimited, UserQuota } from '../config/quotas';
+import { getEffectiveQuota, getUserQuota, isUnlimited, UserQuota, type PlanOverride } from '../config/quotas';
+import { Template } from '../models/Template';
+import { File as FileModel } from '../models/File';
 
 // ============================================================================
 // Types & Interfaces
@@ -12,6 +14,7 @@ export interface AuthenticatedRequest extends Request {
     role: string;
     email: string;
     plan?: string;
+    planOverrides?: PlanOverride[];
   };
   userId?: string;
   file?: {
@@ -125,11 +128,10 @@ export function initializeQuotaMiddleware(fetchers: Partial<UsageFetchers>): voi
 // Core Quota Check Functions
 // ============================================================================
 
-function getStartOfMonth(): Date {
-  const date = new Date();
-  date.setDate(1);
-  date.setHours(0, 0, 0, 0);
-  return date;
+// UTC so the monthly boundary doesn't depend on the server's timezone.
+export function getStartOfMonth(): Date {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }
 
 const quotaCheckers: Record<
@@ -427,12 +429,14 @@ function formatDuration(seconds: number): string {
 // Middleware Factory
 // ============================================================================
 
+export interface QuotaRequestContext {
+  value?: number;
+  resolution?: string;
+}
+
 export interface QuotaCheckOptions {
   checks: QuotaCheckType[];
-  getContext?: (req: AuthenticatedRequest) => {
-    value?: number;
-    resolution?: string;
-  };
+  getContext?: (req: AuthenticatedRequest) => QuotaRequestContext | Promise<QuotaRequestContext>;
   failFast?: boolean; // Stop on first failure (default: false, check all)
 }
 
@@ -452,8 +456,8 @@ export function checkQuota(options: QuotaCheckOptions) {
       }
 
       const userId = req.user._id.toString();
-      const quota = getUserQuota(req.user.role);
-      const context = options.getContext?.(req) || {};
+      const quota = getEffectiveQuota(req.user);
+      const context = (await options.getContext?.(req)) || {};
       
       const results: Record<string, QuotaCheckResult> = {};
       const errors: Array<{ check: string; result: QuotaCheckResult }> = [];
@@ -541,12 +545,42 @@ export const checkTemplateQuota = checkQuota({
 });
 
 // Render (existing system)
+//
+// Duration comes from the stored template, never from the request body — the
+// client doesn't send it, and a client-supplied value could be forged.
+// Resolution is not checked here: renders above the plan's maximum are
+// downscaled by the controller instead of rejected.
 export const checkRenderQuota = checkQuota({
-  checks: ['renderMinutes', 'resolution'],
-  getContext: (req) => ({
-    value: req.body?.duration || req.videoMetadata?.duration || 0,
-    resolution: req.body?.resolution || '1080p',
-  }),
+  checks: ['renderMinutes'],
+  getContext: async (req) => {
+    const templateId = req.body?.templateId;
+    if (!templateId || !req.user || !Types.ObjectId.isValid(templateId)) return { value: 0 };
+
+    const template = await Template.findOne({
+      _id: templateId,
+      $or: [{ userId: req.user._id }, { isPublic: true }],
+    })
+      .select('data.project.duration')
+      .lean();
+
+    // A missing template is reported as 404 by the controller.
+    return { value: Number((template as any)?.data?.project?.duration) || 0 };
+  },
+});
+
+// Reframe render — duration comes from the source file's probed metadata.
+export const checkReframeRenderQuota = checkQuota({
+  checks: ['renderMinutes'],
+  getContext: async (req) => {
+    const fileId = req.body?.fileId;
+    if (!fileId || !req.user || !Types.ObjectId.isValid(fileId)) return { value: 0 };
+
+    const file = await FileModel.findOne({ _id: fileId, userId: req.user._id })
+      .select('metadata.duration')
+      .lean();
+
+    return { value: Number((file as any)?.metadata?.duration) || 0 };
+  },
 });
 
 // Transcription
@@ -633,7 +667,7 @@ export const attachUsageSummary = async (
     }
 
     const userId = req.user._id.toString();
-    const quota = getUserQuota(req.user.role);
+    const quota = getEffectiveQuota(req.user);
 
     const [
       storage,
@@ -741,5 +775,63 @@ export async function getQuotaStatus(
       captionExports,
       customPresets,
     },
+  };
+}
+// ============================================================================
+// Usage snapshot (for the settings page)
+// ============================================================================
+
+export interface UsageSnapshot {
+  renderMinutes: number;
+  transcriptionMinutes: number;
+  captionRenderMinutes: number;
+  captionExports: number;
+  storageBytes: number;
+  templates: number;
+  activeCaptionProjects: number;
+  customPresets: number;
+  periodStart: Date;
+  periodEnd: Date;
+}
+
+/**
+ * Current usage, read directly from the counters. Unlike the quota checkers
+ * this reports real numbers even when a limit is unlimited.
+ */
+export async function getUsageSnapshot(userId: string): Promise<UsageSnapshot> {
+  const periodStart = getStartOfMonth();
+  const periodEnd = new Date(Date.UTC(periodStart.getUTCFullYear(), periodStart.getUTCMonth() + 1, 1));
+
+  const [
+    renderMinutes,
+    transcriptionMinutes,
+    captionRenderMinutes,
+    captionExports,
+    storageBytes,
+    templates,
+    activeCaptionProjects,
+    customPresets,
+  ] = await Promise.all([
+    usageFetchers.getRenderMinutesUsed(userId, periodStart),
+    usageFetchers.getTranscriptionMinutesUsed(userId, periodStart),
+    usageFetchers.getCaptionRenderMinutesUsed(userId, periodStart),
+    usageFetchers.getCaptionExportsCount(userId, periodStart),
+    usageFetchers.getStorageUsed(userId),
+    usageFetchers.getTemplateCount(userId),
+    usageFetchers.getActiveCaptionProjects(userId),
+    usageFetchers.getCustomPresetsCount(userId),
+  ]);
+
+  return {
+    renderMinutes,
+    transcriptionMinutes,
+    captionRenderMinutes,
+    captionExports,
+    storageBytes,
+    templates,
+    activeCaptionProjects,
+    customPresets,
+    periodStart,
+    periodEnd,
   };
 }

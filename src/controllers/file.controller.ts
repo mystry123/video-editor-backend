@@ -4,7 +4,7 @@ import axios from 'axios';
 import { AuthRequest } from '../types';
 import { File } from '../models/File';
 import { User } from '../models/User';
-import { getUserQuota } from '../config/quotas';
+import { getEffectiveQuota } from '../config/quotas';
 import { createPresignedUpload, deleteFromS3 } from '../services/storage.service';
 import { quotaService } from '../services/quota.service';
 import { ApiError } from '../utils/ApiError';
@@ -32,7 +32,7 @@ export const getUploadUrl = async (
     const user = await User.findById(userId);
     if (!user) throw ApiError.notFound('User not found');
 
-    const quota = getUserQuota(user.role);
+    const quota = getEffectiveQuota(user);
     if (quota.maxStorage !== -1 && user.storageUsed + size > quota.maxStorage) {
       throw ApiError.forbidden('Storage quota exceeded');
     }
@@ -342,7 +342,7 @@ export const importFromUrl = async (
     }
 
     // Check quota
-    const quota = getUserQuota(user.role);
+    const quota = getEffectiveQuota(user);
     if (quota.maxStorage !== -1 && contentLength > 0 && user.storageUsed + contentLength > quota.maxStorage) {
       throw ApiError.forbidden('Storage quota exceeded');
     }
@@ -456,7 +456,7 @@ export const importFromGoogleDrive = async (
     }
 
     // Check quota
-    const quota = getUserQuota(user.role);
+    const quota = getEffectiveQuota(user);
     if (quota.maxStorage !== -1 && finalSize > 0 && user.storageUsed + finalSize > quota.maxStorage) {
       throw ApiError.forbidden('Storage quota exceeded');
     }

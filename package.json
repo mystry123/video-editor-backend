@@ -10,7 +10,8 @@
     "start:workers": "ENABLE_WORKERS=true node dist/index.js",
     "lint": "eslint src/**/*.ts",
     "test": "jest",
-    "seed:presets": "tsx src/seeds/run.ts"
+    "seed:presets": "tsx src/seeds/run.ts",
+    "admin:grant": "tsx src/scripts/grant-admin.ts"
   },
   "keywords": [
     "video-editor",
