@@ -34,6 +34,8 @@ export interface IUser extends Document {
   
   // Refresh tokens (for token rotation)
   refreshTokens: string[];
+  /** Signs deliveries to per-render webhook URLs (X-Webhook-Signature). Hidden by default. */
+  webhookSigningSecret?: string;
   
   // Quota usage tracking
   quotaUsage: {
@@ -143,6 +145,7 @@ const UserSchema = new Schema<IUser>(
     
     // Password reset
     resetPasswordToken: { type: String, select: false },
+    webhookSigningSecret: { type: String, select: false },
     resetPasswordExpires: { type: Date, select: false },
     
     // Refresh tokens (store hashed)

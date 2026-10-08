@@ -3,6 +3,7 @@ import { AuthRequest, PaginationQuery } from '../types';
 import { RenderJob, IRenderJob, RenderStatus } from '../models/RenderJob';
 import { ApiError } from '../utils/ApiError';
 import { releaseAllUsage } from '../services/usage.service';
+import { deleteOutput, ensureShareTokens, outputFields } from '../services/renderOutput.service';
 import { CaptionProject } from '../models';
 
 // ============================================
@@ -53,7 +54,8 @@ function formatProjectResponse(project: any): ProjectResponse {
     resolution: '1920x1080', // Default resolution for caption projects
     fps: 30, // Default fps for caption projects
     renderId: project.renderJobId?.toString(),
-    outputUrl: project.outputUrl,
+    // The Shotline link (call ensureShareTokens first), never the storage URL.
+    outputUrl: outputFields(project).outputUrl,
     thumbnailUrl: project.thumbnailUrl,
     status: project.status,
     progress: project.progress,
@@ -216,7 +218,7 @@ export const getAll = async (
 
 
     // Format response
-    const formattedProjects = projects.map(formatProjectResponse);
+    const formattedProjects = (await ensureShareTokens(projects)).map(formatProjectResponse);
 
     const response: PaginatedProjectsResponse = {
       data: formattedProjects,
@@ -245,6 +247,7 @@ export const getOne = async (
       throw ApiError.notFound('Project not found');
     }
 
+    await ensureShareTokens([project]);
     res.json(formatProjectResponse(project));
   } catch (error) {
     next(error);
@@ -314,6 +317,7 @@ export const update = async (
       throw ApiError.notFound('Project not found');
     }
 
+    await ensureShareTokens([project]);
     res.json(formatProjectResponse(project));
   } catch (error) {
     next(error);
@@ -330,7 +334,7 @@ export const deleteProject = async (
     const { id } = req.params;
     const userId = req.userId!;
 
-    const project = await RenderJob.findOneAndDelete({ _id: id, userId });
+    const project = await RenderJob.findOneAndDelete({ _id: id, userId }).select('+outputBucket +outputKey');
 
     if (!project) {
       throw ApiError.notFound('Project not found');
@@ -338,6 +342,8 @@ export const deleteProject = async (
 
     // Refund anything still reserved for it (no-op once charged).
     await releaseAllUsage(String(project._id), 'deleted');
+    // Its file goes too, so the render's link stops working.
+    await deleteOutput(project as any);
 
     // TODO: Also delete associated files from S3 if needed
     // TODO: Cancel any ongoing renders
@@ -383,6 +389,7 @@ export const cancel = async (
     // TODO: Actually cancel the render job in Remotion Lambda
     // TODO: Clean up any resources
 
+    await ensureShareTokens([updatedProject!]);
     res.json(formatProjectResponse(updatedProject!));
   } catch (error) {
     next(error);
@@ -421,7 +428,7 @@ export const search = async (
       .limit(limit)
       .lean();
 
-    const formattedProjects = projects.map(formatProjectResponse);
+    const formattedProjects = (await ensureShareTokens(projects)).map(formatProjectResponse);
 
     const response: PaginatedProjectsResponse = {
       data: formattedProjects,

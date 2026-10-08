@@ -8,9 +8,10 @@ import { AuthRequest } from '../types';
 import { Webhook } from '../models/Webhook';
 import { WebhookLog } from '../models/WebhookLog';
 import { RenderJob } from '../models/RenderJob';
+import { Types } from 'mongoose';
+import { RENDER_TIMEOUT_MESSAGE, completeRender, describeRenderError, failRender } from '../services/renderLifecycle.service';
 import { User } from '../models/User';
-import { deliverWebhook } from '../services/webhook.service';
-import { generateThumbnailFromVideo } from '../services/thumbnail.service';
+import { deliverWebhook, getWebhookSigningSecret } from '../services/webhook.service';
 import { generateWebhookSecret } from '../utils/helpers';
 import { ApiError } from '../utils/ApiError';
 import { logger } from '../utils/logger';
@@ -62,8 +63,7 @@ export const handleRemotionWebhook = async (
     });
 
     // Fail closed: without a secret there's no way to tell Remotion from anyone
-    // else, so the endpoint doesn't exist. (Renders currently complete via the
-    // worker's polling; this endpoint is enabled with the webhook rework.)
+    // else, so the endpoint doesn't exist (renders then complete by polling).
     if (!env.remotionWebhookSecret) {
       sendError(req, res, 404, 'Not found', 'ROUTE_NOT_FOUND');
       return;
@@ -83,7 +83,7 @@ export const handleRemotionWebhook = async (
       return;
     }
 
-    const job = await RenderJob.findById(jobId).select('+webhookUrl');
+    const job = Types.ObjectId.isValid(String(jobId)) ? await RenderJob.findById(jobId) : null;
     if (!job) {
       logger.warn('Render job not found for webhook', { jobId });
       sendError(req, res, 404, 'Job not found', 'NOT_FOUND');
@@ -92,6 +92,8 @@ export const handleRemotionWebhook = async (
 
     // Even a correctly signed payload must match the job it claims to be about,
     // and may only point at our own storage.
+    // (The webhook can arrive before the worker saved renderId; customData's
+    // jobId, covered by the signature, identifies the job then.)
     if (job.renderId && payload.renderId && job.renderId !== payload.renderId) {
       logger.warn('Remotion webhook renderId mismatch', { jobId });
       sendError(req, res, 409, 'Render id does not match job', 'CONFLICT');
@@ -103,19 +105,37 @@ export const handleRemotionWebhook = async (
       return;
     }
 
-    // Handle based on type
+    // Outcomes are conditional transitions: a duplicate or late webhook is a no-op.
+    const id = String(job._id);
     switch (payload.type) {
-      case 'success':
-        await handleRemotionSuccess(job, payload);
+      case 'success': {
+        const outputUrl = payload.outputUrl || payload.outputFile;
+        if (!outputUrl) {
+          await failRender(id, describeRenderError(), 'render_failed');
+          break;
+        }
+        if (!job.renderId && payload.renderId) {
+          await RenderJob.updateOne({ _id: id, status: 'rendering' }, { renderId: payload.renderId, bucketName: payload.bucketName });
+        }
+        await completeRender(id, {
+          outputUrl,
+          stats: {
+            timeToFinish: payload.timeToFinish,
+            estimatedCost: payload.costs?.accruedSoFar,
+            costDisplay: payload.costs?.displayCost,
+            currency: payload.costs?.currency,
+          },
+        });
         break;
+      }
       case 'error':
-        await handleRemotionError(job, payload);
+        await failRender(id, describeRenderError(payload.errors?.[0]?.message), 'render_failed', { renderErrors: payload.errors });
         break;
       case 'timeout':
-        await handleRemotionTimeout(job, payload);
+        await failRender(id, RENDER_TIMEOUT_MESSAGE, 'render_timeout');
         break;
       default:
-        logger.warn('Unknown Remotion webhook type', { type: payload.type });
+        logger.warn('Unknown Remotion webhook type', { type: (payload as any).type });
     }
 
     res.status(200).json({ received: true });
@@ -125,141 +145,15 @@ export const handleRemotionWebhook = async (
   }
 };
 
-async function handleRemotionSuccess(job: any, payload: RemotionWebhookPayload): Promise<void> {
-  const jobId = job._id.toString();
-  const outputUrl = payload.outputUrl || payload.outputFile;
-
-  logger.info('Render success via webhook', {
-    jobId,
-    outputUrl,
-    timeToFinish: payload.timeToFinish,
-    cost: payload.costs?.displayCost,
-  });
-
-  if (!outputUrl) {
-    logger.error('Success webhook missing outputUrl', { jobId });
-    await RenderJob.updateOne({ _id: jobId }, { status: 'failed', error: 'No output URL' });
-    return;
-  }
-
-  // Generate thumbnail
-  let thumbnailUrl: string | undefined;
+// GET /webhooks/signing-secret - verifies X-Webhook-Signature on deliveries to
+// a render's webhookUrl: HMAC-SHA256 of the JSON body with this secret.
+export const getSigningSecret = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const result = await generateThumbnailFromVideo({
-      videoUrl: outputUrl,
-      renderId: payload.renderId,
-      timestamp: 1,
-      width: 640,
-    });
-    if (result.success) {
-      thumbnailUrl = result.thumbnailUrl;
-      logger.info('Thumbnail generated via webhook', { jobId, thumbnailUrl });
-    }
-  } catch (e: any) {
-    logger.error('Thumbnail failed', { jobId, error: e.message });
+    res.json({ secret: await getWebhookSigningSecret(req.userId!), algorithm: 'HMAC-SHA256', header: 'X-Webhook-Signature' });
+  } catch (error) {
+    next(error);
   }
-
-  // Update job
-  await RenderJob.updateOne(
-    { _id: jobId },
-    {
-      status: 'completed',
-      progress: 100,
-      outputUrl,
-      thumbnailUrl,
-      completedAt: new Date(),
-      timeToFinish: payload.timeToFinish,
-      outputSizeInBytes: payload.outputSizeInBytes,
-      lambdasInvoked: payload.lambdasInvoked,
-      framesRendered: payload.framesRendered,
-      estimatedCost: payload.costs?.accruedSoFar,
-      costDisplay: payload.costs?.displayCost,
-      currency: payload.costs?.currency,
-    }
-  );
-
-  // Send user webhook
-  if (job.webhookUrl) {
-    try {
-      await deliverWebhook(job.webhookUrl, {
-        event: 'render.completed',
-        jobId,
-        outputUrl,
-        thumbnailUrl,
-        stats: {
-          timeToFinish: payload.timeToFinish,
-          cost: payload.costs?.displayCost,
-          size: payload.outputSizeInBytes,
-        },
-      });
-      await RenderJob.updateOne({ _id: jobId }, { webhookSent: true });
-    } catch (e: any) {
-      logger.error('User webhook failed', { jobId, error: e.message });
-    }
-  }
-}
-
-async function handleRemotionError(job: any, payload: RemotionWebhookPayload): Promise<void> {
-  const jobId = job._id.toString();
-  const errorMessage = payload.errors?.[0]?.message || 'Unknown render error';
-
-  logger.error('Render failed via webhook', { jobId, errors: payload.errors });
-
-  await RenderJob.updateOne(
-    { _id: jobId },
-    {
-      status: 'failed',
-      error: errorMessage,
-      renderErrors: payload.errors,
-      completedAt: new Date(),
-    }
-  );
-
-  if (job.webhookUrl) {
-    try {
-      await deliverWebhook(job.webhookUrl, {
-        event: 'render.failed',
-        jobId,
-        error: errorMessage,
-      });
-      await RenderJob.updateOne({ _id: jobId }, { webhookSent: true });
-    } catch {
-      // Best-effort notification; the job's own status is already saved.
-    }
-  }
-}
-
-async function handleRemotionTimeout(job: any, payload: RemotionWebhookPayload): Promise<void> {
-  const jobId = job._id.toString();
-
-  logger.error('Render timeout via webhook', { jobId, renderId: payload.renderId });
-
-  await RenderJob.updateOne(
-    { _id: jobId },
-    {
-      status: 'failed',
-      error: 'Render timed out',
-      completedAt: new Date(),
-    }
-  );
-
-  if (job.webhookUrl) {
-    try {
-      await deliverWebhook(job.webhookUrl, {
-        event: 'render.failed',
-        jobId,
-        error: 'Render timed out',
-      });
-      await RenderJob.updateOne({ _id: jobId }, { webhookSent: true });
-    } catch {
-      // Best-effort notification; the job's own status is already saved.
-    }
-  }
-}
-
-// ============================================================================
-// USER WEBHOOK CRUD (unchanged)
-// ============================================================================
+};
 
 export const createWebhook = async (
   req: AuthRequest,

@@ -61,6 +61,11 @@ export const env = {
   // Sent as X-Internal-Token; must match the YOLO service's YOLO_SHARED_SECRET.
   yoloSharedSecret: process.env.YOLO_SHARED_SECRET || '',
   remotionWebhookSecret: process.env.REMOTION_WEBHOOK_SECRET || '',
+  // Public URL of POST /api/v1/webhooks/remotion. With the secret set, renders
+  // complete via Remotion's webhook instead of a worker polling Lambda.
+  remotionWebhookUrl: process.env.REMOTION_WEBHOOK_URL || '',
+  // Public base URL of this API; render links are <publicApiUrl>/r/<id>?t=...
+  publicApiUrl: process.env.PUBLIC_API_URL || `http://localhost:${process.env.PORT || 3000}`,
 
   
   
@@ -101,11 +106,16 @@ function checkEnvironment(): void {
   if (!process.env.JWT_REFRESH_SECRET || env.jwtRefreshSecret === DEV_JWT_REFRESH_SECRET) fatal.push('JWT_REFRESH_SECRET is not set');
   if (env.jwtSecret === env.jwtRefreshSecret) fatal.push('JWT_SECRET and JWT_REFRESH_SECRET must be different');
   if (!process.env.MONGODB_URI) fatal.push('MONGODB_URI is not set');
+  // Render links would point at localhost and be useless to users.
+  if (!process.env.PUBLIC_API_URL) fatal.push('PUBLIC_API_URL is not set (render links are built from it)');
 
   if (env.jwtSecret.length < 32 || env.jwtRefreshSecret.length < 32) warnings.push('JWT secrets should be at least 32 characters');
   if (env.corsOrigin === '*') warnings.push('CORS_ORIGIN is "*"; set it to the frontend origin(s)');
   if (!env.s3Bucket || !env.cdnUrl) warnings.push('S3_BUCKET / CDN_URL not set: uploads will fail');
   if (!env.remotionServeUrl || !env.remotionFunctionName) warnings.push('REMOTION_SERVE_URL / REMOTION_FUNCTION_NAME not set: renders will fail');
+  if (Boolean(env.remotionWebhookUrl) !== Boolean(env.remotionWebhookSecret)) {
+    warnings.push('Set both REMOTION_WEBHOOK_URL and REMOTION_WEBHOOK_SECRET to complete renders by webhook; until then workers poll Lambda');
+  }
 
   // The logger imports this module, so report with console here.
   for (const warning of warnings) console.warn(`[env] ${warning}`);

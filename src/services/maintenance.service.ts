@@ -12,6 +12,7 @@ import { Transcription } from '../models/Transcription';
 import { ACTIVE_CAPTION_STATES, CaptionProject } from '../models/Caption';
 import { UsageEntry } from '../models/Usage';
 import { releaseUsage, settleUsage } from './usage.service';
+import { checkRender, failRender, webhookMode } from './renderLifecycle.service';
 import { File } from '../models/File';
 import {
   getCaptionQueue,
@@ -63,25 +64,31 @@ async function sweepRenders(counts: Record<string, number>) {
     counts.rendersRequeued = (counts.rendersRequeued || 0) + 1;
   }
 
-  // "rendering" but nothing has updated it for a while: the worker polling it died.
-  const stale = await RenderJob.find({ status: 'rendering', updatedAt: { $lt: ago(STUCK_AFTER_MS) } })
-    .select('_id renderId startedAt')
+  // "rendering" but nothing has updated it for a while. In webhook mode
+  // that's normal between progress reads, so check Lambda directly (covers a
+  // lost webhook) after 2 minutes; in poll mode the worker polling it died.
+  const viaWebhook = webhookMode();
+  const stale = await RenderJob.find({ status: 'rendering', updatedAt: { $lt: ago(viaWebhook ? 2 * MINUTE : STUCK_AFTER_MS) } })
+    .select('_id status renderId bucketName startedAt')
     .limit(BATCH)
     .lean();
   for (const r of stale) {
     const id = String(r._id);
     if (await hasLiveJob(queue, `render-${id}`)) continue;
     const resumable = r.renderId && r.startedAt && r.startedAt > ago(RESUMABLE_RENDER_MS);
-    if (resumable) {
+    if (resumable && viaWebhook) {
+      try {
+        await checkRender(r);
+        counts.rendersChecked = (counts.rendersChecked || 0) + 1;
+      } catch (error: any) {
+        logger.warn('[Maintenance] Render check failed', { jobId: id, error: error.message });
+      }
+    } else if (resumable) {
       // The render worker resumes polling Remotion from renderId.
       await enqueueJob(queue, 'render', { jobId: id }, { jobId: `render-${id}` });
       counts.rendersResumed = (counts.rendersResumed || 0) + 1;
     } else {
-      await transition(RenderJob, id, ['rendering'], {
-        status: 'failed',
-        error: 'The render stopped unexpectedly. Try again.',
-        completedAt: new Date(),
-      });
+      await failRender(id, 'The render stopped unexpectedly. Try again.', 'render_lost');
       counts.rendersFailed = (counts.rendersFailed || 0) + 1;
     }
   }

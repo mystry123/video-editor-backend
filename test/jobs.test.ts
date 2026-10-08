@@ -66,7 +66,7 @@ describe('isFinalAttempt', () => {
 describe('when the queue is down', () => {
   it('a render request fails fast with 503 and the job is marked failed', async () => {
     const { user, auth } = await createUser();
-    const t = await Template.create({ userId: user._id, name: 'T', data: { project: { width: 1280, height: 720, fps: 30, duration: 5 }, elements: [] } });
+    const t = await Template.create({ userId: user._id, name: 'T', data: { project: { width: 1280, height: 720, fps: 30, duration: 5 }, elements: [{ id: 't1', type: 'text', text: 'Hi' }] } });
     (renderQueue.getJob as any).mockRejectedValueOnce(new Error('Connection is closed'));
 
     const res = await api().post('/api/v1/render').set(auth).send({ templateId: String(t._id) });

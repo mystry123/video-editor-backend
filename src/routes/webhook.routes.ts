@@ -12,6 +12,8 @@ router.post('/remotion', webhookController.handleRemotionWebhook);
 // All other webhook routes require authentication
 router.use(requireAuth);
 
+// Secret that signs deliveries to a render's own webhookUrl (before /:id).
+router.get('/signing-secret', webhookController.getSigningSecret);
 router.post('/', validate(createWebhookSchema), webhookController.createWebhook);
 router.get('/', webhookController.listWebhooks);
 router.get('/:id', webhookController.getWebhook);

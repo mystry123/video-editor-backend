@@ -2,6 +2,8 @@
 import { enqueueJob, transition } from '../utils/jobs';
 import { releaseUsage, reserveUsage, settleUsage } from '../services/usage.service';
 import { Types } from 'mongoose';
+import { refreshIfStale } from '../services/renderLifecycle.service';
+import { ensureShareTokens, outputFields } from '../services/renderOutput.service';
 import { getEffectiveQuota } from '../config/quotas';
 
 import { Job } from 'bullmq';
@@ -84,10 +86,15 @@ async function waitForRender(
   const maxAttempts = 600; // 20 minutes
 
   for (let i = 0; i < maxAttempts; i++) {
-    const renderJob = await RenderJob.findById(renderJobId).lean();
+    let renderJob = await RenderJob.findById(renderJobId).lean();
 
     if (!renderJob) {
       return { success: false, error: 'Render job not found' };
+    }
+
+    // In webhook mode nothing else reads progress from Lambda while we wait.
+    if (await refreshIfStale(renderJob, 5000)) {
+      renderJob = (await RenderJob.findById(renderJobId).lean()) ?? renderJob;
     }
 
     // Update progress
@@ -97,9 +104,11 @@ async function waitForRender(
 
     if (renderJob.status === 'completed' && renderJob.outputUrl) {
       log.info('Render completed');
+      // Store the render's Shotline link: the file itself is private.
+      const [linked] = await ensureShareTokens([renderJob as any]);
       return {
         success: true,
-        outputUrl: renderJob.outputUrl,
+        outputUrl: outputFields(linked).outputUrl,
         thumbnailUrl: renderJob.thumbnailUrl,
       };
     }

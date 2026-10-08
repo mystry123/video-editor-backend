@@ -29,11 +29,14 @@ describe('templates', () => {
     const other = await createUser();
     const t = await Template.create({ userId: owner.user._id, name: 'Public', isPublic: true, data: { project, elements: [] } });
     await RenderJob.create({ userId: other.user._id, templateId: t._id, inputProps: {}, status: 'completed', outputUrl: 'https://x/other.mp4' });
-    await RenderJob.create({ userId: owner.user._id, templateId: t._id, inputProps: {}, status: 'completed', outputUrl: 'https://x/mine.mp4' });
+    const mine = await RenderJob.create({ userId: owner.user._id, templateId: t._id, inputProps: {}, status: 'completed', outputUrl: 'https://x/mine.mp4' });
 
     const res = await api().get(`/api/v1/templates/${t._id}/renders`).set(owner.auth);
     expect(res.status).toBe(200);
-    expect(res.body.data.map((r: any) => r.outputUrl)).toEqual(['https://x/mine.mp4']);
+    // Only the caller's render, as its Shotline link (never the storage URL).
+    expect(res.body.data.map((r: any) => r.id ?? r._id)).toEqual([String(mine._id)]);
+    expect(res.body.data[0].outputUrl).toMatch(new RegExp(`/r/${mine._id}\\?t=`));
+    expect(JSON.stringify(res.body)).not.toContain('https://x/');
   });
 
   it("can't be moved to another account through update", async () => {

@@ -15,6 +15,7 @@ import routes from './routes';
 import { env } from './config/env';
 import mongoose from 'mongoose';
 import { isRedisReady } from './config/redis';
+import renderLinkRoutes from './routes/renderLink.routes';
 import { openApiSpec } from './docs/openapi';
 
 import geoip from 'geoip-lite';
@@ -154,6 +155,8 @@ app.get('/api/v1/docs.json', (_req: Request, res: Response) => {
 // API ROUTES
 // ============================================
 
+// Render links live outside /api so they stay short: <PUBLIC_API_URL>/r/<id>?t=...
+app.use('/r', renderLinkRoutes);
 app.use('/api/v1', routes); // Re-enabled with only project routes
 
 
