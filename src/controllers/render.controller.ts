@@ -182,6 +182,7 @@ const ASPECT_DIMENSIONS: Record<string, { width: number; height: number }> = {
   '1:1': { width: 1080, height: 1080 },
   '4:5': { width: 1080, height: 1350 },
   '16:9': { width: 1920, height: 1080 },
+  '2:3': { width: 1080, height: 1620 },
 };
 
 export const startReframeRender = async (
@@ -217,14 +218,15 @@ export const startReframeRender = async (
       file.reframe?.get?.(reframeKey) ||
       (file.reframe && file.reframe[reframeKey]);
 
-    if (!reframeBlob || reframeBlob.status !== 'completed' || !reframeBlob.zones?.length) {
+    const isV2 = reframeBlob?.engine === 'v2' && reframeBlob?.result?.segments?.length;
+    if (!reframeBlob || reframeBlob.status !== 'completed' || (!isV2 && !reframeBlob.zones?.length)) {
       throw ApiError.badRequest(
         `No completed reframe data for ${aspectRatio}. Run AI Reframe first.`
       );
     }
 
-    const fps = reframeBlob.fps || 30;
-    const duration = file.metadata?.duration || 10;
+    const fps = (isV2 ? reframeBlob.result.source?.fps : reframeBlob.fps) || 30;
+    const duration = (isV2 ? reframeBlob.result.source?.duration : null) || file.metadata?.duration || 10;
 
     // Build a minimal Remotion-compatible inputProps that mirrors what a Template
     // would have produced: project settings sized to the target ratio, plus a
@@ -257,7 +259,7 @@ export const startReframeRender = async (
           fit: 'fill',
           visible: true,
           opacity: 1,
-          reframeData: {
+          reframeData: isV2 ? { engine: 'v2', activeRatio: aspectRatio, result: reframeBlob.result } : {
             activeRatio: aspectRatio,
             layoutType: reframeBlob.layoutDecision?.layout_type,
             reasoning: reframeBlob.layoutDecision?.reasoning,

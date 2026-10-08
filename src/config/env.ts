@@ -60,6 +60,10 @@ export const env = {
   yoloServiceUrl: process.env.YOLO_SERVICE_URL || 'http://localhost:8000',
   // Sent as X-Internal-Token; must match the YOLO service's YOLO_SHARED_SECRET.
   yoloSharedSecret: process.env.YOLO_SHARED_SECRET || '',
+  // Reframe engine v2 service (shotline-reframe). When set, AI reframe uses it
+  // instead of the YOLO service.
+  reframeServiceUrl: process.env.REFRAME_SERVICE_URL || '',
+  reframeServiceToken: process.env.REFRAME_SERVICE_TOKEN || '',
   remotionWebhookSecret: process.env.REMOTION_WEBHOOK_SECRET || '',
   // Public URL of POST /api/v1/webhooks/remotion. With the secret set, renders
   // complete via Remotion's webhook instead of a worker polling Lambda.
