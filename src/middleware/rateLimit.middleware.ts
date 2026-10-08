@@ -122,6 +122,14 @@ export const rateLimiter:RequestHandler = createLimiter({
 });
 
 // Render limiter - 100 renders/min per user
+// Public render links (/r/:id): generous, but stops token guessing.
+export const renderLinkLimiter: RequestHandler = createLimiter({
+  windowMs: 60 * 1000,
+  max: 120,
+  prefix: 'render-link',
+  message: 'Too many requests for render links. Try again in a minute.',
+});
+
 export const renderLimiter:RequestHandler = createLimiter({
   windowMs: 60 * 1000,
   max: 100,

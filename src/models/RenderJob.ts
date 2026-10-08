@@ -1,5 +1,6 @@
 // models/RenderJob.ts
 
+import { randomBytes } from 'crypto';
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
 export type RenderStatus = 'pending' | 'queued' | 'rendering' | 'completed' | 'failed' | 'cancelled';
@@ -8,6 +9,17 @@ export interface IRenderJob extends Document {
   _id: Types.ObjectId;
   userId: Types.ObjectId;
   templateId?: Types.ObjectId;
+  /** Template version this render was taken from. */
+  templateVersion?: number;
+  /** Client-chosen key: the same key returns the same job instead of starting another. */
+  idempotencyKey?: string;
+  /** Token in the render's Shotline link (/r/<id>?t=...). Hidden by default. */
+  shareToken?: string;
+  /** Where the (private) output file is stored. */
+  outputBucket?: string;
+  outputKey?: string;
+  /** When progress was last read from Lambda. */
+  lastProgressAt?: Date;
   captionProjectId?: Types.ObjectId;
   inputProps: any;
   outputFormat: string;
@@ -78,17 +90,26 @@ export interface IRenderJob extends Document {
   renderErrors?: any[];
 }
 
+/** Same as renderOutput.service's newShareToken (kept here to avoid a model → service import). */
+const newShareToken = () => randomBytes(24).toString('base64url');
+
 const RenderJobSchema = new Schema<IRenderJob>(
   {
     // Frontend-visible fields
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     templateId: { type: Schema.Types.ObjectId, ref: 'Template', index: true },
+    templateVersion: { type: Number },
+    idempotencyKey: { type: String },
     captionProjectId: { type: Schema.Types.ObjectId, ref: 'CaptionProject', index: true },
     outputFormat: { type: String, default: 'mp4' },
     resolution: { type: String, default: '1080p' },
     scale: { type: Number, default: 1, min: 0.1, max: 1 },
     fps: { type: Number, default: 30 },
     renderId: { type: String },
+    lastProgressAt: { type: Date },
+    shareToken: { type: String, select: false, default: () => newShareToken() },
+    outputBucket: { type: String, select: false },
+    outputKey: { type: String, select: false },
     outputUrl: { type: String },
     thumbnailUrl: { type: String },
     status: {
@@ -168,6 +189,12 @@ RenderJobSchema.index({ captionProjectId: 1, createdAt: -1 });
 RenderJobSchema.statics.findByIdWithAllFields = function(id: string) {
   return this.findById(id).select('+inputProps +bucketName +serveUrl +webhookUrl +webhookSent +estimatedCost +actualCost +costDisplay +currency +framesRendered +chunks +timeToRenderFrames +timeToFinish +timeToFinishChunks +timeToEncode +timeToCombine +combinedFrames +lambdasInvoked +outputSizeInBytes +estimatedBillingDurationInMilliseconds +fatalErrorEncountered +compositionValidated +functionLaunched +serveUrlOpened +timeoutTimestamp +renderSize +currentTime +type +outKey +outBucket +artifacts +renderMetadata +encodingStatus +cleanup +mostExpensiveFrameRanges +renderErrors');
 };
+
+// One job per (user, idempotency key).
+RenderJobSchema.index(
+  { userId: 1, idempotencyKey: 1 },
+  { unique: true, partialFilterExpression: { idempotencyKey: { $type: 'string' } } }
+);
 
 // Lists sort by newest first, per user and optionally by status.
 RenderJobSchema.index({ userId: 1, createdAt: -1 });

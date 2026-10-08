@@ -78,7 +78,7 @@ describe('usage ledger', () => {
 
 describe('render metering', () => {
   async function template(userId: unknown, duration: number) {
-    return Template.create({ userId, name: 'T', data: { project: { fps: 30, outputFormat: 'mp4', width: 1280, height: 720, duration }, elements: [] } });
+    return Template.create({ userId, name: 'T', data: { project: { fps: 30, outputFormat: 'mp4', width: 1280, height: 720, duration }, elements: [{ id: 't1', type: 'text', text: 'Hi' }] } });
   }
 
   it('reserves at start, refuses once the month is used up, and refunds on cancel', async () => {

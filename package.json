@@ -11,6 +11,7 @@
     "test": "vitest run",
     "seed:presets": "tsx src/seeds/run.ts",
     "admin:grant": "tsx src/scripts/grant-admin.ts",
+    "renders:privatize": "tsx src/scripts/privatize-render-outputs.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p .",
     "start:worker": "node dist/worker.js",

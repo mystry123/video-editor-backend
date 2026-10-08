@@ -5,6 +5,7 @@ import { TemplateVersion } from '../models/TemplateVersion';
 import { RenderJob } from '../models/RenderJob';
 import { User } from '../models/User';
 import { getEffectiveQuota } from '../config/quotas';
+import { ensureShareTokens, publicRender } from '../services/renderOutput.service';
 import { ApiError } from '../utils/ApiError';
 
 export const createTemplate = async (
@@ -396,7 +397,7 @@ export const getTemplateRenders = async (
         name: template.name,
         description: template.description,
       },
-      data: renders,
+      data: (await ensureShareTokens(renders)).map((render) => publicRender(render)),
       pagination: {
         page: pageNum,
         limit: limitNum,

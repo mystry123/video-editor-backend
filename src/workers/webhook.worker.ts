@@ -1,71 +1,36 @@
 // workers/webhook.worker.ts
+//
+// Delivers one queued webhook. A failed delivery throws, so BullMQ retries it
+// with the queue's backoff (5 attempts) instead of holding this slot.
 
 import { Job } from 'bullmq';
-import { deliverWebhook } from '../services/webhook.service';
-import { createWorker, createJobLogger, retryWithBackoff } from '../utils/worker.utils';
-import { logger } from '../utils/logger';
-
-// ============================================================================
-// Types
-// ============================================================================
-
-interface WebhookJobData {
-  webhookId?: string;
-  webhookUrl?: string;
-  payload: Record<string, any>;
-  event?: string;
-}
-
-// ============================================================================
-// Main Processor
-// ============================================================================
+import { deliverToUrl, deliverWebhook, type WebhookJobData } from '../services/webhook.service';
+import { RenderJob } from '../models/RenderJob';
+import { createWorker, createJobLogger } from '../utils/worker.utils';
 
 async function processWebhookJob(job: Job<WebhookJobData>) {
-  const { webhookId, webhookUrl, payload, event } = job.data;
-  const targetId = webhookId || webhookUrl || 'unknown';
-  const log = createJobLogger('Webhook', targetId.slice(-8));
+  const { webhookId, url, userId, payload, renderJobId } = job.data;
+  const log = createJobLogger('Webhook', String(webhookId || renderJobId || job.id).slice(-8));
 
-  log.info(`Delivering: ${event || 'unknown'}`);
-
-  // Validate
-  if (!webhookId && !webhookUrl) {
-    log.error('Missing target');
+  if (!payload || (!webhookId && !(url && userId))) {
+    log.error('Missing target or payload');
     return { success: false, error: 'Missing webhook target' };
   }
 
-  if (!payload) {
-    log.error('Missing payload');
-    return { success: false, error: 'Missing payload' };
+  const result = webhookId ? await deliverWebhook(webhookId, payload) : await deliverToUrl(userId!, url!, payload);
+  if (!result.success) {
+    log.warn(`Attempt ${job.attemptsMade + 1} failed: ${result.error}`);
+    throw new Error(result.error || 'Webhook delivery failed');
   }
-
-  try {
-    // Deliver with retry
-    await retryWithBackoff(
-      () => deliverWebhook(webhookId || webhookUrl!, payload),
-      {
-        maxRetries: 5,
-        initialDelay: 3000,
-        maxDelay: 60000,
-        onRetry: (err, attempt) => log.warn(`Retry ${attempt}: ${err.message}`),
-      }
-    );
-
-    log.info('Delivered');
-    return { success: true };
-  } catch (error: any) {
-    log.error(`Failed: ${error.message}`);
-    return { success: false, error: error.message };
-  }
+  if (renderJobId) await RenderJob.updateOne({ _id: renderJobId }, { webhookSent: true });
+  log.info(`Delivered ${payload.event}`);
+  return { success: true, statusCode: result.statusCode };
 }
-
-// ============================================================================
-// Create Worker
-// ============================================================================
 
 const webhookWorker = createWorker({
   name: 'webhooks',
   processor: processWebhookJob,
-  concurrency: 5,
+  concurrency: 10,
   lockDuration: 60000,
 });
 

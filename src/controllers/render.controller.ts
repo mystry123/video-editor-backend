@@ -9,13 +9,13 @@ import { User } from '../models/User';
 import { File as FileModel } from '../models/File';
 import { renderQueue } from '../queues';
 import { ApiError } from '../utils/ApiError';
-import { deepMerge, estimateRenderTime, getPriority } from '../utils/helpers';
+import { estimateRenderTime, getPriority } from '../utils/helpers';
+import { applyVariables, validateRenderInput } from '../services/renderInput.service';
+import { refreshIfStale } from '../services/renderLifecycle.service';
+import { ensureShareTokens, outputFields, publicRender } from '../services/renderOutput.service';
 import { logger } from '../utils/logger';
-import { assertPublicUrl } from '../utils/safeRequest';
 import { getEffectiveQuota } from '../config/quotas';
 import { planRenderOutput } from '../utils/renderDimensions';
-
-const MEDIA_ELEMENT_TYPES = new Set(['image', 'video', 'audio', 'gif', 'lottie']);
 
 /** Queues a render job; if the queue is unreachable, marks it failed and returns 503. */
 async function queueRender(jobId: string, priority: number): Promise<void> {
@@ -41,77 +41,20 @@ function assertResolutionAllowed(
   }
 }
 
-// Must match the codec map in services/render.service.ts.
-const SUPPORTED_OUTPUT_FORMATS = new Set(['mp4', 'webm', 'gif']);
+const IDEMPOTENCY_KEY = /^[A-Za-z0-9_-]{8,100}$/;
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-// Fields on media elements that the renderer (Chrome in Lambda) will fetch.
-const MEDIA_URL_FIELDS = ['src', 'source', 'url', 'poster'];
-
-/** Public http(s) URL: not file://, data:, a private IP or a local hostname. */
-function isPublicMediaUrl(value: unknown): value is string {
-  if (typeof value !== 'string') return false;
-  try {
-    assertPublicUrl(value);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Checks every URL field on a media element after overrides are applied. */
-function assertSafeMediaElement(element: any, variableName: string): void {
-  if (!MEDIA_ELEMENT_TYPES.has(element?.type)) return;
-  for (const field of MEDIA_URL_FIELDS) {
-    const value = element[field];
-    if (value !== undefined && value !== null && value !== '' && !isPublicMediaUrl(value)) {
-      throw ApiError.withCode(
-        400,
-        'INVALID_MEDIA_URL',
-        `variables.${variableName}: "${field}" must be a public http(s) URL.`
-      );
-    }
-  }
-}
-
-function applyVariablesToElements(
-  elements: any[],
-  variables: Record<string, unknown>
-): any[] {
-  if (!Array.isArray(elements)) return elements;
-
-  return elements.map((element) => {
-    if (!element || typeof element !== 'object') return element;
-    const name = element.name;
-    if (!name || !(name in variables)) return element;
-
-    const override = variables[name];
-    const elementType: string = element.type;
-
-    if (isPlainObject(override)) {
-      // Object overrides can set any field, so validate the merged result.
-      const merged = deepMerge(element, override);
-      assertSafeMediaElement(merged, name);
-      return merged;
-    }
-
-    if (elementType === 'text' || elementType === 'caption') {
-      return { ...element, text: String(override) };
-    }
-
-    if (MEDIA_ELEMENT_TYPES.has(elementType)) {
-      if (!isPublicMediaUrl(override)) {
-        throw ApiError.withCode(400, 'INVALID_MEDIA_URL', `variables.${name}: media override must be a public http(s) URL.`);
-      }
-      const srcKey = elementType === 'lottie' || elementType === 'gif' ? 'source' : 'src';
-      return { ...element, [srcKey]: override };
-    }
-
-    return { ...element, value: override };
-  });
+/** What every render start (new or repeated) returns. */
+function startResponse(job: any, output: { resolution: string; downscaled: boolean }, warnings: string[] = [], deduplicated = false) {
+  return {
+    id: job._id,
+    status: job.status,
+    estimatedTime: estimateRenderTime(job.inputProps || {}),
+    resolution: output.resolution,
+    downscaled: output.downscaled,
+    templateVersion: job.templateVersion,
+    ...(warnings.length > 0 ? { warnings } : {}),
+    ...(deduplicated ? { deduplicated: true } : {}),
+  };
 }
 
 export const startRender = async (
@@ -121,51 +64,57 @@ export const startRender = async (
 ): Promise<void> => {
   try {
     const userId = req.userId!;
-    const {
-      templateId,
-      webhookUrl,
-      variables,
-    } = req.body as {
-      templateId?: string;
+    const { templateId, webhookUrl, variables, version } = req.body as {
+      templateId: string;
       webhookUrl?: string | null;
       variables?: Record<string, unknown>;
+      version?: number;
     };
+    if (!templateId) throw ApiError.badRequest('templateId is required');
+
+    // A repeated request (double click, network retry) gets the job it already started.
+    const rawKey = req.get('Idempotency-Key') ?? req.body?.idempotencyKey;
+    const idempotencyKey = typeof rawKey === 'string' && rawKey !== '' ? rawKey : undefined;
+    if (idempotencyKey && !IDEMPOTENCY_KEY.test(idempotencyKey)) {
+      throw ApiError.withCode(400, 'INVALID_IDEMPOTENCY_KEY', 'Idempotency-Key must be 8-100 letters, digits, "-" or "_".');
+    }
+    const findRepeat = async () =>
+      idempotencyKey ? RenderJob.findOne({ userId, idempotencyKey }).select('+inputProps') : null;
+    const repeat = await findRepeat();
+    if (repeat) {
+      res.status(200).json(startResponse(repeat, { resolution: repeat.resolution, downscaled: (repeat.scale ?? 1) < 1 }, [], true));
+      return;
+    }
 
     const user = await User.findById(userId);
     if (!user) throw ApiError.notFound('User not found');
 
-    let inputProps;
-    let template = null;
+    const template = await Template.findOne({
+      _id: templateId,
+      $or: [{ userId: user._id }, { isPublic: true }],
+    });
+    if (!template) throw ApiError.notFound('Template not found');
 
-    if (templateId) {
-      template = await Template.findOne({
-        _id: templateId,
-        $or: [{ userId: user._id }, { isPublic: true }],
-      });
-
-      if (!template) throw ApiError.notFound('Template not found');
-
-      inputProps = JSON.parse(JSON.stringify(template.data));
-
-      await Template.updateOne({ _id: templateId }, { $inc: { usageCount: 1 } });
-    } else {
-      throw ApiError.badRequest('templateId is required');
+    // Render exactly the version the editor saved. If the template changed
+    // since (another tab, a slow save), the editor saves again and retries.
+    if (version !== undefined && version !== template.version) {
+      throw ApiError.withCode(
+        409,
+        'STALE_VERSION',
+        'The project changed since it was saved. Save again and retry.',
+        { currentVersion: template.version, requestedVersion: version }
+      );
     }
 
-    if (variables && Object.keys(variables).length > 0) {
-      inputProps.elements = applyVariablesToElements(inputProps.elements, variables);
-    }
+    // Snapshot of that version: later edits don't change this render.
+    const inputProps = JSON.parse(JSON.stringify(template.data || {}));
+    const applied = applyVariables(inputProps.elements, variables);
+    inputProps.elements = applied.elements;
+    validateRenderInput(inputProps);
 
-    // Get render settings from template project settings or use defaults
-    const project = template?.data?.project || {};
-    const fps = project.fps || 30;
+    const project = inputProps.project;
+    const fps = Number(project.fps) || 30;
     const outputFormat = project.outputFormat || 'mp4';
-    if (!SUPPORTED_OUTPUT_FORMATS.has(outputFormat)) {
-      throw new ApiError(422, `Exporting as ${outputFormat} isn't supported yet. Choose MP4, WebM or GIF.`);
-    }
-    if (!(Number(project.duration) > 0) || !(Number(project.width) > 0) || !(Number(project.height) > 0)) {
-      throw new ApiError(422, 'This project has no duration or size set. Add content to the timeline and try again.');
-    }
 
     // Plans cap output resolution: above the cap is downscaled or blocked,
     // depending on the plan's policy.
@@ -178,32 +127,42 @@ export const startRender = async (
     const renderJobId = new Types.ObjectId();
     await reserveUsage(user._id, 'renderMinutes', String(renderJobId), Number(project.duration), quota.maxRenderMinutes);
 
-    const renderJob = await RenderJob.create({
-      _id: renderJobId,
-      userId: user._id,
-      templateId: template?._id,
-      inputProps,
-      outputFormat,
-      resolution: output.resolution,
-      scale: output.scale,
-      fps,
-      renderType: 'Template',
-      webhookUrl,
-      variables: variables && Object.keys(variables).length > 0 ? variables : undefined,
-      status: 'pending',
-    });
+    let renderJob;
+    try {
+      renderJob = await RenderJob.create({
+        _id: renderJobId,
+        userId: user._id,
+        templateId: template._id,
+        templateVersion: template.version,
+        idempotencyKey,
+        inputProps,
+        outputFormat,
+        resolution: output.resolution,
+        scale: output.scale,
+        fps,
+        renderType: 'Template',
+        webhookUrl,
+        variables: variables && Object.keys(variables).length > 0 ? variables : undefined,
+        status: 'pending',
+      });
+    } catch (error: any) {
+      await releaseUsage('renderMinutes', String(renderJobId), 'not_created');
+      // A parallel request with the same key won the race: return its job.
+      const winner = error?.code === 11000 ? await findRepeat() : null;
+      if (winner) {
+        res.status(200).json(startResponse(winner, output, [], true));
+        return;
+      }
+      throw error;
+    }
 
     await queueRender(renderJob._id.toString(), getPriority(user.role));
+    await Template.updateOne({ _id: template._id }, { $inc: { usageCount: 1 } });
 
-    logger.info('Job added to render queue', { jobId: renderJob._id.toString() });
+    logger.info('Job added to render queue', { jobId: renderJob._id.toString(), templateVersion: template.version });
 
-    res.status(202).json({
-      id: renderJob._id,
-      status: renderJob.status,
-      estimatedTime: estimateRenderTime(inputProps),
-      resolution: output.resolution,
-      downscaled: output.downscaled,
-    });
+    const warnings = applied.unmatched.map((name) => `Variable "${name}" doesn't match any element name, so it was ignored.`);
+    res.status(202).json(startResponse(renderJob, output, warnings));
   } catch (error) {
     next(error);
   }
@@ -359,15 +318,22 @@ export const getRenderStatus = async (
     const user = await User.findById(userId);
     if (!user) throw ApiError.notFound('User not found');
 
-    const job = await RenderJob.findOne({ _id: id, userId: user._id });
+    let job = await RenderJob.findOne({ _id: id, userId: user._id });
     if (!job) throw ApiError.notFound('Render job not found');
 
+    // While someone is watching, read fresh progress from Lambda (throttled).
+    // In webhook mode nothing else updates it, and this also completes a
+    // render whose webhook got lost.
+    if (await refreshIfStale(job)) {
+      job = (await RenderJob.findById(job._id)) ?? job;
+    }
 
+    const [linked] = await ensureShareTokens([job.toObject()]);
     res.json({
       id: job._id,
       status: job.status,
       progress: job.progress,
-      outputUrl: job.outputUrl,
+      ...outputFields(linked),
       error: job.error,
       startedAt: job.startedAt,
       completedAt: job.completedAt,
@@ -410,12 +376,13 @@ export const streamProgress = async (
           return;
         }
 
+        const [linked] = await ensureShareTokens([job.toObject()]);
         res.write(
           `data: ${JSON.stringify({
             id: job._id,
             status: job.status,
             progress: job.progress,
-            outputUrl: job.outputUrl,
+            ...outputFields(linked),
             error: job.error,
           })}\n\n`
         );
@@ -515,8 +482,9 @@ export const listRenderJobs = async (
       RenderJob.countDocuments(query),
     ]);
 
+    await ensureShareTokens(jobs);
     res.json({
-      data: jobs,
+      data: jobs.map((job) => publicRender(job)),
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -536,7 +504,8 @@ export const zapierRender = async (
   next: NextFunction
 ): Promise<void> => {
   req.body.templateId = req.body.template_id;
-  req.body.dynamicData = req.body.dynamic_data;
+  // Zapier's dynamic data are the template variables.
+  req.body.variables = req.body.variables ?? req.body.dynamic_data;
   req.body.webhookUrl = req.body.webhook_url;
 
   return startRender(req, res, next);
@@ -558,12 +527,19 @@ export const zapierPoll = async (
     if (!job) throw ApiError.notFound('Job not found');
 
     if (job.status === 'completed') {
+      const [linked] = await ensureShareTokens([job.toObject()]);
       res.json({
         id: job._id,
         status: 'complete',
-        output_url: job.outputUrl,
+        output_url: outputFields(linked).outputUrl,
         completed_at: job.completedAt,
       });
+      return;
+    }
+
+    if (job.status === 'failed' || job.status === 'cancelled') {
+      // A final state: tell Zapier so it stops polling.
+      res.json({ id: job._id, status: job.status, error: job.error || (job.status === 'cancelled' ? 'The render was cancelled.' : 'The render failed.') });
       return;
     }
 

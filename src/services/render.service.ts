@@ -67,7 +67,14 @@ export async function startRemotionRender(job: any): Promise<RenderResult> {
     crf: 18,
     // yuv420p is only valid for h264; vp8/gif pick their own pixel format.
     ...(codec === 'h264' ? { pixelFormat: 'yuv420p' as const } : {}),
-    privacy: 'public',
+    // Private: users get a Shotline link that redirects to a signed URL
+    // (services/renderOutput.service.ts), never the bucket itself.
+    privacy: 'private',
+    // Webhook mode: Remotion calls us when the render ends (signed with the
+    // secret); customData lets us match the job even before renderId is saved.
+    ...(env.remotionWebhookUrl && env.remotionWebhookSecret
+      ? { webhook: { url: env.remotionWebhookUrl, secret: env.remotionWebhookSecret, customData: { jobId: String(job._id) } } }
+      : {}),
   });
 
   logger.info('Render started', {

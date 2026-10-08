@@ -9,7 +9,7 @@ async function template(userId: unknown, project: Record<string, unknown>) {
   return Template.create({
     userId,
     name: 'T',
-    data: { project: { fps: 30, outputFormat: 'mp4', ...project }, elements: [] },
+    data: { project: { fps: 30, outputFormat: 'mp4', ...project }, elements: [{ id: 't1', type: 'text', text: 'Hi' }] },
   });
 }
 
