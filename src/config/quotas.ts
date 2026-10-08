@@ -13,6 +13,8 @@ export interface UserQuota {
   allowedCaptionResolutions: string[]; // Which resolutions can they use
   maxVideoUploadSize: number;        // Max video file size for captions
   maxVideoDuration: number;          // Max video duration in seconds
+  /** Longest video AI reframe accepts, in seconds (the YOLO service times out on longer ones). */
+  maxReframeSeconds: number;
   customPresetsAllowed: boolean;     // Can create custom presets
   maxCustomPresets: number;          // How many custom presets
   priorityRendering: boolean;        // Priority queue for rendering
@@ -39,6 +41,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     allowedCaptionResolutions: ['720p'],
     maxVideoUploadSize: 100 * 1024 * 1024, // 100MB
     maxVideoDuration: 60,              // 1 minute max
+    maxReframeSeconds: 300,
     customPresetsAllowed: false,
     maxCustomPresets: 0,
     priorityRendering: false,
@@ -60,6 +63,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     allowedCaptionResolutions: ['720p', '1080p'],
     maxVideoUploadSize: 500 * 1024 * 1024, // 500MB
     maxVideoDuration: 600,             // 10 minutes max
+    maxReframeSeconds: 300,
     customPresetsAllowed: true,
     maxCustomPresets: 10,
     priorityRendering: false,
@@ -81,6 +85,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     allowedCaptionResolutions: ['720p', '1080p', '4k'],
     maxVideoUploadSize: 2 * 1024 * 1024 * 1024, // 2GB
     maxVideoDuration: 3600,            // 1 hour max
+    maxReframeSeconds: 300,
     customPresetsAllowed: true,
     maxCustomPresets: -1,              // Unlimited
     priorityRendering: true,
@@ -102,6 +107,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     allowedCaptionResolutions: ['720p', '1080p', '4k'],
     maxVideoUploadSize: -1,
     maxVideoDuration: -1,
+    maxReframeSeconds: 300,
     customPresetsAllowed: true,
     maxCustomPresets: -1,
     priorityRendering: true,

@@ -6,7 +6,6 @@ import transcriptionRoutes from './transcription.routes';
 import renderRoutes from './render.routes';
 import webhookRoutes from './webhook.routes';
 import captionRoutes from './caption.routes';
-import captionPresetRoutes from './captionpreset.routes';
 import projectRoutes from './project.routes';
 import reframeRoutes from './reframe.routes';
 import adminRoutes from './admin.routes';
@@ -19,7 +18,7 @@ router.use('/files', fileRoutes);
 router.use('/transcriptions', transcriptionRoutes);
 router.use('/render', renderRoutes);
 router.use('/webhooks', webhookRoutes);
-router.use('/caption-presets', captionPresetRoutes);
+// (The unauthenticated /caption-presets router was removed: presets live at /caption/presets.)
 router.use('/caption', captionRoutes);
 router.use('/projects',projectRoutes)
 router.use('/reframe', reframeRoutes);

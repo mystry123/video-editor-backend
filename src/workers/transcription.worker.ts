@@ -58,7 +58,8 @@ async function processTranscriptionJob(job: Job<TranscriptionJobData>) {
 
   try {
     // Update status
-    await Transcription.updateOne({ _id: transcriptionId }, { status: 'processing' });
+    // Only a transcription still waiting moves to processing (never an edited one).
+    await Transcription.updateOne({ _id: transcriptionId, status: { $in: ['pending', 'processing'] } }, { status: 'processing' });
 
     log.info('Calling ElevenLabs...');
 
@@ -81,8 +82,9 @@ async function processTranscriptionJob(job: Job<TranscriptionJobData>) {
     // marks it completed. Without the guard this write would silently replace
     // their edits with the machine transcript.
     await Transcription.updateOne(
-      { _id: transcriptionId, status: { $ne: 'completed' } },
+      { _id: transcriptionId, status: { $ne: 'completed' }, isEdited: { $ne: true } },
       {
+        $unset: { error: '' },
         status: 'completed',
         text: result.text,
         words: result.words,

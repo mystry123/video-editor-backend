@@ -1078,35 +1078,35 @@ const CAPTION_PRESETS = [
   },
 ];
 
+export const presetSlug = (name: string) =>
+  name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+/**
+ * Idempotent: upserts each system preset by slug, so changes to the list
+ * (new fields such as wordsPerLine, restyles) reach existing databases. The
+ * first preset is the default. Presets seeded before slugs existed are
+ * matched by name once and given their slug.
+ */
 export async function seedCaptionPresets(): Promise<void> {
   try {
     logger.info('Starting caption presets seed...');
-
-    // Idempotent: only insert presets that are not already there. A plain
-    // insertMany would add a fresh duplicate set every time this ran.
-    const existingNames = new Set(
-      (await CaptionPreset.find({}, { name: 1 }).lean()).map((p) => p.name)
-    );
-    const missing = CAPTION_PRESETS.filter((p) => !existingNames.has(p.name));
-
-    if (missing.length === 0) {
-      logger.info(
-        `Caption presets already seeded (${existingNames.size} present) - nothing to do`
+    let created = 0;
+    let updated = 0;
+    for (const [index, preset] of CAPTION_PRESETS.entries()) {
+      const slug = presetSlug(preset.name);
+      const fields = { ...preset, slug, isSystem: true, isDefault: index === 0 };
+      const legacy = await CaptionPreset.findOne({ slug: { $exists: false }, isSystem: true, name: preset.name }).select('_id').lean();
+      const result = await CaptionPreset.updateOne(
+        legacy ? { _id: legacy._id } : { slug },
+        { $set: fields },
+        { upsert: true, runValidators: true }
       );
-      return;
+      if (result.upsertedCount) created++;
+      else if (result.modifiedCount) updated++;
     }
-
-    // Insert new presets
-    const insertedPresets = await CaptionPreset.insertMany(missing);
-    logger.info(`Inserted ${insertedPresets.length} caption presets`);
-
-    // Log preset names
-    const presetNames = insertedPresets.map(p => p.name);
-    logger.info(`Seeded presets: ${presetNames.join(', ')}`);
-
+    logger.info(`Caption presets seeded: ${created} created, ${updated} updated, ${CAPTION_PRESETS.length} total`);
   } catch (error) {
     logger.error('Error seeding caption presets:', error);
     throw error;
   }
 }
-

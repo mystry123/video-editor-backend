@@ -7,6 +7,7 @@ import { AuthRequest } from '../types';
 import { File } from '../models/File';
 import { User } from '../models/User';
 import { reframeQueue } from '../queues';
+import { getEffectiveQuota } from '../config/quotas';
 import { ApiError } from '../utils/ApiError';
 import { logger } from '../utils/logger';
 
@@ -41,6 +42,18 @@ export const createReframe = async (
 
     if (!file.mimeType?.startsWith('video/')) {
       throw ApiError.badRequest('File must be a video');
+    }
+
+    // Long videos time out in the detection service: refuse them up front.
+    const maxSeconds = getEffectiveQuota(user).maxReframeSeconds;
+    const duration = Number(file.metadata?.duration) || 0;
+    if (maxSeconds !== -1 && duration > maxSeconds) {
+      throw ApiError.withCode(
+        403,
+        'REFRAME_TOO_LONG',
+        `AI reframe works on videos up to ${Math.round(maxSeconds / 60)} minutes. Trim this one (${Math.ceil(duration / 60)} min) and try again.`,
+        { duration, limit: maxSeconds }
+      );
     }
 
     // Check if already processed for this ratio

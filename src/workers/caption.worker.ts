@@ -1,5 +1,5 @@
 // workers/caption.worker.ts
-import { enqueueJob, transition } from '../utils/jobs';
+import { enqueueJob, isFinalAttempt, transition } from '../utils/jobs';
 import { releaseUsage, reserveUsage, settleUsage } from '../services/usage.service';
 import { Types } from 'mongoose';
 import { refreshIfStale } from '../services/renderLifecycle.service';
@@ -40,7 +40,7 @@ async function waitForTranscription(
   projectId: string,
   log: ReturnType<typeof createJobLogger>
 ): Promise<{ success: boolean; error?: string }> {
-  const maxAttempts = 300; // 10 minutes
+  const maxAttempts = 900; // 30 minutes (long videos take a while)
 
   for (let i = 0; i < maxAttempts; i++) {
     const transcription = await Transcription.findById(transcriptionId).lean();
@@ -148,7 +148,7 @@ async function processCaptionJob(job: Job<CaptionJobData>) {
   log.info('Processing started');
 
   // Load project
-  const project = await CaptionProject.findById(projectId);
+  const project = await CaptionProject.findById(projectId).select('+composition');
   if (!project) {
     log.warn('Project not found');
     return { skipped: true, reason: 'not_found' };
@@ -236,10 +236,13 @@ async function processCaptionJob(job: Job<CaptionJobData>) {
         // Wait for completion
         const result = await waitForTranscription(transcriptionId, projectId, log);
         if (!result.success) {
-          await CaptionProject.updateOne(
-            { _id: projectId },
-            { status: 'failed', error: result.error, progress: 20 }
-          );
+          await transition(CaptionProject, projectId, ACTIVE_CAPTION_STATES, {
+            status: 'failed',
+            error: result.error,
+            failedStage: 'transcription',
+            progress: 20,
+          });
+          await releaseCaptionUsage(projectId, 'transcription_failed');
           return { success: false, stage: 'transcription' };
         }
       }
@@ -257,30 +260,37 @@ async function processCaptionJob(job: Job<CaptionJobData>) {
     // STAGE 2: GENERATE COMPOSITION (40-50%)
     // =======================================================================
 
-    log.info('Generating composition');
+    // A retried job reuses the composition it already generated.
+    let composition: CaptionGenerationOutput['composition'] = project.composition;
+    if (!composition) {
+      log.info('Generating composition');
 
-    await CaptionProject.updateOne(
-      { _id: projectId },
-      { status: 'generating', generationStartedAt: new Date(), progress: 42 }
-    );
+      await CaptionProject.updateOne(
+        { _id: projectId },
+        { status: 'generating', generationStartedAt: new Date(), progress: 42 }
+      );
 
-    const compositionResult: CaptionGenerationOutput = await CaptionCompositionService.generate({
-      fileId,
-      transcriptionId: transcriptionId!,
-      presetId: project.presetId?.toString(),
-      settings: project.settings,
-      name: project.name,
-    });
+      const compositionResult: CaptionGenerationOutput = await CaptionCompositionService.generate({
+        fileId,
+        transcriptionId: transcriptionId!,
+        presetId: project.presetId?.toString(),
+        settings: project.settings,
+        name: project.name,
+      });
 
 
-    await CaptionProject.updateOne(
-      { _id: projectId },
-      {
-        composition: compositionResult.composition,
-        generationCompletedAt: new Date(),
-        progress: 50,
-      }
-    );
+      await CaptionProject.updateOne(
+        { _id: projectId },
+        {
+          composition: compositionResult.composition,
+          generationCompletedAt: new Date(),
+          progress: 50,
+        }
+      );
+      composition = compositionResult.composition;
+    } else {
+      log.info('Reusing generated composition');
+    }
 
     // =======================================================================
     // STAGE 3: RENDER (50-95%)
@@ -292,8 +302,6 @@ async function processCaptionJob(job: Job<CaptionJobData>) {
       { _id: projectId },
       { status: 'rendering', renderStartedAt: new Date() }
     );
-
-    const composition = compositionResult.composition;
 
     // Reserve the caption render minutes (keyed by project, so a retried
     // pipeline reuses the same reservation). Out of minutes fails the project
@@ -314,7 +322,12 @@ async function processCaptionJob(job: Job<CaptionJobData>) {
       return { success: false, stage: 'rendering', reason: 'quota' };
     }
 
-    const renderJob = await RenderJob.create({
+    // Reuse the render a previous attempt started (never start a second one).
+    const previousRender = project.renderJobId
+      ? await RenderJob.findById(project.renderJobId).select('status').lean()
+      : null;
+    const reuseRender = previousRender && ['pending', 'queued', 'rendering', 'completed'].includes(previousRender.status);
+    const renderJob = reuseRender ? { _id: previousRender!._id } : await RenderJob.create({
       userId,
       captionProjectId: projectId,
       inputProps: composition,
@@ -325,17 +338,21 @@ async function processCaptionJob(job: Job<CaptionJobData>) {
       status: 'pending',
     });
 
-    await CaptionProject.updateOne({ _id: projectId }, { renderJobId: renderJob._id });
-
-    await enqueueJob(renderQueue, 'render', { jobId: renderJob._id.toString() }, { jobId: `render-${renderJob._id}`, priority: 1 });
+    if (!reuseRender) {
+      await CaptionProject.updateOne({ _id: projectId }, { renderJobId: renderJob._id });
+      await enqueueJob(renderQueue, 'render', { jobId: renderJob._id.toString() }, { jobId: `render-${renderJob._id}`, priority: 1 });
+    } else {
+      log.info(`Resuming render ${renderJob._id} (${previousRender!.status})`);
+    }
 
     const renderResult = await waitForRender(renderJob._id.toString(), projectId, log);
 
     if (!renderResult.success) {
-      await CaptionProject.updateOne(
-        { _id: projectId },
-        { status: 'failed', error: renderResult.error }
-      );
+      await transition(CaptionProject, projectId, ACTIVE_CAPTION_STATES, {
+        status: 'failed',
+        error: renderResult.error,
+        failedStage: 'rendering',
+      });
       await releaseCaptionUsage(projectId, 'render_failed');
       return { success: false, stage: 'rendering' };
     }
@@ -368,8 +385,18 @@ async function processCaptionJob(job: Job<CaptionJobData>) {
   } catch (error: any) {
     log.error(`Error: ${error.message}`);
 
-    await transition(CaptionProject, projectId, ACTIVE_CAPTION_STATES, { status: 'failed', error: error.message });
-    await releaseCaptionUsage(projectId, 'caption_failed');
+    // Earlier attempts leave the project active: the retry resumes from the
+    // stored transcription, composition and render.
+    if (isFinalAttempt(job)) {
+      const current = await CaptionProject.findById(projectId).select('status').lean();
+      const failedStage = current?.status === 'rendering' ? 'rendering' : current?.status === 'generating' ? 'generation' : 'transcription';
+      await transition(CaptionProject, projectId, ACTIVE_CAPTION_STATES, {
+        status: 'failed',
+        error: "Captioning failed. Try again, and contact support if it keeps failing.",
+        failedStage,
+      });
+      await releaseCaptionUsage(projectId, 'caption_failed');
+    }
 
     throw error;
   }
