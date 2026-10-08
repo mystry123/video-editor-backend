@@ -1,4 +1,5 @@
 // src/controllers/reframe.controller.ts
+import { enqueueJob } from '../utils/jobs';
 // Handles reframe API requests — follows transcription.controller.ts pattern
 
 import { Response, NextFunction } from 'express';
@@ -56,7 +57,7 @@ export const createReframe = async (
       return;
     }
 
-    if (existing?.status === 'processing') {
+    if (existing?.status === 'processing' || existing?.status === 'pending') {
       res.status(200).json({
         status: 'processing',
         message: 'Reframe job already in progress',
@@ -64,14 +65,29 @@ export const createReframe = async (
       return;
     }
 
-    // Enqueue job
-    const job = await reframeQueue.add('reframe', {
-      fileId: fileId.toString(),
-      videoUrl: file.cdnUrl,
-      aspectRatio,
-      elementId,
-      userId: userId.toString(),
-    });
+    // Mark it pending right away (clearing any earlier failure), so the first
+    // status poll doesn't read a stale "failed" while the job waits in the queue.
+    await File.updateOne(
+      { _id: fileId },
+      { $set: { [`reframe.${reframeKey}.status`]: 'pending' }, $unset: { [`reframe.${reframeKey}.error`]: '' } }
+    );
+
+    // One job per file + ratio: repeated clicks don't queue duplicate analyses.
+    let job: { id: string };
+    try {
+      job = await enqueueJob(
+        reframeQueue,
+        'reframe',
+        { fileId: fileId.toString(), videoUrl: file.cdnUrl, aspectRatio, elementId, userId: userId.toString() },
+        { jobId: `reframe-${fileId}-${reframeKey}` }
+      );
+    } catch (error) {
+      await File.updateOne(
+        { _id: fileId },
+        { $set: { [`reframe.${reframeKey}.status`]: 'failed', [`reframe.${reframeKey}.error`]: 'Reframe is temporarily unavailable. Try again in a minute.' } }
+      );
+      throw error;
+    }
 
     logger.info(`[reframe] Queued job ${job.id} for file ${fileId} → ${aspectRatio}`);
 
@@ -113,7 +129,8 @@ export const getReframeStatus = async (
     }
 
     res.json({
-      status: reframeData.status,
+      // "pending" (set when the job is queued) is what the editor calls "queued".
+      status: reframeData.status === 'pending' ? 'queued' : reframeData.status,
       layoutDecision: reframeData.layoutDecision || null,
       zones: reframeData.zones || null,
       sceneStats: reframeData.sceneStats || null,

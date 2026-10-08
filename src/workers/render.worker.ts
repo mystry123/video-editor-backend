@@ -9,6 +9,7 @@ import { createWorker, createJobLogger, sleep, retryWithBackoff } from '../utils
 import { quotaService } from '../services/quota.service';
 import { logger } from '../utils/logger';
 import { env } from '../config/env';
+import { isFinalAttempt, transition } from '../utils/jobs';
 
 // ============================================================================
 // Types
@@ -107,15 +108,18 @@ async function pollAndComplete(
       if (progress.done && progress.outputFile) {
         log.info('Complete');
 
-        await RenderJob.updateOne(
-          { _id: jobId },
-          {
-            status: 'completed',
-            progress: 100,
-            outputUrl: progress.outputFile,
-            completedAt: new Date(),
-          }
-        );
+        // Only a job still "rendering" completes (and is charged): a cancel that
+        // landed meanwhile wins, and a duplicate completion can't charge twice.
+        const completed = await transition(RenderJob, jobId, ['rendering'], {
+          status: 'completed',
+          progress: 100,
+          outputUrl: progress.outputFile,
+          completedAt: new Date(),
+        });
+        if (!completed) {
+          log.info('Render finished but the job had already ended; not charging');
+          return { skipped: true, reason: 'not_rendering' };
+        }
 
         // Update quota usage for render minutes
         const renderJob = await RenderJob.findById(jobId).select('+inputProps');
@@ -167,7 +171,11 @@ async function pollAndComplete(
 
   // Timeout
   log.error('Timeout');
-  await RenderJob.updateOne({ _id: jobId }, { status: 'failed', error: 'Render timeout' });
+  await transition(RenderJob, jobId, ['rendering'], {
+    status: 'failed',
+    error: 'The render took too long. Try a shorter video or fewer effects.',
+    completedAt: new Date(),
+  });
   return { error: 'timeout' };
 }
 
@@ -210,12 +218,17 @@ async function processRenderJob(job: Job<RenderJobData>) {
   // Resume if already rendering
   if (dbJob.status === 'rendering' && dbJob.renderId && dbJob.bucketName) {
     log.info(`Resuming: ${dbJob.renderId}`);
-    return pollAndComplete(jobId, dbJob.renderId, dbJob.bucketName, dbJob.webhookUrl, log);
+    return await pollAndComplete(jobId, dbJob.renderId, dbJob.bucketName, dbJob.webhookUrl, log);
   }
 
-  // Claim job
+  // Claim job. "rendering" without a renderId means an earlier attempt died
+  // while starting the render (BullMQ only re-runs a job after its previous
+  // worker lost it), so that attempt is taken over instead of staying stuck.
   const claimed = await RenderJob.findOneAndUpdate(
-    { _id: jobId, status: { $in: ['pending', 'queued'] } },
+    {
+      _id: jobId,
+      $or: [{ status: { $in: ['pending', 'queued'] } }, { status: 'rendering', renderId: null }],
+    },
     { status: 'rendering', startedAt: new Date() },
     { new: true, select: '+inputProps +webhookUrl' }
   );
@@ -243,10 +256,17 @@ async function processRenderJob(job: Job<RenderJobData>) {
       { renderId, bucketName, serveUrl: env.remotionServeUrl }
     );
 
-    return pollAndComplete(jobId, renderId, bucketName, claimed.webhookUrl, log);
+    return await pollAndComplete(jobId, renderId, bucketName, claimed.webhookUrl, log);
   } catch (err: any) {
-    log.error(`Error: ${err.message}`);
-    await RenderJob.updateOne({ _id: jobId }, { status: 'failed', error: err.message });
+    log.error(`Error (attempt ${job.attemptsMade + 1}): ${err.message}`);
+    // Earlier attempts leave the job "rendering" (no renderId) so the retry takes it over.
+    if (isFinalAttempt(job)) {
+      await transition(RenderJob, jobId, ['pending', 'queued', 'rendering'], {
+        status: 'failed',
+        error: describeRenderError(err.message),
+        completedAt: new Date(),
+      });
+    }
     throw err;
   }
 }
@@ -258,6 +278,14 @@ async function processRenderJob(job: Job<RenderJobData>) {
 const renderWorker = createWorker({
   name: 'render',
   processor: processRenderJob,
+  // Crashed or stalled for good: don't leave the render "rendering" forever.
+  onFinalFailure: async (job) => {
+    await transition(RenderJob, job.data.jobId, ['pending', 'queued', 'rendering'], {
+      status: 'failed',
+      error: 'The render stopped unexpectedly. Try again.',
+      completedAt: new Date(),
+    });
+  },
   concurrency: 3,
   lockDuration: 180000, // 3 minutes (renders are long)
 });

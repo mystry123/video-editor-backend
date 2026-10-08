@@ -1,4 +1,5 @@
 import { Response, NextFunction } from 'express';
+import { enqueueJob } from '../utils/jobs';
 import { ApiError } from '../utils/ApiError';
 import { Types } from 'mongoose';
 import { CaptionProject, CaptionProjectStatus } from '../models/Caption';
@@ -243,18 +244,20 @@ export class CaptionProjectController {
       
       // Add to processing queue
       const queue = await getCaptionQueue();
-      await queue.add(
-        'process-caption',
-        { 
-          projectId: project._id.toString(),
-          hasExistingTranscription: !!existingTranscription,
-        },
-        { 
-          jobId: project._id.toString(),
-          removeOnComplete: true,
-          removeOnFail: false,
-        }
-      );
+      try {
+        await enqueueJob(
+          queue,
+          'process-caption',
+          { projectId: project._id.toString(), hasExistingTranscription: !!existingTranscription },
+          { jobId: `caption-${project._id}`, removeOnComplete: true, removeOnFail: false }
+        );
+      } catch (error) {
+        await CaptionProject.updateOne(
+          { _id: project._id },
+          { status: 'failed', error: 'Captioning is temporarily unavailable. Try again in a minute.' }
+        );
+        throw error;
+      }
       
       res.status(201).json({
         success: true,

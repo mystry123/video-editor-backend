@@ -13,6 +13,8 @@ import { rateLimiter } from './middleware/rateLimit.middleware';
 import { attachUsageSummary } from './middleware/quota.middleware';
 import routes from './routes';
 import { env } from './config/env';
+import mongoose from 'mongoose';
+import { isRedisReady } from './config/redis';
 import { openApiSpec } from './docs/openapi';
 
 import geoip from 'geoip-lite';
@@ -105,6 +107,23 @@ app.use('/api/', rateLimiter);
 // ============================================
 // HEALTH CHECK
 // ============================================
+
+// Liveness: the process is up and serving requests.
+app.get('/health/live', (_req: Request, res: Response) => {
+  res.json({ status: 'ok' });
+});
+
+// Readiness: dependencies. 503 when the database is unreachable; Redis being
+// down is reported as degraded (reads still work, new jobs fail fast).
+app.get('/health/ready', (_req: Request, res: Response) => {
+  const mongo = mongoose.connection.readyState === 1;
+  const redis = isRedisReady();
+  res.status(mongo ? 200 : 503).json({
+    status: mongo && redis ? 'ok' : mongo ? 'degraded' : 'unavailable',
+    checks: { mongo: mongo ? 'ok' : 'down', redis: redis ? 'ok' : 'down' },
+    uptime: Math.round(process.uptime()),
+  });
+});
 
 app.get('/health', (_req: Request, res: Response) => {
   res.json({

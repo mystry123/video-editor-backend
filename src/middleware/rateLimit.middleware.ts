@@ -1,5 +1,6 @@
 // middleware/rateLimiter.ts
 import { sendError } from '../utils/errorResponse';
+import { onRedisReady } from '../config/redis';
 
 import rateLimit, { Options } from 'express-rate-limit';
 import { Request, Response, NextFunction, RequestHandler } from 'express';
@@ -87,21 +88,18 @@ function createLimiter(config: LimiterConfig): RequestHandler {
   // Start with memory store
   let currentLimiter = rateLimit(options as Options);
 
-  // Try to upgrade to Redis store after 2 seconds (give Redis time to connect)
-  setTimeout(async () => {
-    try {
-      const store = await getRedisStore(config.prefix);
-      if (store) {
-        currentLimiter = rateLimit({
-          ...options,
-          store,
-        } as Options);
-        logger.info(`Rate limiter [${config.prefix}]: Upgraded to Redis`);
-      }
-    } catch {
-      // Keep using memory store
-    }
-  }, 2000);
+  // Switch to the shared Redis store as soon as Redis is ready (limits then
+  // survive restarts and apply across processes). Until then, memory store.
+  onRedisReady(() => {
+    getRedisStore(config.prefix)
+      .then((store) => {
+        if (store) {
+          currentLimiter = rateLimit({ ...options, store } as Options);
+          logger.info(`Rate limiter [${config.prefix}]: Upgraded to Redis`);
+        }
+      })
+      .catch(() => undefined); // keep the memory store
+  });
 
   // Return wrapper that uses current limiter
   const handler: RequestHandler = (req: Request, res: Response, next: NextFunction) => {

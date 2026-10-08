@@ -22,6 +22,9 @@ export interface OAuthUserInfo {
   refreshToken?: string;
 }
 
+// Provider calls must not hang a sign-in request (or a worker slot) forever.
+const OAUTH_TIMEOUT_MS = 10_000;
+
 const PROVIDER_NAMES = { google: 'Google', apple: 'Apple', facebook: 'Facebook' } as const;
 
 /** Client-facing error for a failed provider check; the cause is logged, not returned. */
@@ -188,6 +191,7 @@ export async function verifyAppleCode(
 
     // Exchange code for tokens
     const tokenResponse = await fetch('https://appleid.apple.com/auth/token', {
+      timeout: OAUTH_TIMEOUT_MS,
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -272,7 +276,7 @@ export async function verifyFacebookCode(code: string): Promise<OAuthUserInfo> {
     tokenUrl.searchParams.set('redirect_uri', env.facebookCallbackUrl);
     tokenUrl.searchParams.set('code', code);
 
-    const tokenResponse = await fetch(tokenUrl.toString());
+    const tokenResponse = await fetch(tokenUrl.toString(), { timeout: OAUTH_TIMEOUT_MS });
     const tokens = await tokenResponse.json() as any;
 
     if (tokens.error) {
@@ -284,7 +288,7 @@ export async function verifyFacebookCode(code: string): Promise<OAuthUserInfo> {
     userUrl.searchParams.set('fields', 'id,email,name,picture.width(200)');
     userUrl.searchParams.set('access_token', tokens.access_token);
 
-    const userResponse = await fetch(userUrl.toString());
+    const userResponse = await fetch(userUrl.toString(), { timeout: OAUTH_TIMEOUT_MS });
     const userData = await userResponse.json() as any;
 
     if (userData.error) {
@@ -314,7 +318,7 @@ export async function verifyFacebookAccessToken(accessToken: string): Promise<OA
     debugUrl.searchParams.set('input_token', accessToken);
     debugUrl.searchParams.set('access_token', `${env.facebookAppId}|${env.facebookAppSecret}`);
 
-    const debugResponse = await fetch(debugUrl.toString());
+    const debugResponse = await fetch(debugUrl.toString(), { timeout: OAUTH_TIMEOUT_MS });
     const debugData = await debugResponse.json() as any;
 
     if (!env.facebookAppId || !env.facebookAppSecret) throw new Error('Facebook sign-in is not configured');
@@ -331,7 +335,7 @@ export async function verifyFacebookAccessToken(accessToken: string): Promise<OA
     userUrl.searchParams.set('fields', 'id,email,name,picture.width(200)');
     userUrl.searchParams.set('access_token', accessToken);
 
-    const userResponse = await fetch(userUrl.toString());
+    const userResponse = await fetch(userUrl.toString(), { timeout: OAUTH_TIMEOUT_MS });
     const userData = await userResponse.json() as any;
 
     if (userData.error) {

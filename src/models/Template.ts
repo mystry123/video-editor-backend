@@ -54,6 +54,9 @@ const TemplateSchema = new Schema<ITemplate>(
   { timestamps: true }
 );
 
+// Dashboard lists a user's templates by last edit.
+TemplateSchema.index({ userId: 1, updatedAt: -1 });
+
 // Text search index
 TemplateSchema.index({ name: 'text', description: 'text' });
 

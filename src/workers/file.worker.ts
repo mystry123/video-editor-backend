@@ -112,7 +112,12 @@ async function processFileJob(job: Job<FileJobData>) {
     return { success: true, metadata };
   } catch (error: any) {
     log.error(`Failed: ${error.message}`);
-    await File.updateOne({ _id: fileId }, { status: 'error', error: error.message });
+    // 'failed' is the File status the app understands ('error' isn't in the
+    // enum and was silently stored); the reason goes in importError.
+    await File.updateOne(
+      { _id: fileId, status: 'processing' },
+      { status: 'failed', importError: "We couldn't process this file. Try uploading it again." }
+    );
     throw error;
   }
 }

@@ -15,6 +15,12 @@ export interface CreateWorkerConfig<T = any, R = any> {
   concurrency?: number;
   lockDuration?: number;
   options?: Partial<WorkerOptions>;
+  /**
+   * Called once a job has failed for good: its last attempt threw, or it
+   * stalled too often (worker crash, deploy). Use it to mark the job's record
+   * failed so it doesn't stay "processing" forever. Errors here are logged.
+   */
+  onFinalFailure?: (job: Job<T>, error: Error) => Promise<void>;
 }
 
 // ============================================================================
@@ -70,6 +76,7 @@ export function createWorker<T = any, R = any>(config: CreateWorkerConfig<T, R>)
     concurrency = 5,
     lockDuration = 60000,
     options = {},
+    onFinalFailure,
   } = config;
 
   if (isQueueShuttingDown()) {
@@ -105,6 +112,12 @@ export function createWorker<T = any, R = any>(config: CreateWorkerConfig<T, R>)
     // Don't log connection errors as job failures
     if (!isConnectionError(err)) {
       logger.error(`[${name}] Job ${job?.id || 'unknown'} failed: ${err.message}`);
+    }
+    // attemptsMade already counts this attempt here.
+    if (job && onFinalFailure && job.attemptsMade >= (job.opts?.attempts ?? 1)) {
+      onFinalFailure(job, err).catch((hookError) =>
+        logger.error(`[${name}] onFinalFailure for job ${job.id} failed: ${hookError.message}`)
+      );
     }
   });
 

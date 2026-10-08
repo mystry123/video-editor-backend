@@ -1,6 +1,7 @@
 import { Job, Worker } from 'bullmq';
 import { probeMedia, summarizeProbe } from '../utils/media';
 import { limitStream, safeRequest } from '../utils/safeRequest';
+import { isFinalAttempt } from '../utils/jobs';
 
 // Largest file a URL import may download (bytes). Overridable for bigger plans later.
 const MAX_IMPORT_BYTES = Number(process.env.MAX_IMPORT_BYTES) || 5 * 1024 * 1024 * 1024;
@@ -80,8 +81,11 @@ async function processUrlImport(job: Job): Promise<void> {
 
     logger.info(`[file-import] URL import completed`, { fileId });
   } catch (error: any) {
-    logger.error(`[file-import] URL import failed`, { fileId, error: error.message });
-    await markImportFailed(fileId, error.message || 'Import failed');
+    logger.error(`[file-import] URL import failed`, { fileId, attempt: job.attemptsMade + 1, error: error.message });
+    // Earlier attempts keep the file "processing" so the UI keeps waiting for the retry.
+    if (isFinalAttempt(job)) {
+      await markImportFailed(fileId, error.message?.includes('limit') ? error.message : "We couldn't download that file. Check the link and try again.");
+    }
     throw error;
   }
 }
@@ -139,8 +143,7 @@ async function processGoogleDriveImport(job: Job): Promise<void> {
     logger.error(`[file-import] Google Drive import failed`, { fileId, error: error.message });
 
     // Map error to user-friendly message
-    const errorMessage = mapGoogleDriveError(error);
-    await markImportFailed(fileId, errorMessage);
+    if (isFinalAttempt(job)) await markImportFailed(fileId, mapGoogleDriveError(error));
     throw error;
   }
 }
@@ -177,7 +180,7 @@ async function updateFileProgress(fileId: string, progress: number): Promise<voi
 async function markImportFailed(fileId: string, errorMessage: string): Promise<void> {
   try {
     await File.updateOne(
-      { _id: fileId },
+      { _id: fileId, status: 'processing' },
       {
         status: 'failed',
         importError: errorMessage,
@@ -285,6 +288,11 @@ worker.on('failed', (job, error) => {
     name: job?.name,
     error: error.message,
   });
+  // Crashed or stalled for good (the processor's own catch didn't run): don't
+  // leave the file "processing" forever.
+  if (job && job.attemptsMade >= (job.opts?.attempts ?? 1) && job.data?.fileId) {
+    markImportFailed(job.data.fileId, 'The import stopped unexpectedly. Try again.').catch(() => undefined);
+  }
 });
 
 worker.on('error', (error) => {

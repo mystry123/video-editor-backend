@@ -1,4 +1,5 @@
 import { Response, NextFunction } from 'express';
+import { enqueueJob } from '../utils/jobs';
 import { v4 as uuidv4 } from 'uuid';
 import { assertPublicUrl, BlockedUrlError, safeRequest } from '../utils/safeRequest';
 import { probeMedia, storageExtension, summarizeProbe } from '../utils/media';
@@ -372,7 +373,9 @@ export const importFromUrl = async (
 
     // Add to processing queue for background download
     const queue = await getFileImportQueue();
-    await queue.add(
+    try {
+      await enqueueJob(
+        queue,
       'import-from-url',
       {
         fileId: file._id.toString(),
@@ -392,7 +395,11 @@ export const importFromUrl = async (
           delay: 5000,
         },
       }
-    );
+      );
+    } catch (error) {
+      await File.updateOne({ _id: file._id }, { status: 'failed', importError: 'Importing is temporarily unavailable. Try again in a minute.' });
+      throw error;
+    }
 
     logger.info('URL import job queued', { fileId: file._id, url });
 
@@ -489,7 +496,9 @@ export const importFromGoogleDrive = async (
 
     // Add to processing queue for background download
     const queue = await getFileImportQueue();
-    await queue.add(
+    try {
+      await enqueueJob(
+        queue,
       'import-from-google-drive',
       {
         fileId: file._id.toString(),
@@ -510,7 +519,11 @@ export const importFromGoogleDrive = async (
           delay: 5000,
         },
       }
-    );
+      );
+    } catch (error) {
+      await File.updateOne({ _id: file._id }, { status: 'failed', importError: 'Importing is temporarily unavailable. Try again in a minute.' });
+      throw error;
+    }
 
     logger.info('Google Drive import job queued', { fileId: file._id, driveFileId });
 

@@ -7,6 +7,7 @@ import { triggerWebhooks } from '../services/webhook.service';
 import { createWorker, createJobLogger, sleep, retryWithBackoff } from '../utils/worker.utils';
 import { quotaService } from '../services/quota.service';
 import { logger } from '../utils/logger';
+import { isFinalAttempt, transition } from '../utils/jobs';
 
 // ============================================================================
 // Types
@@ -114,14 +115,21 @@ async function processTranscriptionJob(job: Job<TranscriptionJobData>) {
       duration: result.audio_duration,
     };
   } catch (error: any) {
-    log.error(`Failed: ${error.message}`);
-    await Transcription.updateOne(
-      { _id: transcriptionId },
-      { status: 'failed', error: error.message }
-    );
+    log.error(`Failed (attempt ${job.attemptsMade + 1}): ${error.message}`);
+    // Only the last attempt marks the record failed; earlier ones leave it
+    // "processing" so the queue's retry can still succeed. Never overwrite a
+    // transcript the user has already edited (status completed).
+    if (isFinalAttempt(job)) {
+      await transition(Transcription, transcriptionId, ['pending', 'processing'], {
+        status: 'failed',
+        error: TRANSCRIPTION_FAILED_MESSAGE,
+      });
+    }
     throw error;
   }
 }
+
+const TRANSCRIPTION_FAILED_MESSAGE = "We couldn't transcribe this file. Try again, or use a file with clearer audio.";
 
 // ============================================================================
 // Create Worker
@@ -130,6 +138,13 @@ async function processTranscriptionJob(job: Job<TranscriptionJobData>) {
 const transcriptionWorker = createWorker({
   name: 'transcription',
   processor: processTranscriptionJob,
+  // Crashed or stalled for good (e.g. killed mid-call): don't leave it "processing".
+  onFinalFailure: async (job) => {
+    await transition(Transcription, job.data.transcriptionId, ['pending', 'processing'], {
+      status: 'failed',
+      error: TRANSCRIPTION_FAILED_MESSAGE,
+    });
+  },
   concurrency: 2, // Low concurrency due to API rate limits
   lockDuration: 300000, // 5 minutes (API can be slow)
 });

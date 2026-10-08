@@ -22,13 +22,11 @@ export const redisConnectionOptions: RedisOptions = {
   family: 4,
   keepAlive: 60000, // 60s keepAlive to prevent macOS TCP idle drops
   enableOfflineQueue: true,
+  // Never give up: after an outage, workers and queues must come back on
+  // their own (giving up after ~20 tries left workers dead until a restart).
   retryStrategy: (times: number) => {
-    if (times > 20) {
-      logger.error(`Redis: Max retries (${times}) reached`);
-      return null;
-    }
-    const delay = Math.min(times * 500, 5000);
-    return delay;
+    if (times % 20 === 0) logger.warn(`Redis: still reconnecting (attempt ${times})`);
+    return Math.min(times * 500, 10000);
   },
 };
 
@@ -48,10 +46,8 @@ export function getRedis(): Redis {
       maxRetriesPerRequest: 3,
       lazyConnect: true,
       connectTimeout: 10000,
-      retryStrategy: (times: number) => {
-        if (times > 10) return null;
-        return Math.min(times * 500, 5000);
-      },
+      // Keep reconnecting; callers already fail fast while it's down.
+      retryStrategy: (times: number) => Math.min(times * 500, 10000),
     });
 
     redis.on('connect', () => logger.info('Redis: Connected'));
@@ -84,6 +80,16 @@ export async function connectRedis(): Promise<void> {
   } finally {
     isConnecting = false;
   }
+}
+
+/** Runs `callback` once Redis is ready (now, if it already is). */
+export function onRedisReady(callback: () => void): void {
+  const client = getRedis();
+  if (client.status === 'ready') {
+    callback();
+    return;
+  }
+  client.once('ready', callback);
 }
 
 export function isRedisReady(): boolean {

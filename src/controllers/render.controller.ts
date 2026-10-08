@@ -1,4 +1,5 @@
 import { Response, NextFunction } from 'express';
+import { enqueueJob } from '../utils/jobs';
 import { Types } from 'mongoose';
 import { AuthRequest } from '../types';
 import { RenderJob } from '../models/RenderJob';
@@ -14,6 +15,16 @@ import { getEffectiveQuota } from '../config/quotas';
 import { planRenderOutput } from '../utils/renderDimensions';
 
 const MEDIA_ELEMENT_TYPES = new Set(['image', 'video', 'audio', 'gif', 'lottie']);
+
+/** Queues a render job; if the queue is unreachable, marks it failed and returns 503. */
+async function queueRender(jobId: string, priority: number): Promise<void> {
+  try {
+    await enqueueJob(renderQueue, 'render', { jobId }, { jobId: `render-${jobId}`, priority });
+  } catch (error) {
+    await RenderJob.updateOne({ _id: jobId }, { status: 'failed', error: 'Rendering is temporarily unavailable. Try again in a minute.' });
+    throw error;
+  }
+}
 
 function assertResolutionAllowed(
   output: ReturnType<typeof planRenderOutput>,
@@ -174,11 +185,7 @@ export const startRender = async (
       status: 'pending',
     });
 
-    await renderQueue.add(
-      'render',
-      { jobId: renderJob._id.toString() },
-      { priority: getPriority(user.role) }
-    );
+    await queueRender(renderJob._id.toString(), getPriority(user.role));
 
     logger.info('Job added to render queue', { jobId: renderJob._id.toString() });
 
@@ -310,11 +317,7 @@ export const startReframeRender = async (
       status: 'pending',
     });
 
-    await renderQueue.add(
-      'render',
-      { jobId: renderJob._id.toString() },
-      { priority: getPriority(user.role) }
-    );
+    await queueRender(renderJob._id.toString(), getPriority(user.role));
 
     logger.info('Reframe render queued', {
       jobId: renderJob._id.toString(),

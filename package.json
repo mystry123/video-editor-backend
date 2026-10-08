@@ -7,13 +7,14 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "start:workers": "ENABLE_WORKERS=true node dist/index.js",
     "lint": "eslint src test",
     "test": "vitest run",
     "seed:presets": "tsx src/seeds/run.ts",
     "admin:grant": "tsx src/scripts/grant-admin.ts",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit -p ."
+    "typecheck": "tsc --noEmit -p .",
+    "start:worker": "node dist/worker.js",
+    "dev:worker": "tsx watch src/worker.ts"
   },
   "keywords": [
     "video-editor",

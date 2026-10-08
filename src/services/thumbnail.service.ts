@@ -51,7 +51,7 @@ export async function generateThumbnailFromVideo(options: ThumbnailOptions): Pro
 
     // Check if video URL is accessible
     logger.info('Checking video URL accessibility...');
-    const response = await fetch(videoUrl, { method: 'HEAD' });
+    const response = await fetch(videoUrl, { method: 'HEAD', signal: AbortSignal.timeout(15_000) });
     if (!response.ok) {
       throw new Error(`Video URL not accessible: ${response.status} ${response.statusText}`);
     }
