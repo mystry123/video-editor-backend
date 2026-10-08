@@ -12,6 +12,7 @@ import { ApiError } from '../utils/ApiError';
 import { estimateRenderTime, getPriority } from '../utils/helpers';
 import { applyVariables, validateRenderInput } from '../services/renderInput.service';
 import { refreshIfStale } from '../services/renderLifecycle.service';
+import { snapshotTemplate } from '../services/templateVersion.service';
 import { ensureShareTokens, outputFields, publicRender } from '../services/renderOutput.service';
 import { logger } from '../utils/logger';
 import { getEffectiveQuota } from '../config/quotas';
@@ -158,6 +159,8 @@ export const startRender = async (
 
     await queueRender(renderJob._id.toString(), getPriority(user.role));
     await Template.updateOne({ _id: template._id }, { $inc: { usageCount: 1 } });
+    // Version history keeps every rendered state (owner's templates only).
+    if (String(template.userId) === String(user._id)) await snapshotTemplate(template, user._id, 'render');
 
     logger.info('Job added to render queue', { jobId: renderJob._id.toString(), templateVersion: template.version });
 

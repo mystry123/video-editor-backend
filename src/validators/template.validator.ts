@@ -32,6 +32,12 @@ export const updateTemplateSchema = z.object({
     }).optional(),
     tags: z.array(z.string()).optional(),
     isPublic: z.boolean().optional(),
+    /** Version the editor's state is based on; a different current version is a 409. */
+    baseVersion: z.number().int().nonnegative().optional(),
+    /** Save anyway over a newer version (after the user chose "Overwrite"). */
+    overwrite: z.boolean().optional(),
+    /** "leave": always keep a version-history snapshot of this point. */
+    snapshot: z.enum(['leave']).optional(),
   }),
   params: z.object({
     id: z.string(),

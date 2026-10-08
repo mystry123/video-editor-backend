@@ -6,6 +6,8 @@ export interface ITemplateVersion extends Document {
   version: number;
   data: any;
   createdBy: Types.ObjectId;
+  /** Why it was taken: autosave (every 5 min), render or leave. */
+  reason?: string;
   createdAt: Date;
 }
 
@@ -15,6 +17,7 @@ const TemplateVersionSchema = new Schema<ITemplateVersion>(
     version: { type: Number, required: true },
     data: { type: Schema.Types.Mixed, required: true },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    reason: { type: String },
   },
   { timestamps: true }
 );
