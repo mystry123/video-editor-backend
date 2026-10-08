@@ -5,6 +5,8 @@ export interface IFileMetadata {
   width?: number;
   height?: number;
   hasAudio?: boolean;
+  /** Set when ffprobe couldn't read the file; the other fields are then unknown (0). */
+  metadataError?: string;
 }
 
 export interface IReframeData {
@@ -63,6 +65,7 @@ const FileSchema = new Schema<IFile>(
       height: Number,
       duration: Number,
       hasAudio: Boolean,
+      metadataError: String,
     },
     // New fields for import functionality
     source: {

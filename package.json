@@ -7,13 +7,14 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "start:workers": "ENABLE_WORKERS=true node dist/index.js",
     "lint": "eslint src test",
     "test": "vitest run",
     "seed:presets": "tsx src/seeds/run.ts",
     "admin:grant": "tsx src/scripts/grant-admin.ts",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit -p ."
+    "typecheck": "tsc --noEmit -p .",
+    "start:worker": "node dist/worker.js",
+    "dev:worker": "tsx watch src/worker.ts"
   },
   "keywords": [
     "video-editor",
@@ -47,6 +48,7 @@
     "google-auth-library": "^9.4.0",
     "helmet": "^7.1.0",
     "ioredis": "5.8.2",
+    "jose": "^5.10.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.21.0",
     "morgan": "^1.10.0",

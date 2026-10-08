@@ -1,10 +1,24 @@
 import { Response, NextFunction } from 'express';
+import { enqueueJob } from '../utils/jobs';
 import { AuthRequest } from '../types';
 import { Transcription, ITranscriptionWord } from '../models/Transcription';
 import { File } from '../models/File';
 import { User } from '../models/User';
 import { transcriptionQueue } from '../queues';
 import { ApiError } from '../utils/ApiError';
+
+/** Queues a transcription; if the queue is unreachable, marks it failed and returns 503. */
+async function queueTranscription(transcriptionId: string, fileUrl: string): Promise<void> {
+  try {
+    await enqueueJob(transcriptionQueue, 'transcribe', { transcriptionId, fileUrl }, { jobId: `transcription-${transcriptionId}` });
+  } catch (error) {
+    await Transcription.updateOne(
+      { _id: transcriptionId, status: 'pending' },
+      { status: 'failed', error: 'Transcription is temporarily unavailable. Try again in a minute.' }
+    );
+    throw error;
+  }
+}
 
 export const createTranscription = async (
   req: AuthRequest,
@@ -35,10 +49,7 @@ export const createTranscription = async (
         existing.error = undefined;
         await existing.save();
 
-        await transcriptionQueue.add('transcribe', {
-          transcriptionId: existing._id.toString(),
-          fileUrl: file.cdnUrl,
-        });
+        await queueTranscription(existing._id.toString(), file.cdnUrl!);
 
         res.status(202).json(existing);
         return;
@@ -54,10 +65,7 @@ export const createTranscription = async (
       status: 'pending',
     });
 
-    await transcriptionQueue.add('transcribe', {
-      transcriptionId: transcription._id.toString(),
-      fileUrl: file.cdnUrl,
-    });
+    await queueTranscription(transcription._id.toString(), file.cdnUrl!);
 
     res.status(201).json(transcription);
   } catch (error) {

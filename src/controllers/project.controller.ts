@@ -137,7 +137,8 @@ function buildFilter(query: ProjectQuery, userId: string): any {
 
   // Search filter - search in renderId, outputUrl, and error messages
   if (query.search) {
-    const searchRegex = new RegExp(query.search, 'i');
+    // Escape user input: a raw pattern like (a+)+$ can pin Mongo's CPU, and "(" threw a 500.
+    const searchRegex = new RegExp(String(query.search).slice(0, 100).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
     filter.$or = [
       { renderId: { $regex: searchRegex } },
       { outputUrl: { $regex: searchRegex } },

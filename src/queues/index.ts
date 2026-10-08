@@ -1,6 +1,7 @@
 // queues/index.ts
 
 import { Queue, Worker } from 'bullmq';
+import IORedis from 'ioredis';
 import { redisConnectionOptions, getRedisMemoryUsage, getRedisClientCount } from '../config/redis';
 import { logger } from '../utils/logger';
 
@@ -24,6 +25,14 @@ const workers: Worker[] = [];
 let isShuttingDown = false;
 let monitorInterval: NodeJS.Timeout | null = null;
 
+// One connection shared by every Queue (producers don't block, so they can
+// share). Workers keep their own: BullMQ needs a blocking connection per worker.
+let producerConnection: IORedis | null = null;
+function getProducerConnection(): IORedis {
+  if (!producerConnection) producerConnection = new IORedis({ ...redisConnectionOptions });
+  return producerConnection;
+}
+
 function createQueue(name: string, options: any = {}): Queue {
   if (queues.has(name)) {
     return queues.get(name)!;
@@ -34,7 +43,7 @@ function createQueue(name: string, options: any = {}): Queue {
   }
 
   const queue = new Queue(name, {
-    connection: { ...redisConnectionOptions },
+    connection: getProducerConnection(),
     defaultJobOptions: { ...defaultJobOptions, ...options },
   });
 
@@ -60,6 +69,7 @@ let _captionQueue: Queue | null = null;
 let _fileImportQueue: Queue | null = null;
 let _reframeQueue: Queue | null = null;
 let _accountCleanupQueue: Queue | null = null;
+let _maintenanceQueue: Queue | null = null;
 
 export function getRenderQueue(): Queue {
   if (!_renderQueue) {
@@ -144,6 +154,14 @@ export function getAccountCleanupQueue(): Queue {
   return _accountCleanupQueue;
 }
 
+export function getMaintenanceQueue(): Queue {
+  if (!_maintenanceQueue) {
+    // One sweep at a time; a failed sweep is simply retried on the next tick.
+    _maintenanceQueue = createQueue('maintenance', { attempts: 1, removeOnComplete: { count: 20 }, removeOnFail: { count: 50 } });
+  }
+  return _maintenanceQueue;
+}
+
 // ============================================================================
 // Backward Compatible Exports (Proxy Objects)
 // ============================================================================
@@ -204,6 +222,7 @@ export function startWorkers(): void {
     '../workers/file-import.worker',
     '../workers/reframe.worker',
     '../workers/account-cleanup.worker',
+    '../workers/maintenance.worker',
   ];
 
   let loaded = 0;
@@ -238,7 +257,13 @@ export function startWorkers(): void {
 // Graceful Shutdown
 // ============================================================================
 
-export async function gracefulShutdown(): Promise<void> {
+/**
+ * Closes workers then queues. Workers stop taking new jobs immediately and get
+ * `workerDrainMs` for their active jobs to finish (the API process uses a short
+ * limit; the worker process waits long enough for a render to complete).
+ */
+export async function gracefulShutdown(options: { workerDrainMs?: number } = {}): Promise<void> {
+  const workerDrainMs = options.workerDrainMs ?? 5000;
   if (isShuttingDown) return;
   isShuttingDown = true;
 
@@ -250,15 +275,15 @@ export async function gracefulShutdown(): Promise<void> {
     monitorInterval = null;
   }
 
-  // Close workers with timeout
+  // Close workers: close() waits for active jobs; give up after the drain limit.
   const workerPromises = workers.map(async (w) => {
     try {
       await Promise.race([
         w.close(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), workerDrainMs)),
       ]);
     } catch {
-      // Ignore
+      logger.warn(`Worker [${w.name}] still had active jobs after ${Math.round(workerDrainMs / 1000)}s; they will be retried`);
     }
   });
   await Promise.allSettled(workerPromises);
@@ -277,6 +302,10 @@ export async function gracefulShutdown(): Promise<void> {
   });
   await Promise.allSettled(queuePromises);
   queues.clear();
+  if (producerConnection) {
+    await producerConnection.quit().catch(() => producerConnection?.disconnect());
+    producerConnection = null;
+  }
 
   // Reset
   _renderQueue = null;
@@ -286,6 +315,8 @@ export async function gracefulShutdown(): Promise<void> {
   _captionQueue = null;
   _fileImportQueue = null;
   _reframeQueue = null;
+  _accountCleanupQueue = null;
+  _maintenanceQueue = null;
   workersStarted = false;
   isShuttingDown = false;
 

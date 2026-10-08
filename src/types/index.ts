@@ -5,6 +5,10 @@ export interface AuthRequest extends Request {
   user?: any;
   permissions?: string[];
   authMethod?: 'cookie' | 'api-key' | 'bearer';
+  /** Session of the access token (absent for API keys and pre-session tokens). */
+  sessionId?: string;
+  /** Set by routes that accept short-lived upload tickets as well as sessions. */
+  allowUploadTicket?: boolean;
 }
 
 export interface PaginationQuery {

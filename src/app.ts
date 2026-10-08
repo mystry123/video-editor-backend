@@ -13,6 +13,8 @@ import { rateLimiter } from './middleware/rateLimit.middleware';
 import { attachUsageSummary } from './middleware/quota.middleware';
 import routes from './routes';
 import { env } from './config/env';
+import mongoose from 'mongoose';
+import { isRedisReady } from './config/redis';
 import { openApiSpec } from './docs/openapi';
 
 import geoip from 'geoip-lite';
@@ -23,7 +25,10 @@ const app: Express = express();
 // ============================================
 
 
-app.set('trust proxy', true);
+// Trust exactly the proxies in front of us (nginx on EC2 = 1), so req.ip is
+// the real client. `true` trusted every hop, letting a client choose its own
+// IP via X-Forwarded-For and dodge rate limits.
+app.set('trust proxy', Number.isNaN(Number(process.env.TRUST_PROXY)) ? process.env.TRUST_PROXY : Number(process.env.TRUST_PROXY ?? 1));
 
 // Request id first, so every log line and error body can carry it.
 app.use(requestId);
@@ -31,10 +36,9 @@ app.use(requestId);
 // SECURITY MIDDLEWARE
 // GeoIP location detection using geoip-lite
 app.use((req, res, next) => {
-  const ip = 
-    (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ||
-    (req.headers['x-real-ip'] as string) ||
-    req.ip;
+  // req.ip already honours the trusted proxy setting above; reading the
+  // leftmost X-Forwarded-For would let clients pick their own location.
+  const ip = req.ip;
 
   const cleanIp = ip?.startsWith('::ffff:') ? ip.substring(7) : ip;
 
@@ -104,6 +108,23 @@ app.use('/api/', rateLimiter);
 // HEALTH CHECK
 // ============================================
 
+// Liveness: the process is up and serving requests.
+app.get('/health/live', (_req: Request, res: Response) => {
+  res.json({ status: 'ok' });
+});
+
+// Readiness: dependencies. 503 when the database is unreachable; Redis being
+// down is reported as degraded (reads still work, new jobs fail fast).
+app.get('/health/ready', (_req: Request, res: Response) => {
+  const mongo = mongoose.connection.readyState === 1;
+  const redis = isRedisReady();
+  res.status(mongo ? 200 : 503).json({
+    status: mongo && redis ? 'ok' : mongo ? 'degraded' : 'unavailable',
+    checks: { mongo: mongo ? 'ok' : 'down', redis: redis ? 'ok' : 'down' },
+    uptime: Math.round(process.uptime()),
+  });
+});
+
 app.get('/health', (_req: Request, res: Response) => {
   res.json({
     status: 'ok',
@@ -116,6 +137,8 @@ app.get('/health', (_req: Request, res: Response) => {
 // API DOCS (public)
 // ============================================
 
+// Public on purpose: these are the docs for API/Zapier customers (every
+// endpoint they describe still requires auth).
 app.use(
   '/api/v1/docs',
   swaggerUi.serve,

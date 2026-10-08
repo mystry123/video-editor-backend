@@ -30,4 +30,7 @@ const WebhookSchema = new Schema<IWebhook>(
   { timestamps: true }
 );
 
+// Event delivery looks up a user's active webhooks for an event.
+WebhookSchema.index({ userId: 1, isActive: 1, events: 1 });
+
 export const Webhook = mongoose.model<IWebhook>('Webhook', WebhookSchema);

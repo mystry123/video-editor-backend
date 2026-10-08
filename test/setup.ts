@@ -7,9 +7,17 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 // Queues need Redis; tests assert on what would have been enqueued instead.
 vi.mock('../src/queues', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/queues')>();
-  const fakeQueue = () => ({ add: vi.fn().mockResolvedValue({ id: 'test-job' }) });
+  const fakeQueue = () => ({ add: vi.fn().mockResolvedValue({ id: 'test-job' }), getJob: vi.fn().mockResolvedValue(null) });
+  const getters = Object.fromEntries(
+    ['getRenderQueue', 'getTranscriptionQueue', 'getFileProcessingQueue', 'getWebhookQueue', 'getCaptionQueue',
+      'getFileImportQueue', 'getReframeQueue', 'getAccountCleanupQueue', 'getMaintenanceQueue'].map((name) => {
+      const queue = fakeQueue();
+      return [name, () => queue];
+    })
+  );
   return {
     ...actual,
+    ...getters,
     renderQueue: fakeQueue(),
     transcriptionQueue: fakeQueue(),
     fileProcessingQueue: fakeQueue(),

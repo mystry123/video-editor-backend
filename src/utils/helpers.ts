@@ -26,9 +26,13 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Keys that would modify object prototypes if merged from user JSON.
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 export function deepMerge(target: any, source: any): any {
   const result = { ...target };
-  for (const key in source) {
+  for (const key of Object.keys(source || {})) {
+    if (UNSAFE_KEYS.has(key)) continue;
     if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
       result[key] = deepMerge(result[key] || {}, source[key]);
     } else {

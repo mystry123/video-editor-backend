@@ -1,8 +1,9 @@
 // controllers/webhook.controller.ts
 import { sendError } from '../utils/errorResponse';
+import { validateWebhookSignature } from '@remotion/lambda-client';
+import { isTrustedMediaUrl } from '../utils/media';
 
 import { Request, Response, NextFunction } from 'express';
-import crypto from 'crypto';
 import { AuthRequest } from '../types';
 import { Webhook } from '../models/Webhook';
 import { WebhookLog } from '../models/WebhookLog';
@@ -45,33 +46,6 @@ interface RemotionWebhookPayload {
   }>;
 }
 
-// FIXED: Handle different length signatures properly
-function verifyRemotionSignature(payload: string, signature: string | undefined): boolean {
-  // Skip verification if no secret configured
-  if (!env.remotionWebhookSecret) return true;
-  if (!signature) return false;
-
-  try {
-    const expectedSignature = crypto
-      .createHmac('sha512', env.remotionWebhookSecret)
-      .update(payload)
-      .digest('hex');
-
-    // Check length first to avoid timingSafeEqual error
-    if (signature.length !== expectedSignature.length) {
-      return false;
-    }
-
-    return crypto.timingSafeEqual(
-      Buffer.from(signature),
-      Buffer.from(expectedSignature)
-    );
-  } catch (e) {
-    logger.warn('Signature verification error:', e);
-    return false;
-  }
-}
-
 export const handleRemotionWebhook = async (
   req: Request,
   res: Response,
@@ -87,19 +61,20 @@ export const handleRemotionWebhook = async (
       jobId: payload.customData?.jobId,
     });
 
-    // Temporarily disable signature verification for testing
-    // TODO: Re-enable this after fixing the secret configuration
-    /*
-    // Verify signature only if secret is set
-    if (env.remotionWebhookSecret && signature) {
-      const rawBody = JSON.stringify(req.body);
-      if (!verifyRemotionSignature(rawBody, signature)) {
-        logger.warn('Invalid Remotion webhook signature');
-        sendError(req, res, 401, 'Invalid signature', 'INVALID_SIGNATURE');
-        return;
-      }
+    // Fail closed: without a secret there's no way to tell Remotion from anyone
+    // else, so the endpoint doesn't exist. (Renders currently complete via the
+    // worker's polling; this endpoint is enabled with the webhook rework.)
+    if (!env.remotionWebhookSecret) {
+      sendError(req, res, 404, 'Not found', 'ROUTE_NOT_FOUND');
+      return;
     }
-    */
+    try {
+      validateWebhookSignature({ secret: env.remotionWebhookSecret, body: req.body, signatureHeader: signature as string });
+    } catch {
+      logger.warn('Invalid Remotion webhook signature');
+      sendError(req, res, 401, 'Invalid signature', 'INVALID_SIGNATURE');
+      return;
+    }
 
     const jobId = payload.customData?.jobId;
     if (!jobId) {
@@ -112,6 +87,19 @@ export const handleRemotionWebhook = async (
     if (!job) {
       logger.warn('Render job not found for webhook', { jobId });
       sendError(req, res, 404, 'Job not found', 'NOT_FOUND');
+      return;
+    }
+
+    // Even a correctly signed payload must match the job it claims to be about,
+    // and may only point at our own storage.
+    if (job.renderId && payload.renderId && job.renderId !== payload.renderId) {
+      logger.warn('Remotion webhook renderId mismatch', { jobId });
+      sendError(req, res, 409, 'Render id does not match job', 'CONFLICT');
+      return;
+    }
+    if (payload.type === 'success' && payload.outputUrl && !isTrustedMediaUrl(payload.outputUrl)) {
+      logger.warn('Remotion webhook outputUrl not on trusted storage', { jobId });
+      sendError(req, res, 400, 'Untrusted output URL', 'BAD_REQUEST');
       return;
     }
 
@@ -347,14 +335,20 @@ export const updateWebhook = async (
   try {
     const { id } = req.params;
     const userId = req.userId!;
-    const updates = req.body;
+    // Whitelisted fields only. Passing req.body straight through let a request
+    // set userId (redirecting another account's events to this endpoint),
+    // the signing secret, counters, or update operators.
+    const updates: Record<string, unknown> = {};
+    for (const field of ['name', 'url', 'events', 'isActive'] as const) {
+      if (req.body[field] !== undefined) updates[field] = req.body[field];
+    }
 
     const user = await User.findById(userId);
     if (!user) throw ApiError.notFound('User not found');
 
     const webhook = await Webhook.findOneAndUpdate(
       { _id: id, userId: user._id },
-      updates,
+      { $set: updates },
       { new: true }
     );
 

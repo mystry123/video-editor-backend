@@ -26,6 +26,7 @@ import {
   OAuthUserInfo,
 } from '../services/oauth.service';
 import { sendPasswordResetEmail, sendWelcomeEmail } from '../services/email.service';
+import { createSession, revokeAllSessions, revokeSession, rotateRefreshToken } from '../services/session.service';
 import {
   accessTokenCookieOptions,
   refreshTokenCookieOptions,
@@ -108,14 +109,15 @@ function extractDeviceInfo(userAgent: string): string {
 
 // Login user: generate tokens, return in response (no cookies)
 async function loginUser(user: IUser, req: any, res: Response, saveMetadata: boolean = false, loginType: 'password' | 'oauth_google' | 'oauth_apple' | 'oauth_facebook' | 'signup' = 'password'): Promise<AuthResponse> {
-  const tokenPayload = {
-    userId: user._id.toString(),
-    email: user.email,
-    role: user.role,
-  };
-
-  const tokens = generateTokenPair(tokenPayload);
-  const hashedRefresh = hashRefreshToken(tokens.refreshToken);
+  const userAgent: string = res.locals?.userAgent || req.get?.('User-Agent') || '';
+  const location = res.locals?.geoLocation;
+  const tokens = await createSession(user, {
+    method: loginType,
+    userAgent,
+    ip: req.ip,
+    device: extractDeviceInfo(userAgent),
+    location: location ? [location.city, location.country].filter(Boolean).join(', ') || null : null,
+  });
 
   // Only save metadata for explicit login (not OAuth/signup unless specified)
   if (saveMetadata) {
@@ -142,11 +144,7 @@ async function loginUser(user: IUser, req: any, res: Response, saveMetadata: boo
     }
   }
 
-  // Store hashed refresh token (keep last 5 for multi-device support)
-  await User.findByIdAndUpdate(user._id, {
-    $push: { refreshTokens: { $each: [hashedRefresh], $slice: -5 } },
-    lastLoginAt: new Date(),
-  });
+  await User.updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date() } });
 
   // Return tokens in response body instead of cookies
   return {
@@ -159,10 +157,9 @@ async function loginUser(user: IUser, req: any, res: Response, saveMetadata: boo
 
 // Handle OAuth user: find or create
 async function handleOAuthUser(userInfo: OAuthUserInfo): Promise<IUser> {
-  // Check if user exists with this OAuth provider
+  // Check if user exists with this OAuth provider ($elemMatch: both fields on the same entry)
   let user = await User.findOne({
-    'oauthAccounts.provider': userInfo.provider,
-    'oauthAccounts.providerId': userInfo.providerId,
+    oauthAccounts: { $elemMatch: { provider: userInfo.provider, providerId: userInfo.providerId } },
   });
 
   if (user) {
@@ -181,15 +178,49 @@ async function handleOAuthUser(userInfo: OAuthUserInfo): Promise<IUser> {
     return user;
   }
 
+  if (!userInfo.email) {
+    throw ApiError.withCode(400, 'OAUTH_NO_EMAIL', `Your ${userInfo.provider} account didn't share an email address, so we can't sign you in with it.`);
+  }
+  const email = userInfo.email.toLowerCase();
+
   // Check if user exists with same email
-  user = await User.findOne({ email: userInfo.email });
+  user = await User.findOne({ email }).select('+password +refreshTokens');
 
   if (user) {
+    // Linking by email is only safe when the provider has verified that the
+    // person signing in owns the address. Otherwise anyone could create a
+    // provider account with someone else's email and take over their account.
+    if (!userInfo.emailVerified) {
+      throw ApiError.withCode(
+        409,
+        'OAUTH_EMAIL_UNVERIFIED',
+        `An account with this email already exists. Sign in with your password, then connect ${userInfo.provider} in Settings.`
+      );
+    }
+
+    // If the existing account never verified its email, whoever set its
+    // password never proved they own the address (e.g. someone pre-registering
+    // a victim's email). The provider just did, so the provider wins: drop the
+    // unverified password and end that account's existing sessions.
+    if (!user.isVerified) {
+      if (user.password) {
+        logger.warn('Removing unverified password while linking verified OAuth identity', {
+          userId: String(user._id),
+          provider: userInfo.provider,
+        });
+        user.password = undefined;
+      }
+      user.refreshTokens = [];
+      await revokeAllSessions(user._id.toString(), 'unverified_account_claimed');
+      user.isVerified = true;
+      user.authProvider = userInfo.provider;
+    }
+
     // Link OAuth account to existing user
     user.oauthAccounts.push({
       provider: userInfo.provider,
       providerId: userInfo.providerId,
-      email: userInfo.email,
+      email,
       accessToken: userInfo.accessToken,
       refreshToken: userInfo.refreshToken,
     });
@@ -199,16 +230,16 @@ async function handleOAuthUser(userInfo: OAuthUserInfo): Promise<IUser> {
 
   // Create new user
   user = await User.create({
-    email: userInfo.email,
+    email,
     name: userInfo.name,
     avatarUrl: userInfo.avatarUrl,
     authProvider: userInfo.provider,
-    isVerified: true, // OAuth users are pre-verified
+    isVerified: userInfo.emailVerified,
     oauthAccounts: [
       {
         provider: userInfo.provider,
         providerId: userInfo.providerId,
-        email: userInfo.email,
+        email,
         accessToken: userInfo.accessToken,
         refreshToken: userInfo.refreshToken,
       },
@@ -318,15 +349,13 @@ export const logout = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    // Get refresh token from request body
-    const { refreshToken } = req.body;
-
-    // Remove refresh token from DB if exists
+    // End this device's session (identified by the access token), so both its
+    // access and refresh tokens stop working. A refresh token in the body
+    // (older clients) is also cleaned up.
+    if (req.sessionId) await revokeSession(req.sessionId, 'logout', req.userId);
+    const { refreshToken } = req.body || {};
     if (refreshToken && req.userId) {
-      const hashedToken = hashRefreshToken(refreshToken);
-      await User.findByIdAndUpdate(req.userId, {
-        $pull: { refreshTokens: hashedToken },
-      });
+      await User.updateOne({ _id: req.userId }, { $pull: { refreshTokens: hashRefreshToken(refreshToken) } });
     }
 
     res.json({ message: 'Logged out successfully' });
@@ -342,12 +371,7 @@ export const logoutAll = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    // Clear all refresh tokens
-    if (req.userId) {
-      await User.findByIdAndUpdate(req.userId, {
-        $set: { refreshTokens: [] },
-      });
-    }
+    if (req.userId) await revokeAllSessions(req.userId, 'logout_all');
 
     res.json({ message: 'Logged out from all devices' });
   } catch (error) {
@@ -369,39 +393,14 @@ export const refresh = async (
       throw ApiError.withCode(401, 'SESSION_INVALID', 'Your session has ended. Sign in again.');
     }
 
-    // Verify token
-    const payload = verifyRefreshToken(refreshToken);
-
-    if (!payload) {
-      throw ApiError.withCode(401, 'SESSION_INVALID', 'Your session has ended. Sign in again.');
-    }
-
-    // Check if token exists in user's tokens (not revoked)
-    const hashedToken = hashRefreshToken(refreshToken);
-    
-    const user = await User.findOne({
-      _id: payload.userId,
-      refreshTokens: hashedToken,
-    }).select('+refreshTokens');
-
-    if (!user) {
-      throw ApiError.withCode(401, 'SESSION_INVALID', 'Your session has ended. Sign in again.');
-    }
-
-    // New access token; the refresh token itself is unchanged (rotation comes with the session rework).
-    // There's deliberately no $pull/$push of the same hash here: that left a window where
-    // parallel refreshes found no token and logged the user out.
-    const newAccessToken = generateAccessToken({
-      userId: user._id.toString(),
-      email: user.email,
-      role: user.role,
-    });
+    const result = await rotateRefreshToken(refreshToken, { ip: req.ip });
 
     res.json({
-      user: formatUserResponse(user),
-      accessToken: newAccessToken,
-      refreshToken: refreshToken, // Return the same refresh token
-      expiresIn: 900, // 15 minutes
+      user: formatUserResponse(result.user),
+      accessToken: result.accessToken,
+      // Rotated on every refresh: the client must store this new one.
+      refreshToken: result.refreshToken,
+      expiresIn: result.expiresIn,
     });
   } catch (error) {
     next(error);
@@ -468,8 +467,8 @@ export const resetPassword = async (
     user.password = password;
     user.resetPasswordToken = undefined;
     user.resetPasswordExpires = undefined;
-    user.refreshTokens = []; // Invalidate all sessions
     await user.save();
+    await revokeAllSessions(user._id.toString(), 'password_reset');
 
 
     res.json({ message: 'Password reset successfully. Please login with your new password.' });
@@ -503,10 +502,10 @@ export const changePassword = async (
       throw ApiError.withCode(400, 'WRONG_PASSWORD', 'Your current password is incorrect.');
     }
 
-    // Update password and clear all sessions
+    // Update password and end every session, then start a new one for this device.
     user.password = newPassword;
-    user.refreshTokens = [];
     await user.save();
+    await revokeAllSessions(user._id.toString(), 'password_change');
 
     // Issue new tokens
     const result = await loginUser(user, req, res, true, 'password');
@@ -888,8 +887,7 @@ export const linkOAuthAccount = async (
 
     // Check if this OAuth account is already linked to another user
     const existingUser = await User.findOne({
-      'oauthAccounts.provider': provider,
-      'oauthAccounts.providerId': userInfo.providerId,
+      oauthAccounts: { $elemMatch: { provider, providerId: userInfo.providerId } },
     });
 
     if (existingUser && existingUser._id.toString() !== user._id.toString()) {

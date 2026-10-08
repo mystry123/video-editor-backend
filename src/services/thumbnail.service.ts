@@ -1,4 +1,5 @@
 // services/thumbnail.service.ts
+import { isTrustedMediaUrl } from '../utils/media';
 
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
@@ -42,9 +43,15 @@ export async function generateThumbnailFromVideo(options: ThumbnailOptions): Pro
   try {
     logger.info('Generating thumbnail', { videoUrl, renderId, timestamp, width });
 
+    // ffmpeg (below) follows playlists and can read local files, so only our
+    // own storage URLs are ever handed to it.
+    if (!isTrustedMediaUrl(videoUrl)) {
+      throw new Error('Refusing to generate a thumbnail from an untrusted URL');
+    }
+
     // Check if video URL is accessible
     logger.info('Checking video URL accessibility...');
-    const response = await fetch(videoUrl, { method: 'HEAD' });
+    const response = await fetch(videoUrl, { method: 'HEAD', signal: AbortSignal.timeout(15_000) });
     if (!response.ok) {
       throw new Error(`Video URL not accessible: ${response.status} ${response.statusText}`);
     }

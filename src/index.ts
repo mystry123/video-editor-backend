@@ -4,17 +4,9 @@ import http from 'http';
 import mongoose from 'mongoose';
 import * as dotenv from 'dotenv';
 import app from './app';
-import { connectDatabase } from './config/database';
 import { startWorkers, gracefulShutdown } from './queues';
-import {
-  closeAllConnections,
-  checkRedisHealth,
-  connectRedis,
-  waitForRedis,
-  isRedisReady,
-} from './config/redis';
-import { initializeQuotaSystem, migrateExistingUsers } from './config/quota-init';
-import { initPlans } from './services/plan.service';
+import { closeAllConnections, isRedisReady, onRedisReady } from './config/redis';
+import { checkMediaTools, initCore, initRedis } from './bootstrap';
 import { logger } from './utils/logger';
 import { env } from './config/env';
 
@@ -62,40 +54,11 @@ async function bootstrap(): Promise<void> {
   logger.info('🚀 Starting application...');
 
   try {
-    // =========================================================================
-    // Step 1: Connect to MongoDB
-    // =========================================================================
-    await connectDatabase();
-    logger.info('✅ MongoDB connected');
+    // Steps 1-2: MongoDB, quotas, plans
+    await initCore();
 
-    // =========================================================================
-    // Step 2: Initialize Quota System
-    // =========================================================================
-    initializeQuotaSystem();
-    // Plans are editable in the admin settings; falls back to code defaults if this fails.
-    try {
-      await initPlans();
-    } catch (error: any) {
-      logger.error('Failed to load plans; using built-in defaults', { error: error.message });
-    }
-    
-    // Migrate existing users (run once)
-    if (env.nodeEnv === 'development') {
-      await migrateExistingUsers();
-    }
-    logger.info('✅ Quota system initialized');
-
-    // =========================================================================
-    // Step 3: Connect to Redis (with graceful fallback)
-    // =========================================================================
-    let redisHealthy = false;
-
-    try {
-      await connectRedis();
-      redisHealthy = await waitForRedis(5000);
-    } catch (error: any) {
-      logger.warn(`⚠️ Redis connection error: ${error.message}`);
-    }
+    // Step 3: Redis (with graceful fallback)
+    const redisHealthy = await initRedis(5000);
 
     if (!redisHealthy) {
       if (env.nodeEnv === 'development') {
@@ -132,6 +95,8 @@ async function bootstrap(): Promise<void> {
       logger.error('❌ Server error:', err);
     });
 
+    checkMediaTools();
+
     // =========================================================================
     // Step 5: Start Workers (only if Redis is available)
     // =========================================================================
@@ -145,8 +110,17 @@ async function bootstrap(): Promise<void> {
           logger.error('❌ Failed to start workers:', error.message);
         }
       }, 1000);
-    } else if (!redisHealthy) {
-      logger.warn('⚠️ Workers disabled - Redis not available');
+    } else if (!redisHealthy && process.env.ENABLE_WORKERS !== 'false') {
+      // Start them as soon as Redis comes up instead of never.
+      logger.warn('⚠️ Redis not available yet - workers will start when it connects');
+      onRedisReady(() => {
+        try {
+          startWorkers();
+          logger.info('✅ Workers started (Redis became available)');
+        } catch (error: any) {
+          logger.error('❌ Failed to start workers:', error.message);
+        }
+      });
     } else {
       logger.info('ℹ️ Workers disabled by ENABLE_WORKERS=false');
     }

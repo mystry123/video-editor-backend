@@ -3,6 +3,7 @@
 // Pattern follows transcription.worker.ts exactly
 
 import { Job } from 'bullmq';
+import { isFinalAttempt } from '../utils/jobs';
 import { File } from '../models/File';
 import { Transcription } from '../models/Transcription';
 import {
@@ -150,20 +151,26 @@ async function processReframeJob(job: Job<ReframeJobData>) {
       elementId, // returned so frontend knows which element to update
     };
   } catch (error: any) {
-    log.error(`Failed: ${error.message}`);
-
-    await File.updateOne(
-      { _id: fileId },
-      {
-        $set: {
-          [`reframe.${reframeKey}.status`]: 'failed',
-          [`reframe.${reframeKey}.error`]: error.message,
-        },
-      }
-    );
-
+    log.error(`Failed (attempt ${job.attemptsMade + 1}): ${error.message}`);
+    // Earlier attempts stay "processing" so the queue's retry can succeed.
+    if (isFinalAttempt(job)) await markReframeFailed(fileId, reframeKey);
     throw error;
   }
+}
+
+const REFRAME_FAILED_MESSAGE = "We couldn't analyze this video for reframing. Try again.";
+
+/** Marks one aspect ratio's reframe failed, unless it already finished. */
+async function markReframeFailed(fileId: string, reframeKey: string): Promise<void> {
+  await File.updateOne(
+    { _id: fileId, [`reframe.${reframeKey}.status`]: { $nin: ['completed'] } },
+    {
+      $set: {
+        [`reframe.${reframeKey}.status`]: 'failed',
+        [`reframe.${reframeKey}.error`]: REFRAME_FAILED_MESSAGE,
+      },
+    }
+  );
 }
 
 // ============================================================================
@@ -173,6 +180,8 @@ async function processReframeJob(job: Job<ReframeJobData>) {
 const reframeWorker = createWorker({
   name: 'reframe',
   processor: processReframeJob,
+  // Crashed or stalled for good: don't leave the reframe "processing".
+  onFinalFailure: async (job) => markReframeFailed(job.data.fileId, job.data.aspectRatio.replace(':', '_')),
   concurrency: 2,
   lockDuration: 600_000, // 10 minutes for long videos
 });

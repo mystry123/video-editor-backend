@@ -1,5 +1,6 @@
 // middleware/rateLimiter.ts
 import { sendError } from '../utils/errorResponse';
+import { onRedisReady } from '../config/redis';
 
 import rateLimit, { Options } from 'express-rate-limit';
 import { Request, Response, NextFunction, RequestHandler } from 'express';
@@ -87,21 +88,18 @@ function createLimiter(config: LimiterConfig): RequestHandler {
   // Start with memory store
   let currentLimiter = rateLimit(options as Options);
 
-  // Try to upgrade to Redis store after 2 seconds (give Redis time to connect)
-  setTimeout(async () => {
-    try {
-      const store = await getRedisStore(config.prefix);
-      if (store) {
-        currentLimiter = rateLimit({
-          ...options,
-          store,
-        } as Options);
-        logger.info(`Rate limiter [${config.prefix}]: Upgraded to Redis`);
-      }
-    } catch {
-      // Keep using memory store
-    }
-  }, 2000);
+  // Switch to the shared Redis store as soon as Redis is ready (limits then
+  // survive restarts and apply across processes). Until then, memory store.
+  onRedisReady(() => {
+    getRedisStore(config.prefix)
+      .then((store) => {
+        if (store) {
+          currentLimiter = rateLimit({ ...options, store } as Options);
+          logger.info(`Rate limiter [${config.prefix}]: Upgraded to Redis`);
+        }
+      })
+      .catch(() => undefined); // keep the memory store
+  });
 
   // Return wrapper that uses current limiter
   const handler: RequestHandler = (req: Request, res: Response, next: NextFunction) => {
@@ -147,13 +145,24 @@ export const uploadLimiter:RequestHandler = createLimiter({
   message: 'Upload limit exceeded, please try again in 1 hour',
 });
 
-// Auth limiter - 10 attempts/15min per IP
+// Auth limiter - 30 attempts/15min per IP across login, signup and password reset
 export const authLimiter: RequestHandler = createLimiter({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: 30,
   prefix: 'auth',
-  message: 'Too many login attempts, please try again later',
+  message: 'Too many attempts. Wait a few minutes and try again.',
   keyGenerator: (req: Request) => req.ip || 'anonymous',
+});
+
+// Login limiter - 10 attempts/15min per IP + email, so guessing one account's
+// password is slow even from many sessions, without locking out the real owner
+// signing in from elsewhere.
+export const loginLimiter: RequestHandler = createLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  prefix: 'login',
+  message: 'Too many sign-in attempts for this account. Wait a few minutes and try again.',
+  keyGenerator: (req: Request) => `${req.ip || 'anonymous'}:${String(req.body?.email || '').toLowerCase().slice(0, 200)}`,
 });
 
 // Caption limiter - 20 captions/hour per user

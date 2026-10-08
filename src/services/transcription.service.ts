@@ -34,10 +34,12 @@ export async function createElevenLabsTranscription(
 ): Promise<TranscriptionResult> {
   logger.info('Starting ElevenLabs transcription', { audioUrl, options });
 
-  // Download audio file
-  const audioResponse = await fetch(audioUrl);
-  if (!audioResponse.ok) {
-    throw new Error(`Failed to download audio: ${audioResponse.statusText}`);
+  // ElevenLabs fetches the file from its URL itself (cloud_storage_url), so
+  // only check it's reachable. (This used to download the whole file and
+  // discard it, holding a socket for minutes on long videos.)
+  const head = await fetch(audioUrl, { method: 'HEAD', timeout: 15_000 });
+  if (!head.ok) {
+    throw new Error(`Audio file is not reachable: ${head.status} ${head.statusText}`);
   }
 
 
@@ -57,6 +59,8 @@ export async function createElevenLabsTranscription(
 
   const response = await fetch(`${ELEVENLABS_API_URL}/speech-to-text`, {
     method: 'POST',
+    // Long recordings take a while to transcribe, but not forever.
+    timeout: 15 * 60_000,
     headers: {
       'xi-api-key': env.elevenLabsApiKey,
     },

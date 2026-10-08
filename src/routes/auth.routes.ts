@@ -2,6 +2,7 @@ import { Router, type Router as ExpressRouter } from 'express';
 import { requireAuth, optionalAuth, requireCookieAuth, requireSession } from '../middleware/auth.middleware';
 import { validate } from '../middleware/validate.middleware';
 import { attachUsageSummary } from '../middleware/quota.middleware';
+import { authLimiter, loginLimiter } from '../middleware/rateLimit.middleware';
 import * as authController from '../controllers/auth.controller';
 import * as accountController from '../controllers/account.controller';
 import {
@@ -25,11 +26,11 @@ const router: ExpressRouter = Router();
 // ============================================
 
 // Local authentication
-router.post('/signup', validate(signupSchema), authController.signup);
-router.post('/login', validate(loginSchema), authController.login);
+router.post('/signup', authLimiter, validate(signupSchema), authController.signup);
+router.post('/login', authLimiter, loginLimiter, validate(loginSchema), authController.login);
 router.post('/refresh', authController.refresh);
-router.post('/forgot-password', validate(forgotPasswordSchema), authController.forgotPassword);
-router.post('/reset-password', validate(resetPasswordSchema), authController.resetPassword);
+router.post('/forgot-password', authLimiter, validate(forgotPasswordSchema), authController.forgotPassword);
+router.post('/reset-password', authLimiter, validate(resetPasswordSchema), authController.resetPassword);
 
 // Session status (works with or without auth)
 router.get('/status', optionalAuth, authController.getStatus);
@@ -37,17 +38,17 @@ router.get('/status', optionalAuth, authController.getStatus);
 // Google OAuth
 router.get('/google', authController.googleAuth);
 router.get('/google/callback', authController.googleCallback);
-router.post('/google/token', validate(oauthTokenSchema), authController.googleToken);
+router.post('/google/token', authLimiter, validate(oauthTokenSchema), authController.googleToken);
 
 // Apple OAuth
 router.get('/apple', authController.appleAuth);
 router.post('/apple/callback', authController.appleCallback); // Apple uses POST
-router.post('/apple/token', validate(oauthTokenSchema), authController.appleToken);
+router.post('/apple/token', authLimiter, validate(oauthTokenSchema), authController.appleToken);
 
 // Facebook OAuth
 router.get('/facebook', authController.facebookAuth);
 router.get('/facebook/callback', authController.facebookCallback);
-router.post('/facebook/token', validate(oauthTokenSchema), authController.facebookToken);
+router.post('/facebook/token', authLimiter, validate(oauthTokenSchema), authController.facebookToken);
 
 // ============================================
 // PROTECTED ROUTES (Authentication required)
@@ -67,6 +68,9 @@ router.delete('/me', requireAuth, requireSession, validate(deleteAccountSchema),
 router.post('/me/avatar-upload', requireAuth, validate(avatarUploadSchema), accountController.createAvatarUpload);
 router.get('/me/usage', requireAuth, accountController.getMyUsage);
 router.get('/me/sign-ins', requireAuth, requireSession, accountController.getSignInHistory);
+router.get('/sessions', requireAuth, requireSession, accountController.getSessions);
+router.delete('/sessions/:id', requireAuth, requireSession, accountController.revokeSessionById);
+router.post('/upload-ticket', requireAuth, requireSession, accountController.createUploadTicket);
 
 // Password management
 router.post('/change-password', requireAuth, requireSession, validate(changePasswordSchema), authController.changePassword);
@@ -77,8 +81,8 @@ router.post('/link/:provider', requireCookieAuth, validate(oauthTokenSchema), au
 router.delete('/unlink/:provider', requireCookieAuth, authController.unlinkOAuthAccount);
 
 // API Keys (for programmatic access)
-router.post('/api-keys', requireAuth, validate(createApiKeySchema), authController.createApiKey);
+router.post('/api-keys', requireAuth, requireSession, validate(createApiKeySchema), authController.createApiKey);
 router.get('/api-keys', requireAuth, authController.listApiKeys);
-router.delete('/api-keys/:id', requireAuth, authController.deleteApiKey);
+router.delete('/api-keys/:id', requireAuth, requireSession, authController.deleteApiKey);
 
 export default router;

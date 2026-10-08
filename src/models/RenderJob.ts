@@ -161,7 +161,6 @@ const RenderJobSchema = new Schema<IRenderJob>(
 );
 
 // Indexes
-RenderJobSchema.index({ userId: 1, status: 1 });
 RenderJobSchema.index({ templateId: 1, createdAt: -1 });
 RenderJobSchema.index({ captionProjectId: 1, createdAt: -1 });
 
@@ -169,5 +168,12 @@ RenderJobSchema.index({ captionProjectId: 1, createdAt: -1 });
 RenderJobSchema.statics.findByIdWithAllFields = function(id: string) {
   return this.findById(id).select('+inputProps +bucketName +serveUrl +webhookUrl +webhookSent +estimatedCost +actualCost +costDisplay +currency +framesRendered +chunks +timeToRenderFrames +timeToFinish +timeToFinishChunks +timeToEncode +timeToCombine +combinedFrames +lambdasInvoked +outputSizeInBytes +estimatedBillingDurationInMilliseconds +fatalErrorEncountered +compositionValidated +functionLaunched +serveUrlOpened +timeoutTimestamp +renderSize +currentTime +type +outKey +outBucket +artifacts +renderMetadata +encodingStatus +cleanup +mostExpensiveFrameRanges +renderErrors');
 };
+
+// Lists sort by newest first, per user and optionally by status.
+RenderJobSchema.index({ userId: 1, createdAt: -1 });
+RenderJobSchema.index({ userId: 1, status: 1, createdAt: -1 });
+// Template renders list and the maintenance sweep.
+RenderJobSchema.index({ templateId: 1, userId: 1, createdAt: -1 });
+RenderJobSchema.index({ status: 1, updatedAt: 1 });
 
 export const RenderJob = mongoose.model<IRenderJob>('RenderJob', RenderJobSchema);

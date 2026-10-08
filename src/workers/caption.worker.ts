@@ -1,4 +1,5 @@
 // workers/caption.worker.ts
+import { enqueueJob, transition } from '../utils/jobs';
 
 import { Job } from 'bullmq';
 import { CaptionProject, ICaptionProject } from '../models/Caption';
@@ -198,10 +199,12 @@ async function processCaptionJob(job: Job<CaptionJobData>) {
           });
           transcriptionId = newTranscription._id.toString();
 
-          await transcriptionQueue.add('transcribe', {
-            transcriptionId,
-            fileUrl: file.cdnUrl,
-          });
+          await enqueueJob(
+            transcriptionQueue,
+            'transcribe',
+            { transcriptionId, fileUrl: file.cdnUrl },
+            { jobId: `transcription-${transcriptionId}` }
+          );
 
           log.info(`Created transcription: ${transcriptionId}`);
         }
@@ -280,7 +283,7 @@ async function processCaptionJob(job: Job<CaptionJobData>) {
 
     await CaptionProject.updateOne({ _id: projectId }, { renderJobId: renderJob._id });
 
-    await renderQueue.add('render', { jobId: renderJob._id.toString() }, { priority: 1 });
+    await enqueueJob(renderQueue, 'render', { jobId: renderJob._id.toString() }, { jobId: `render-${renderJob._id}`, priority: 1 });
 
     const renderResult = await waitForRender(renderJob._id.toString(), projectId, log);
 
@@ -298,16 +301,14 @@ async function processCaptionJob(job: Job<CaptionJobData>) {
 
     log.info('Completed!');
 
-    await CaptionProject.updateOne(
-      { _id: projectId },
-      {
-        status: 'completed',
-        outputUrl: renderResult.outputUrl,
-        thumbnailUrl: renderResult.thumbnailUrl,
-        renderCompletedAt: new Date(),
-        progress: 100,
-      }
-    );
+    // Only an active project completes: a cancellation (status failed) wins.
+    await transition(CaptionProject, projectId, ACTIVE_CAPTION_STATES, {
+      status: 'completed',
+      outputUrl: renderResult.outputUrl,
+      thumbnailUrl: renderResult.thumbnailUrl,
+      renderCompletedAt: new Date(),
+      progress: 100,
+    });
 
     return {
       success: true,
@@ -317,14 +318,13 @@ async function processCaptionJob(job: Job<CaptionJobData>) {
   } catch (error: any) {
     log.error(`Error: ${error.message}`);
 
-    await CaptionProject.updateOne(
-      { _id: projectId },
-      { status: 'failed', error: error.message }
-    );
+    await transition(CaptionProject, projectId, ACTIVE_CAPTION_STATES, { status: 'failed', error: error.message });
 
     throw error;
   }
 }
+
+const ACTIVE_CAPTION_STATES = ['pending', 'transcribing', 'generating', 'rendering'];
 
 // ============================================================================
 // Create Worker
@@ -333,6 +333,13 @@ async function processCaptionJob(job: Job<CaptionJobData>) {
 const captionWorker = createWorker({
   name: 'caption',
   processor: processCaptionJob,
+  // Crashed or stalled for good: don't leave the project in progress forever.
+  onFinalFailure: async (job) => {
+    await transition(CaptionProject, job.data.projectId, ACTIVE_CAPTION_STATES, {
+      status: 'failed',
+      error: 'Captioning stopped unexpectedly. Try again.',
+    });
+  },
   concurrency: 5,
   lockDuration: 120000, // 2 minutes
 });

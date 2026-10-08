@@ -1,4 +1,5 @@
 import { Response, NextFunction } from 'express';
+import { isSessionActive } from '../services/session.service';
 import { sendError } from '../utils/errorResponse';
 import { AuthRequest } from '../types';
 import { User } from '../models/User';
@@ -13,6 +14,16 @@ import { logger } from '../utils/logger';
 // API KEY AUTHENTICATION
 // ============================================
 
+
+const API_KEY_PERMISSION_BY_METHOD: Record<string, string> = {
+  GET: 'read',
+  HEAD: 'read',
+  OPTIONS: 'read',
+  POST: 'write',
+  PUT: 'write',
+  PATCH: 'write',
+  DELETE: 'delete',
+};
 
 export const apiKeyAuth = async (
   req: AuthRequest,
@@ -45,9 +56,17 @@ export const apiKeyAuth = async (
       return;
     }
 
+    // Enforce the key's permissions by request type. ('admin' allows everything.)
+    const permissions = keyRecord.permissions || [];
+    const required = API_KEY_PERMISSION_BY_METHOD[req.method] || 'write';
+    if (!permissions.includes('admin') && !permissions.includes(required)) {
+      sendError(req, res, 403, `This API key doesn't have the "${required}" permission.`, 'PERMISSION_REQUIRED');
+      return;
+    }
+
     req.userId = user._id.toString();
     req.user = user;
-    req.permissions = keyRecord.permissions;
+    req.permissions = permissions;
     req.authMethod = 'api-key';
     next();
   } catch (error) {
@@ -58,6 +77,21 @@ export const apiKeyAuth = async (
 // ============================================
 // BEARER TOKEN AUTHENTICATION (NEW!)
 // ============================================
+
+/**
+ * Verifies an access token and loads its user. Returns null if the token is
+ * invalid, its session was revoked (sign-out, password change, theft
+ * detection), or it's an upload ticket used outside an upload route.
+ */
+async function resolveAccessToken(token: string, req: AuthRequest): Promise<{ user: any; payload: any } | null> {
+  const payload: any = verifyAccessToken(token);
+  if (!payload) return null;
+  if (payload.tokenType === 'upload' && !req.allowUploadTicket) return null;
+  if (payload.sid && !(await isSessionActive(payload.sid))) return null;
+  const user = await User.findById(payload.userId);
+  if (!user) return null;
+  return { user, payload };
+}
 
 export const bearerAuth = async (
   req: AuthRequest,
@@ -74,21 +108,15 @@ export const bearerAuth = async (
   const token = authHeader.slice(7);
 
   try {
-    const payload = verifyAccessToken(token);
-
-    if (!payload) {
-      sendError(req, res, 401, 'Invalid or expired token', 'SESSION_INVALID');
+    const resolved = await resolveAccessToken(token, req);
+    if (!resolved) {
+      sendError(req, res, 401, 'Your session has ended. Sign in again.', 'SESSION_INVALID');
       return;
     }
 
-    const user = await User.findById(payload.userId);
-    if (!user) {
-      sendError(req, res, 401, 'User not found', 'SESSION_INVALID');
-      return;
-    }
-
-    req.userId = payload.userId;
-    req.user = user;
+    req.userId = resolved.payload.userId;
+    req.user = resolved.user;
+    req.sessionId = resolved.payload.sid;
     req.authMethod = 'bearer';
     next();
   } catch (error) {
@@ -166,14 +194,12 @@ export const optionalAuth = async (
   if (authHeader?.startsWith('Bearer ')) {
     try {
       const token = authHeader.slice(7);
-      const payload = verifyAccessToken(token);
-      if (payload) {
-        const user = await User.findById(payload.userId);
-        if (user) {
-          req.userId = payload.userId;
-          req.user = user;
-          req.authMethod = 'bearer';
-        }
+      const resolved = await resolveAccessToken(token, req);
+      if (resolved) {
+        req.userId = resolved.payload.userId;
+        req.user = resolved.user;
+        req.sessionId = resolved.payload.sid;
+        req.authMethod = 'bearer';
       }
     } catch (error) {
       logger.debug('Optional bearer auth failed:', error);
@@ -262,21 +288,15 @@ export const requireCookieAuth = async (
   }
 
   try {
-    const payload = verifyAccessToken(token);
-
-    if (!payload) {
-      sendError(req, res, 401, 'Invalid or expired session', 'SESSION_INVALID');
+    const resolved = await resolveAccessToken(token, req);
+    if (!resolved) {
+      sendError(req, res, 401, 'Your session has ended. Sign in again.', 'SESSION_INVALID');
       return;
     }
 
-    const user = await User.findById(payload.userId);
-    if (!user) {
-      sendError(req, res, 401, 'User not found', 'SESSION_INVALID');
-      return;
-    }
-
-    req.userId = payload.userId;
-    req.user = user;
+    req.userId = resolved.payload.userId;
+    req.user = resolved.user;
+    req.sessionId = resolved.payload.sid;
     req.authMethod = 'cookie';
     next();
   } catch (error) {

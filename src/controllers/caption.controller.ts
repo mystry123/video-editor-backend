@@ -1,4 +1,5 @@
 import { Response, NextFunction } from 'express';
+import { enqueueJob } from '../utils/jobs';
 import { ApiError } from '../utils/ApiError';
 import { Types } from 'mongoose';
 import { CaptionProject, CaptionProjectStatus } from '../models/Caption';
@@ -22,6 +23,14 @@ async function getCaptionQueue() {
 // ============================================================================
 // Types
 // ============================================================================
+
+/** Presets a user may apply: built-in, shared publicly, or their own. */
+function usablePresetFilter(presetId: string, userId: string | undefined) {
+  return {
+    _id: presetId,
+    $or: [{ isSystem: true }, { isPublic: true }, ...(userId ? [{ userId }] : [])],
+  };
+}
 
 interface AuthRequest {
   userId?: string;
@@ -209,7 +218,7 @@ export class CaptionProjectController {
           throw ApiError.badRequest('Invalid presetId format');
         }
         
-        const preset = await CaptionPreset.findById(presetId);
+        const preset = await CaptionPreset.findOne(usablePresetFilter(presetId, userId));
         if (!preset) {
           throw ApiError.notFound('Preset not found');
         }
@@ -235,18 +244,20 @@ export class CaptionProjectController {
       
       // Add to processing queue
       const queue = await getCaptionQueue();
-      await queue.add(
-        'process-caption',
-        { 
-          projectId: project._id.toString(),
-          hasExistingTranscription: !!existingTranscription,
-        },
-        { 
-          jobId: project._id.toString(),
-          removeOnComplete: true,
-          removeOnFail: false,
-        }
-      );
+      try {
+        await enqueueJob(
+          queue,
+          'process-caption',
+          { projectId: project._id.toString(), hasExistingTranscription: !!existingTranscription },
+          { jobId: `caption-${project._id}`, removeOnComplete: true, removeOnFail: false }
+        );
+      } catch (error) {
+        await CaptionProject.updateOne(
+          { _id: project._id },
+          { status: 'failed', error: 'Captioning is temporarily unavailable. Try again in a minute.' }
+        );
+        throw error;
+      }
       
       res.status(201).json({
         success: true,
@@ -537,7 +548,7 @@ export class CaptionProjectController {
       }
       
       // Verify preset exists
-      const preset = await CaptionPreset.findById(presetId);
+      const preset = await CaptionPreset.findOne(usablePresetFilter(presetId, userId));
       if (!preset) {
         throw ApiError.notFound('Preset not found');
       }

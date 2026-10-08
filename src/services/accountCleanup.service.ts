@@ -18,6 +18,7 @@ import { TemplateVersion } from '../models/TemplateVersion';
 import { Transcription } from '../models/Transcription';
 import { UsageLog } from '../models/UsageLog';
 import { UserLoginHistory } from '../models/UserLoginHistory';
+import { Session } from '../models/Session';
 import { Webhook } from '../models/Webhook';
 import { WebhookLog } from '../models/WebhookLog';
 import { deleteS3Prefix } from './storage.service';
@@ -74,6 +75,7 @@ export async function purgeUserData(userId: string): Promise<CleanupReport> {
   await remove('usageLogs', UsageLog.deleteMany({ userId: owner }));
   await remove('loginHistory', UserLoginHistory.deleteMany({ userId: owner }));
   await remove('apiKeys', ApiKey.deleteMany({ userId: owner }));
+  await remove('sessions', Session.deleteMany({ userId: owner }));
 
   const report = { s3Objects, renderOutputs, documents };
   logger.info(`[AccountCleanup] Purged data for user ${userId.slice(-6)}`, report);
