@@ -6,6 +6,7 @@ import { RenderJob } from '../models/RenderJob';
 import { User } from '../models/User';
 import { getEffectiveQuota } from '../config/quotas';
 import { ensureShareTokens, publicRender } from '../services/renderOutput.service';
+import { snapshotTemplate, type SnapshotReason } from '../services/templateVersion.service';
 import { ApiError } from '../utils/ApiError';
 
 export const createTemplate = async (
@@ -94,24 +95,39 @@ export const updateTemplate = async (
       throw ApiError.notFound('Template not found or unauthorized');
     }
 
-    // Save version history
-    await TemplateVersion.create({
-      templateId: template._id,
-      version: template.version,
-      data: template.data,
-      createdBy: user._id,
-    });
+    // Another tab (or device) saved since this editor loaded: don't silently
+    // overwrite it unless the user chose to.
+    const baseVersion = req.body.baseVersion;
+    const overwrite = req.body.overwrite === true;
+    if (typeof baseVersion === 'number' && !overwrite && baseVersion !== template.version) {
+      throw ApiError.withCode(409, 'VERSION_CONFLICT', 'This project was changed in another tab or device.', {
+        currentVersion: template.version,
+        baseVersion,
+      });
+    }
 
+    // Version history: the state before this save, per the snapshot policy.
+    const reason: SnapshotReason = req.body.snapshot === 'leave' ? 'leave' : 'autosave';
+    await snapshotTemplate(template, user._id, reason);
 
-    const updatedTemplate = await Template.findByIdAndUpdate(
-      id,
-      {
-        ...updates,
-        $inc: { version: 1 },
-      },
+    // Conditional on the version we checked, so two saves can't interleave.
+    const updatedTemplate = await Template.findOneAndUpdate(
+      { _id: id, userId: user._id, ...(overwrite ? {} : { version: template.version }) },
+      { ...updates, $inc: { version: 1 } },
       { new: true }
     );
+    if (!updatedTemplate) {
+      throw ApiError.withCode(409, 'VERSION_CONFLICT', 'This project was changed in another tab or device.', {
+        currentVersion: (await Template.findById(id).select('version').lean())?.version,
+        baseVersion,
+      });
+    }
 
+    // Autosave only needs the new version, not the whole template echoed back.
+    if (req.query.return === 'minimal') {
+      res.json({ id: updatedTemplate._id, version: updatedTemplate.version, updatedAt: updatedTemplate.updatedAt });
+      return;
+    }
     res.json(updatedTemplate);
   } catch (error) {
     next(error);
