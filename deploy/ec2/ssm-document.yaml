@@ -1,0 +1,18 @@
+schemaVersion: "2.2"
+description: Deploy a commit of main for one shotline app on the production box (runs /var/www/shotline/bin/shotline-deploy as ubuntu).
+parameters:
+  app:
+    type: String
+    description: Which app to deploy.
+    allowedValues: [backend, frontend]
+  sha:
+    type: String
+    description: Commit of main to deploy.
+    allowedPattern: "^[0-9a-f]{7,40}$"
+mainSteps:
+  - action: aws:runShellScript
+    name: deploy
+    inputs:
+      timeoutSeconds: "3600"
+      runCommand:
+        - sudo -u ubuntu -H /var/www/shotline/bin/shotline-deploy "{{ app }}" "{{ sha }}"

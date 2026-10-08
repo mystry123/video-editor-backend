@@ -1,0 +1,82 @@
+name: Deploy
+
+# Deploys this app to the production EC2 box through AWS Systems Manager:
+# - after CI passes on main, when the repo variable AUTO_DEPLOY is "true";
+# - manually: Actions → Deploy → Run workflow (on main) with a commit of main,
+#   to deploy, redeploy or roll back.
+# Auth: GitHub OIDC → IAM role shotline-github-deployer (may only run the
+# Shotline-Deploy document on this one instance). No keys in GitHub.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit of main to deploy (full or short SHA)"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-production-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  APP: backend
+  AWS_REGION: ap-south-1
+  INSTANCE_ID: i-02e37278036b76a67
+  ROLE_ARN: arn:aws:iam::563235961017:role/shotline-github-deployer
+
+jobs:
+  deploy:
+    if: >-
+      github.ref == 'refs/heads/main' && (
+        github.event_name == 'workflow_dispatch' ||
+        (vars.AUTO_DEPLOY == 'true' &&
+         github.event.workflow_run.conclusion == 'success' &&
+         github.event.workflow_run.event == 'push' &&
+         github.event.workflow_run.head_branch == 'main'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Commit to deploy
+        id: commit
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          sha="${INPUT_SHA:-$RUN_SHA}"
+          if [[ ! "$sha" =~ ^[0-9a-f]{7,40}$ ]]; then echo "Not a commit SHA: $sha"; exit 1; fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Deploying $APP at $sha" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy on the box
+        env:
+          SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          id=$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name Shotline-Deploy \
+                 --comment "$APP $SHA (${GITHUB_RUN_ID})" \
+                 --parameters "app=$APP,sha=$SHA" --query Command.CommandId --output text)
+          echo "SSM command $id"
+          status=Pending
+          for i in $(seq 1 240); do                       # up to 40 minutes
+            sleep 10
+            status=$(aws ssm get-command-invocation --command-id "$id" --instance-id "$INSTANCE_ID" \
+                       --query Status --output text 2>/dev/null || echo Pending)
+            case "$status" in Pending|InProgress|Delayed) continue ;; *) break ;; esac
+          done
+          aws ssm get-command-invocation --command-id "$id" --instance-id "$INSTANCE_ID" \
+            --query StandardOutputContent --output text | tail -60
+          aws ssm get-command-invocation --command-id "$id" --instance-id "$INSTANCE_ID" \
+            --query StandardErrorContent --output text | tail -30
+          echo "Result: $status"
+          [[ "$status" == Success ]]
