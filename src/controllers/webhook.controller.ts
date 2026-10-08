@@ -1,4 +1,5 @@
 // controllers/webhook.controller.ts
+import { sendError } from '../utils/errorResponse';
 
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
@@ -94,7 +95,7 @@ export const handleRemotionWebhook = async (
       const rawBody = JSON.stringify(req.body);
       if (!verifyRemotionSignature(rawBody, signature)) {
         logger.warn('Invalid Remotion webhook signature');
-        res.status(401).json({ error: 'Invalid signature' });
+        sendError(req, res, 401, 'Invalid signature', 'INVALID_SIGNATURE');
         return;
       }
     }
@@ -103,14 +104,14 @@ export const handleRemotionWebhook = async (
     const jobId = payload.customData?.jobId;
     if (!jobId) {
       logger.warn('Remotion webhook missing jobId');
-      res.status(400).json({ error: 'Missing jobId' });
+      sendError(req, res, 400, 'Missing jobId', 'BAD_REQUEST');
       return;
     }
 
     const job = await RenderJob.findById(jobId).select('+webhookUrl');
     if (!job) {
       logger.warn('Render job not found for webhook', { jobId });
-      res.status(404).json({ error: 'Job not found' });
+      sendError(req, res, 404, 'Job not found', 'NOT_FOUND');
       return;
     }
 
@@ -234,7 +235,9 @@ async function handleRemotionError(job: any, payload: RemotionWebhookPayload): P
         error: errorMessage,
       });
       await RenderJob.updateOne({ _id: jobId }, { webhookSent: true });
-    } catch {}
+    } catch {
+      // Best-effort notification; the job's own status is already saved.
+    }
   }
 }
 
@@ -260,7 +263,9 @@ async function handleRemotionTimeout(job: any, payload: RemotionWebhookPayload):
         error: 'Render timed out',
       });
       await RenderJob.updateOne({ _id: jobId }, { webhookSent: true });
-    } catch {}
+    } catch {
+      // Best-effort notification; the job's own status is already saved.
+    }
   }
 }
 

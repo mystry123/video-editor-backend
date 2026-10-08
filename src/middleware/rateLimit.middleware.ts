@@ -1,4 +1,5 @@
 // middleware/rateLimiter.ts
+import { sendError } from '../utils/errorResponse';
 
 import rateLimit, { Options } from 'express-rate-limit';
 import { Request, Response, NextFunction, RequestHandler } from 'express';
@@ -75,7 +76,7 @@ function createLimiterOptions(config: LimiterConfig): Partial<Options> {
     keyGenerator: keyGenerator || ((req: Request) => (req as any).userId || req.ip || 'anonymous'),
     handler: (req: Request, res: Response) => {
       logger.warn(`Rate limit hit: ${config.prefix}`, { ip: req.ip, path: req.path });
-      res.status(429).json({ error: message });
+      sendError(req, res, 429, message, 'RATE_LIMITED');
     },
   };
 }

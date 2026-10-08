@@ -85,7 +85,6 @@ export const startRender = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    console.log('Render request received:', req.body);
     const userId = req.userId!;
     const {
       templateId,
@@ -159,7 +158,6 @@ export const startRender = async (
       { priority: getPriority(user.role) }
     );
 
-    console.log('🎯 Job added to queue:', { jobId: renderJob._id.toString() });
     logger.info('Job added to render queue', { jobId: renderJob._id.toString() });
 
     res.status(202).json({
@@ -327,8 +325,6 @@ export const getRenderStatus = async (
     const job = await RenderJob.findOne({ _id: id, userId: user._id });
     if (!job) throw ApiError.notFound('Render job not found');
 
-    console.log('Render job found:', job);
-    console.log('Job data:', JSON.stringify(job.toObject(), null, 2));
 
     res.json({
       id: job._id,

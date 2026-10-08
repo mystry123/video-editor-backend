@@ -8,3 +8,9 @@ dist/
 coverage/
 .idea/
 .vscode/
+
+# Never commit these: curl cookie jars, npm lockfile (this repo uses pnpm),
+# ad-hoc scripts with credentials.
+cookies.txt
+package-lock.json
+*.local.js

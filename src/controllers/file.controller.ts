@@ -438,7 +438,7 @@ export const importFromGoogleDrive = async (
     } catch (error: any) {
       logger.error('Failed to fetch Google Drive file info', { driveFileId, error: error.message });
       if (error.response?.status === 401) {
-        throw ApiError.unauthorized('Google Drive access token expired or invalid');
+        throw ApiError.withCode(400, 'GDRIVE_TOKEN_EXPIRED', 'Your Google Drive connection expired. Pick the file again to reconnect.');
       }
       if (error.response?.status === 404) {
         throw ApiError.notFound('File not found in Google Drive');

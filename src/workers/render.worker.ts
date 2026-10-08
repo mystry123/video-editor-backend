@@ -200,7 +200,9 @@ async function processRenderJob(job: Job<RenderJobData>) {
         if (result.success && result.thumbnailUrl) {
           await RenderJob.updateOne({ _id: jobId }, { thumbnailUrl: result.thumbnailUrl });
         }
-      } catch {}
+      } catch {
+        // Thumbnail backfill is optional; the render itself is done.
+      }
     }
     return { skipped: true, reason: dbJob.status };
   }

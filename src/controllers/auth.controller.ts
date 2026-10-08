@@ -133,20 +133,11 @@ async function loginUser(user: IUser, req: any, res: Response, saveMetadata: boo
       loginType,
     };
 
-    // Debug: Login token generation
-    console.log('LOGIN TOKEN DEBUG:', {
-      generatedRefreshToken: tokens.refreshToken,
-      generatedRefreshTokenLength: tokens.refreshToken.length,
-      hashedRefreshToken: hashedRefresh,
-      hashedRefreshPrefix: hashedRefresh.substring(0, 10) + '...',
-      metaData,
-    });
-
     // Save login metadata in separate collection
     try {
       await UserLoginHistory.addLoginEvent(user._id.toString(), metaData);
     } catch (error) {
-      console.error('Failed to save login metadata:', error);
+      logger.warn('Failed to save login metadata', { error: (error as Error).message });
       // Don't fail the login if metadata saving fails
     }
   }
@@ -289,7 +280,8 @@ export const login = async (
     const user = await User.findOne({ email: email.toLowerCase() }).select('+password');
 
     if (!user) {
-      throw ApiError.unauthorized('Invalid email or password');
+      // 400, not 401: 401 is reserved for an invalid session (it triggers a token refresh).
+      throw ApiError.withCode(400, 'INVALID_CREDENTIALS', 'Incorrect email or password.');
     }
 
     // Check if user has password (might be OAuth only)
@@ -303,7 +295,8 @@ export const login = async (
     // Verify password
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
-      throw ApiError.unauthorized('Invalid email or password');
+      // 400, not 401: 401 is reserved for an invalid session (it triggers a token refresh).
+      throw ApiError.withCode(400, 'INVALID_CREDENTIALS', 'Incorrect email or password.');
     }
 
     // Login and set cookies
@@ -372,90 +365,36 @@ export const refresh = async (
     // Get refresh token from request body (frontend-managed)
     const { refreshToken } = req.body;
 
-    console.log("refresh token",refreshToken)
-
     if (!refreshToken) {
-      throw ApiError.unauthorized('No refresh token');
+      throw ApiError.withCode(401, 'SESSION_INVALID', 'Your session has ended. Sign in again.');
     }
-
-    // Debug logging
-    logger.info('Refresh attempt', {
-      hasRefreshToken: !!refreshToken,
-      refreshTokenLength: refreshToken?.length,
-      refreshTokenPrefix: refreshToken?.substring(0, 20) + '...',
-    });
 
     // Verify token
     const payload = verifyRefreshToken(refreshToken);
-    logger.info('Token verification result', {
-      payload: !!payload,
-      userId: payload?.userId,
-    });
-    
+
     if (!payload) {
-      throw ApiError.unauthorized('Invalid refresh token');
+      throw ApiError.withCode(401, 'SESSION_INVALID', 'Your session has ended. Sign in again.');
     }
 
     // Check if token exists in user's tokens (not revoked)
     const hashedToken = hashRefreshToken(refreshToken);
-    
-    // Debug: Manual hash calculation
-    const crypto = require('crypto');
-    const manualHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
-    
-    console.log('HASHING DEBUG:', {
-      originalToken: refreshToken,
-      originalTokenLength: refreshToken.length,
-      functionHash: hashedToken,
-      manualHash: manualHash,
-      hashesMatch: hashedToken === manualHash,
-      functionHashPrefix: hashedToken.substring(0, 10) + '...',
-      manualHashPrefix: manualHash.substring(0, 10) + '...',
-    });
-    
-    // Debug: Check user's stored tokens
-    const userWithTokens = await User.findById(payload.userId).select('+refreshTokens');
-    console.log({userWithTokens});
-    const debugInfo = {
-      userId: payload.userId,
-      userExists: !!userWithTokens,
-      storedTokenCount: userWithTokens?.refreshTokens?.length || 0,
-      hashedTokenPrefix: hashedToken.substring(0, 10) + '...',
-      storedTokenPrefixes: userWithTokens?.refreshTokens?.map((t: string) => t.substring(0, 10) + '...') || [],
-      exactHashMatch: userWithTokens?.refreshTokens?.includes(hashedToken),
-    };
-    
-    console.log('DEBUG DATABASE LOOKUP:', JSON.stringify(debugInfo, null, 2));
-    logger.info('Database lookup', debugInfo);
     
     const user = await User.findOne({
       _id: payload.userId,
       refreshTokens: hashedToken,
     }).select('+refreshTokens');
 
-    logger.info('Token lookup result', {
-      found: !!user,
-    });
-
     if (!user) {
-      throw ApiError.unauthorized('Invalid refresh token');
+      throw ApiError.withCode(401, 'SESSION_INVALID', 'Your session has ended. Sign in again.');
     }
 
-    // Remove old token (token rotation)
-    await User.findByIdAndUpdate(user._id, {
-      $pull: { refreshTokens: hashedToken },
-    });
-
-    // Generate NEW access token only (keep refresh token rotation minimal)
+    // New access token; the refresh token itself is unchanged (rotation comes with the session rework).
+    // There's deliberately no $pull/$push of the same hash here: that left a window where
+    // parallel refreshes found no token and logged the user out.
     const newAccessToken = generateAccessToken({
       userId: user._id.toString(),
       email: user.email,
       role: user.role,
-    });
-
-    // Re-add the same refresh token (no rotation unless needed)
-    await User.findByIdAndUpdate(user._id, {
-      $push: { refreshTokens: hashedToken },
     });
 
     res.json({

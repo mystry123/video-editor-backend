@@ -1,6 +1,10 @@
 import * as dotenv from 'dotenv';
 dotenv.config();
 
+// Development-only fallbacks. Production refuses to start with these (see below).
+const DEV_JWT_SECRET = 'your-super-secret-jwt-key-change-in-production';
+const DEV_JWT_REFRESH_SECRET = 'your-super-secret-refresh-key-change-in-production';
+
 export const env = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: parseInt(process.env.PORT || '3000', 10),
@@ -18,8 +22,8 @@ export const env = {
   redisPassword: process.env.REDIS_PASSWORD || '',
   
   // JWT
-  jwtSecret: process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production',
-  jwtRefreshSecret: process.env.JWT_REFRESH_SECRET || 'your-super-secret-refresh-key-change-in-production',
+  jwtSecret: process.env.JWT_SECRET || DEV_JWT_SECRET,
+  jwtRefreshSecret: process.env.JWT_REFRESH_SECRET || DEV_JWT_REFRESH_SECRET,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '5m',
   jwtRefreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '1d',
   
@@ -74,3 +78,40 @@ export const env = {
   // Logging
   logLevel: process.env.LOG_LEVEL || 'info',
 };
+
+// ============================================================================
+// Startup checks
+//
+// Production stops here (before any connection is made) when a setting is
+// missing that would make the server unsafe — e.g. JWTs signed with a secret
+// that's published in this repo. Settings that only break one feature log a
+// warning instead, so a deploy isn't blocked by an unused integration.
+// ============================================================================
+
+function checkEnvironment(): void {
+  const fatal: string[] = [];
+  const warnings: string[] = [];
+  const isProduction = env.nodeEnv === 'production';
+
+  if (!process.env.JWT_SECRET || env.jwtSecret === DEV_JWT_SECRET) fatal.push('JWT_SECRET is not set');
+  if (!process.env.JWT_REFRESH_SECRET || env.jwtRefreshSecret === DEV_JWT_REFRESH_SECRET) fatal.push('JWT_REFRESH_SECRET is not set');
+  if (env.jwtSecret === env.jwtRefreshSecret) fatal.push('JWT_SECRET and JWT_REFRESH_SECRET must be different');
+  if (!process.env.MONGODB_URI) fatal.push('MONGODB_URI is not set');
+
+  if (env.jwtSecret.length < 32 || env.jwtRefreshSecret.length < 32) warnings.push('JWT secrets should be at least 32 characters');
+  if (env.corsOrigin === '*') warnings.push('CORS_ORIGIN is "*"; set it to the frontend origin(s)');
+  if (!env.s3Bucket || !env.cdnUrl) warnings.push('S3_BUCKET / CDN_URL not set: uploads will fail');
+  if (!env.remotionServeUrl || !env.remotionFunctionName) warnings.push('REMOTION_SERVE_URL / REMOTION_FUNCTION_NAME not set: renders will fail');
+
+  // The logger imports this module, so report with console here.
+  for (const warning of warnings) console.warn(`[env] ${warning}`);
+  if (fatal.length === 0) return;
+
+  if (isProduction) {
+    console.error(`[env] Refusing to start in production:\n  - ${fatal.join('\n  - ')}`);
+    process.exit(1);
+  }
+  for (const problem of fatal) console.warn(`[env] ${problem} (allowed outside production)`);
+}
+
+if (process.env.NODE_ENV !== 'test') checkEnvironment();

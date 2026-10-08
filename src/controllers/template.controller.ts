@@ -16,7 +16,6 @@ export const createTemplate = async (
     const userId = req.userId!;
     const { name = 'New Template', description = 'New Template Description', data = { project: {}, elements: [] }, tags = [], isPublic = true } = req.body;
 
-    console.log(req.body);
 
     const user = await User.findById(userId);
     if (!user) throw ApiError.notFound('User not found');
@@ -96,7 +95,6 @@ export const updateTemplate = async (
       createdBy: user._id,
     });
 
-    console.log("Template updates",updates);
 
     const updatedTemplate = await Template.findByIdAndUpdate(
       id,

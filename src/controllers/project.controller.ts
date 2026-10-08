@@ -93,7 +93,7 @@ function buildFilter(query: ProjectQuery, userId: string): any {
           $lt: tomorrow,
         };
         break;
-      case 'yesterday':
+      case 'yesterday': {
         const yesterday = new Date(today);
         yesterday.setDate(yesterday.getDate() - 1);
         filter.createdAt = {
@@ -101,21 +101,24 @@ function buildFilter(query: ProjectQuery, userId: string): any {
           $lt: today,
         };
         break;
-      case 'week':
+      }
+      case 'week': {
         const weekAgo = new Date(today);
         weekAgo.setDate(weekAgo.getDate() - 7);
         filter.createdAt = {
           $gte: weekAgo,
         };
         break;
-      case 'month':
+      }
+      case 'month': {
         const monthAgo = new Date(today);
         monthAgo.setMonth(monthAgo.getMonth() - 1);
         filter.createdAt = {
           $gte: monthAgo,
         };
         break;
-      default:
+      }
+      default: {
         // Try to parse as a specific date (YYYY-MM-DD)
         const parsedDate = new Date(query.date);
         if (!isNaN(parsedDate.getTime())) {
@@ -128,6 +131,7 @@ function buildFilter(query: ProjectQuery, userId: string): any {
             $lte: endDate,
           };
         }
+      }
     }
   }
 
@@ -195,7 +199,6 @@ export const getAll = async (
     const query = req.query as ProjectQuery;
     const userId = req.userId!;
 
-    console.log({query, userId});
 
     // Build filter, sort, and pagination options
     const filter = buildFilter(query, userId);
@@ -209,7 +212,6 @@ export const getAll = async (
       .limit(limit)
       .lean();
 
-    console.log({projects});  
 
     // Format response
     const formattedProjects = projects.map(formatProjectResponse);

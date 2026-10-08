@@ -1,4 +1,5 @@
 import { Response, NextFunction } from 'express';
+import { sendError } from '../utils/errorResponse';
 import { AuthRequest } from '../types';
 import { User } from '../models/User';
 import { ApiKey } from '../models/ApiKey';
@@ -32,7 +33,7 @@ export const apiKeyAuth = async (
     });
 
     if (!keyRecord) {
-      res.status(401).json({ error: 'Invalid API key' });
+      sendError(req, res, 401, 'Invalid API key', 'INVALID_API_KEY');
       return;
     }
 
@@ -40,7 +41,7 @@ export const apiKeyAuth = async (
 
     const user = await User.findById(keyRecord.userId);
     if (!user) {
-      res.status(401).json({ error: 'User not found' });
+      sendError(req, res, 401, 'User not found', 'SESSION_INVALID');
       return;
     }
 
@@ -66,7 +67,7 @@ export const bearerAuth = async (
   const authHeader = req.header('Authorization');
 
   if (!authHeader?.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Bearer token required' });
+    sendError(req, res, 401, 'Bearer token required', 'AUTH_REQUIRED');
     return;
   }
 
@@ -76,13 +77,13 @@ export const bearerAuth = async (
     const payload = verifyAccessToken(token);
 
     if (!payload) {
-      res.status(401).json({ error: 'Invalid or expired token' });
+      sendError(req, res, 401, 'Invalid or expired token', 'SESSION_INVALID');
       return;
     }
 
     const user = await User.findById(payload.userId);
     if (!user) {
-      res.status(401).json({ error: 'User not found' });
+      sendError(req, res, 401, 'User not found', 'SESSION_INVALID');
       return;
     }
 
@@ -92,7 +93,7 @@ export const bearerAuth = async (
     next();
   } catch (error) {
     logger.error('Bearer auth error:', error);
-    res.status(401).json({ error: 'Authentication failed' });
+    sendError(req, res, 401, 'Authentication failed', 'SESSION_INVALID');
   }
 };
 
@@ -121,7 +122,7 @@ export const requireAuth = async (
   }
 
   // 3. No credentials
-  res.status(401).json({ error: 'Authentication required' });
+  sendError(req, res, 401, 'Authentication required', 'AUTH_REQUIRED');
 };
 
 // ============================================
@@ -190,12 +191,12 @@ export const optionalAuth = async (
 export const requireRole = (roles: string[]) => {
   return async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     if (!req.user) {
-      res.status(401).json({ error: 'Authentication required' });
+      sendError(req, res, 401, 'Authentication required', 'AUTH_REQUIRED');
       return;
     }
 
     if (!roles.includes(req.user.role)) {
-      res.status(403).json({ error: 'Insufficient permissions' });
+      sendError(req, res, 403, 'Insufficient permissions', 'FORBIDDEN');
       return;
     }
 
@@ -207,7 +208,7 @@ export const requireRole = (roles: string[]) => {
 // signed-in session; an API key alone isn't enough.
 export const requireSession = (req: AuthRequest, res: Response, next: NextFunction): void => {
   if (req.authMethod === 'api-key') {
-    res.status(403).json({ error: 'Sign in to do this. API keys can\'t change account settings.', code: 'SESSION_REQUIRED' });
+    sendError(req, res, 403, "Sign in to do this. API keys can't change account settings.", 'SESSION_REQUIRED');
     return;
   }
   next();
@@ -221,7 +222,7 @@ export const requireSession = (req: AuthRequest, res: Response, next: NextFuncti
 export const requirePermission = (permission: string) => {
   return async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     if (!req.user) {
-      res.status(401).json({ error: 'Authentication required' });
+      sendError(req, res, 401, 'Authentication required', 'AUTH_REQUIRED');
       return;
     }
 
@@ -233,7 +234,7 @@ export const requirePermission = (permission: string) => {
     // Check API key permissions
     if (req.authMethod === 'api-key' && req.permissions) {
       if (!req.permissions.includes(permission) && !req.permissions.includes('admin')) {
-        res.status(403).json({ error: `Permission '${permission}' required` });
+        sendError(req, res, 403, `Permission '${permission}' required`, 'PERMISSION_REQUIRED');
         return;
       }
     }
@@ -256,7 +257,7 @@ export const requireCookieAuth = async (
   const token = req.cookies?.[COOKIE_NAMES.ACCESS_TOKEN];
 
   if (!token) {
-    res.status(401).json({ error: 'Browser authentication required' });
+    sendError(req, res, 401, 'Browser authentication required', 'AUTH_REQUIRED');
     return;
   }
 
@@ -264,13 +265,13 @@ export const requireCookieAuth = async (
     const payload = verifyAccessToken(token);
 
     if (!payload) {
-      res.status(401).json({ error: 'Invalid or expired session' });
+      sendError(req, res, 401, 'Invalid or expired session', 'SESSION_INVALID');
       return;
     }
 
     const user = await User.findById(payload.userId);
     if (!user) {
-      res.status(401).json({ error: 'User not found' });
+      sendError(req, res, 401, 'User not found', 'SESSION_INVALID');
       return;
     }
 
@@ -280,6 +281,6 @@ export const requireCookieAuth = async (
     next();
   } catch (error) {
     logger.error('Cookie auth error:', error);
-    res.status(401).json({ error: 'Authentication failed' });
+    sendError(req, res, 401, 'Authentication failed', 'SESSION_INVALID');
   }
 };
