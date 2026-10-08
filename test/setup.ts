@@ -9,7 +9,7 @@ vi.mock('../src/queues', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/queues')>();
   const fakeQueue = () => ({ add: vi.fn().mockResolvedValue({ id: 'test-job' }), getJob: vi.fn().mockResolvedValue(null) });
   const getters = Object.fromEntries(
-    ['getRenderQueue', 'getTranscriptionQueue', 'getFileProcessingQueue', 'getWebhookQueue', 'getCaptionQueue',
+    ['getRenderQueue', 'getTranscriptionQueue', 'getWebhookQueue', 'getCaptionQueue',
       'getFileImportQueue', 'getReframeQueue', 'getAccountCleanupQueue', 'getMaintenanceQueue'].map((name) => {
       const queue = fakeQueue();
       return [name, () => queue];
@@ -20,7 +20,6 @@ vi.mock('../src/queues', async (importOriginal) => {
     ...getters,
     renderQueue: fakeQueue(),
     transcriptionQueue: fakeQueue(),
-    fileProcessingQueue: fakeQueue(),
     webhookQueue: fakeQueue(),
     captionQueue: fakeQueue(),
     fileImportQueue: fakeQueue(),

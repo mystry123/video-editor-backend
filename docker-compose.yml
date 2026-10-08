@@ -1,21 +1,39 @@
-version: '3.8'
+# DEVELOPMENT ONLY: a local stack with its own Mongo and Redis, so testing
+# never touches the shared Atlas database. Not used in production (EC2 + pm2).
+#
+#   docker compose up            # API on :3000, workers, Mongo, Redis
+#
+# Keep secrets in .env; the values below override only what must point at the
+# local containers. Maintenance sweeps stay off (MAINTENANCE_SWEEPS unset).
 
 services:
   api:
     build: .
     ports:
       - "3000:3000"
+    env_file: .env
     environment:
       - NODE_ENV=development
-      - MONGODB_URI=mongodb://mongo:27017/video-editor
-      - REDIS_URL=redis://redis:6379
+      - MONGODB_URI=mongodb://mongo:27017/shotline-dev
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - ENABLE_WORKERS=false
     depends_on:
       - mongo
       - redis
-    volumes:
-      - .:/app
-      - /app/node_modules
-    command: npm run dev
+
+  worker:
+    build: .
+    command: ["node", "dist/worker.js"]
+    env_file: .env
+    environment:
+      - NODE_ENV=development
+      - MONGODB_URI=mongodb://mongo:27017/shotline-dev
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - mongo
+      - redis
 
   mongo:
     image: mongo:7
@@ -23,8 +41,6 @@ services:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
-    environment:
-      - MONGO_INITDB_DATABASE=video-editor
 
   redis:
     image: redis:7-alpine
@@ -34,14 +50,16 @@ services:
       - redis_data:/data
     command: redis-server --appendonly yes
 
+  # Optional: docker compose --profile n8n up (set N8N_BASIC_AUTH_PASSWORD in .env)
   n8n:
     image: n8nio/n8n
+    profiles: ["n8n"]
     ports:
       - "5678:5678"
     environment:
       - N8N_BASIC_AUTH_ACTIVE=true
       - N8N_BASIC_AUTH_USER=admin
-      - N8N_BASIC_AUTH_PASSWORD=admin123
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:?set N8N_BASIC_AUTH_PASSWORD in .env}
       - WEBHOOK_URL=http://localhost:5678/
     volumes:
       - n8n_data:/home/node/.n8n
