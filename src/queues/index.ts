@@ -59,6 +59,7 @@ let _webhookQueue: Queue | null = null;
 let _captionQueue: Queue | null = null;
 let _fileImportQueue: Queue | null = null;
 let _reframeQueue: Queue | null = null;
+let _accountCleanupQueue: Queue | null = null;
 
 export function getRenderQueue(): Queue {
   if (!_renderQueue) {
@@ -130,6 +131,19 @@ export function getReframeQueue(): Queue {
   return _reframeQueue;
 }
 
+export function getAccountCleanupQueue(): Queue {
+  if (!_accountCleanupQueue) {
+    _accountCleanupQueue = createQueue('account-cleanup', {
+      // A deleted account's data must eventually go; keep retrying for ~1 day.
+      attempts: 6,
+      backoff: { type: 'exponential', delay: 60_000 },
+      removeOnComplete: { age: 7 * 86400, count: 500 },
+      removeOnFail: false,
+    });
+  }
+  return _accountCleanupQueue;
+}
+
 // ============================================================================
 // Backward Compatible Exports (Proxy Objects)
 // ============================================================================
@@ -151,6 +165,7 @@ export const webhookQueue = createQueueProxy(getWebhookQueue);
 export const captionQueue = createQueueProxy(getCaptionQueue);
 export const fileImportQueue = createQueueProxy(getFileImportQueue);
 export const reframeQueue = createQueueProxy(getReframeQueue);
+export const accountCleanupQueue = createQueueProxy(getAccountCleanupQueue);
 
 // ============================================================================
 // Worker Management
@@ -188,6 +203,7 @@ export function startWorkers(): void {
     '../workers/caption.worker',
     '../workers/file-import.worker',
     '../workers/reframe.worker',
+    '../workers/account-cleanup.worker',
   ];
 
   let loaded = 0;

@@ -14,6 +14,7 @@ import {
   isRedisReady,
 } from './config/redis';
 import { initializeQuotaSystem, migrateExistingUsers } from './config/quota-init';
+import { initPlans } from './services/plan.service';
 import { logger } from './utils/logger';
 import { env } from './config/env';
 
@@ -71,6 +72,12 @@ async function bootstrap(): Promise<void> {
     // Step 2: Initialize Quota System
     // =========================================================================
     initializeQuotaSystem();
+    // Plans are editable in the admin settings; falls back to code defaults if this fails.
+    try {
+      await initPlans();
+    } catch (error: any) {
+      logger.error('Failed to load plans; using built-in defaults', { error: error.message });
+    }
     
     // Migrate existing users (run once)
     if (env.nodeEnv === 'development') {

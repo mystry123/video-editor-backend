@@ -4,7 +4,7 @@ import { Template } from '../models/Template';
 import { TemplateVersion } from '../models/TemplateVersion';
 import { RenderJob } from '../models/RenderJob';
 import { User } from '../models/User';
-import { getUserQuota } from '../config/quotas';
+import { getEffectiveQuota } from '../config/quotas';
 import { ApiError } from '../utils/ApiError';
 
 export const createTemplate = async (
@@ -21,7 +21,7 @@ export const createTemplate = async (
     const user = await User.findById(userId);
     if (!user) throw ApiError.notFound('User not found');
 
-    const quota = getUserQuota(user.role);
+    const quota = getEffectiveQuota(user);
     const templateCount = await Template.countDocuments({ userId: user._id });
 
     if (quota.maxTemplates !== -1 && templateCount >= quota.maxTemplates) {

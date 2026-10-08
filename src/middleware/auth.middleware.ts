@@ -203,6 +203,16 @@ export const requireRole = (roles: string[]) => {
   };
 };
 
+// Account-level changes (password, deleting the account, admin actions) need a
+// signed-in session; an API key alone isn't enough.
+export const requireSession = (req: AuthRequest, res: Response, next: NextFunction): void => {
+  if (req.authMethod === 'api-key') {
+    res.status(403).json({ error: 'Sign in to do this. API keys can\'t change account settings.', code: 'SESSION_REQUIRED' });
+    return;
+  }
+  next();
+};
+
 // ============================================
 // PERMISSION-BASED ACCESS CONTROL
 // ============================================

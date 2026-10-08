@@ -1,8 +1,9 @@
 import { Router, type Router as ExpressRouter } from 'express';
-import { requireAuth, optionalAuth, requireCookieAuth } from '../middleware/auth.middleware';
+import { requireAuth, optionalAuth, requireCookieAuth, requireSession } from '../middleware/auth.middleware';
 import { validate } from '../middleware/validate.middleware';
 import { attachUsageSummary } from '../middleware/quota.middleware';
 import * as authController from '../controllers/auth.controller';
+import * as accountController from '../controllers/account.controller';
 import {
   signupSchema,
   loginSchema,
@@ -12,6 +13,9 @@ import {
   updateProfileSchema,
   createApiKeySchema,
   oauthTokenSchema,
+  setPasswordSchema,
+  avatarUploadSchema,
+  deleteAccountSchema,
 } from '../validators/auth.validator';
 
 const router: ExpressRouter = Router();
@@ -54,16 +58,19 @@ router.post('/facebook/token', validate(oauthTokenSchema), authController.facebo
 
 // Session management
 router.post('/logout', requireAuth, authController.logout);
-router.post('/logout-all', requireAuth, authController.logoutAll);
+router.post('/logout-all', requireAuth, requireSession, authController.logoutAll);
 
 // Profile management
 router.get('/me', requireAuth, authController.getMe);
-router.put('/me', requireAuth, validate(updateProfileSchema), authController.updateMe);
-router.delete('/me', requireAuth, authController.deleteMe);
+router.put('/me', requireAuth, validate(updateProfileSchema), accountController.updateProfile);
+router.delete('/me', requireAuth, requireSession, validate(deleteAccountSchema), accountController.deleteAccount);
+router.post('/me/avatar-upload', requireAuth, validate(avatarUploadSchema), accountController.createAvatarUpload);
+router.get('/me/usage', requireAuth, accountController.getMyUsage);
+router.get('/me/sign-ins', requireAuth, requireSession, accountController.getSignInHistory);
 
 // Password management
-router.post('/change-password', requireAuth, validate(changePasswordSchema), authController.changePassword);
-router.post('/set-password', requireAuth, authController.setPassword);
+router.post('/change-password', requireAuth, requireSession, validate(changePasswordSchema), authController.changePassword);
+router.post('/set-password', requireAuth, requireSession, validate(setPasswordSchema), authController.setPassword);
 
 // OAuth account linking (cookie auth only - browser operation)
 router.post('/link/:provider', requireCookieAuth, validate(oauthTokenSchema), authController.linkOAuthAccount);

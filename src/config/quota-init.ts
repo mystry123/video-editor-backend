@@ -6,8 +6,51 @@ import { Template } from '../models/Template';
 import { RenderJob } from '../models/RenderJob';
 import { Transcription } from '../models/Transcription';
 import { CaptionProject } from '../models/Caption';
+import { CaptionPreset } from '../models/CaptionPreset';
 import { initializeQuotaMiddleware } from '../middleware/quota.middleware';
 import { logger } from '../utils/logger';
+
+// ============================================================================
+// Monthly counters
+// ============================================================================
+
+type MonthlyUsageField =
+  | 'renderMinutesUsed'
+  | 'transcriptionMinutesUsed'
+  | 'captionRenderMinutesUsed'
+  | 'captionExportsUsed';
+
+/**
+ * Returns a monthly counter, resetting all monthly counters first if the last
+ * reset predates `since` (start of the current UTC month). The reset is one
+ * conditional update, so concurrent requests can't reset twice or wipe an
+ * increment that landed after another request's reset.
+ */
+async function getMonthlyUsage(userId: string, field: MonthlyUsageField, since: Date): Promise<number> {
+  const reset = await User.findOneAndUpdate(
+    {
+      _id: userId,
+      $or: [{ 'quotaUsage.lastReset': { $lt: since } }, { 'quotaUsage.lastReset': { $exists: false } }],
+    },
+    {
+      $set: {
+        'quotaUsage.renderMinutesUsed': 0,
+        'quotaUsage.transcriptionMinutesUsed': 0,
+        'quotaUsage.captionRenderMinutesUsed': 0,
+        'quotaUsage.captionExportsUsed': 0,
+        'quotaUsage.lastReset': new Date(),
+      },
+    },
+    { new: true, projection: { _id: 1 } }
+  );
+  if (reset) {
+    logger.info(`[Quota] Monthly usage reset for user ${userId.slice(-6)}`);
+    return 0;
+  }
+
+  const user = await User.findById(userId).select(`quotaUsage.${field}`).lean();
+  return (user as any)?.quotaUsage?.[field] || 0;
+}
 
 // ============================================================================
 // Initialize Quota Middleware with Database Fetchers
@@ -41,18 +84,11 @@ export function initializeQuotaSystem(): void {
       }
     },
 
+    // Monthly counters below reset lazily on first read in a new UTC month.
     // Render minutes used this month - from User.quotaUsage.renderMinutesUsed
     getRenderMinutesUsed: async (userId: string, since: Date) => {
       try {
-        const user = await User.findById(userId).select('quotaUsage.renderMinutesUsed quotaUsage.lastReset');
-        
-        // If last reset is before the since date, return 0 (monthly reset)
-        if (user?.quotaUsage?.lastReset && user.quotaUsage.lastReset >= since) {
-          return user.quotaUsage.renderMinutesUsed;
-        }
-        
-        // Otherwise, return current usage (should be reset monthly)
-        return user?.quotaUsage?.renderMinutesUsed || 0;
+        return await getMonthlyUsage(userId, 'renderMinutesUsed', since);
       } catch (error) {
         logger.error(`Failed to get render minutes for user ${userId}:`, error);
         return 0;
@@ -62,14 +98,7 @@ export function initializeQuotaSystem(): void {
     // Transcription minutes used this month - from User.quotaUsage.transcriptionMinutesUsed
     getTranscriptionMinutesUsed: async (userId: string, since: Date) => {
       try {
-        const user = await User.findById(userId).select('quotaUsage.transcriptionMinutesUsed quotaUsage.lastReset');
-        
-        // If last reset is before the since date, return 0 (monthly reset)
-        if (user?.quotaUsage?.lastReset && user.quotaUsage.lastReset >= since) {
-          return user.quotaUsage.transcriptionMinutesUsed;
-        }
-        
-        return user?.quotaUsage?.transcriptionMinutesUsed || 0;
+        return await getMonthlyUsage(userId, 'transcriptionMinutesUsed', since);
       } catch (error) {
         logger.error(`Failed to get transcription minutes for user ${userId}:`, error);
         return 0;
@@ -92,13 +121,7 @@ export function initializeQuotaSystem(): void {
     // Caption render minutes used this month - from User.quotaUsage.captionRenderMinutesUsed
     getCaptionRenderMinutesUsed: async (userId: string, since: Date) => {
       try {
-        const user = await User.findById(userId).select('quotaUsage.captionRenderMinutesUsed quotaUsage.lastReset');
-        
-        if (user?.quotaUsage?.lastReset && user.quotaUsage.lastReset >= since) {
-          return user.quotaUsage.captionRenderMinutesUsed;
-        }
-        
-        return user?.quotaUsage?.captionRenderMinutesUsed || 0;
+        return await getMonthlyUsage(userId, 'captionRenderMinutesUsed', since);
       } catch (error) {
         logger.error(`Failed to get caption render minutes for user ${userId}:`, error);
         return 0;
@@ -108,13 +131,7 @@ export function initializeQuotaSystem(): void {
     // Caption exports this month - from User.quotaUsage.captionExportsUsed
     getCaptionExportsCount: async (userId: string, since: Date) => {
       try {
-        const user = await User.findById(userId).select('quotaUsage.captionExportsUsed quotaUsage.lastReset');
-        
-        if (user?.quotaUsage?.lastReset && user.quotaUsage.lastReset >= since) {
-          return user.quotaUsage.captionExportsUsed;
-        }
-        
-        return user?.quotaUsage?.captionExportsUsed || 0;
+        return await getMonthlyUsage(userId, 'captionExportsUsed', since);
       } catch (error) {
         logger.error(`Failed to get caption exports for user ${userId}:`, error);
         return 0;
@@ -124,12 +141,7 @@ export function initializeQuotaSystem(): void {
     // Custom presets count - count user's custom presets
     getCustomPresetsCount: async (userId: string) => {
       try {
-        return await Template.countDocuments({
-          userId,
-          type: 'caption',
-          isPublic: false,
-          deletedAt: { $exists: false }
-        });
+        return await CaptionPreset.countDocuments({ userId, isSystem: false });
       } catch (error) {
         logger.error(`Failed to get custom presets for user ${userId}:`, error);
         return 0;

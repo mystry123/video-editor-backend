@@ -12,6 +12,8 @@ export interface IRenderJob extends Document {
   inputProps: any;
   outputFormat: string;
   resolution: string;
+  /** Remotion output scale; < 1 when the plan caps resolution below the project's. */
+  scale: number;
   fps: number;
   renderType: "Template" | "CaptionProject"
   renderId?: string;
@@ -84,6 +86,7 @@ const RenderJobSchema = new Schema<IRenderJob>(
     captionProjectId: { type: Schema.Types.ObjectId, ref: 'CaptionProject', index: true },
     outputFormat: { type: String, default: 'mp4' },
     resolution: { type: String, default: '1080p' },
+    scale: { type: Number, default: 1, min: 0.1, max: 1 },
     fps: { type: Number, default: 30 },
     renderId: { type: String },
     outputUrl: { type: String },

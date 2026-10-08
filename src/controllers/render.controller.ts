@@ -8,8 +8,26 @@ import { renderQueue } from '../queues';
 import { ApiError } from '../utils/ApiError';
 import { deepMerge, estimateRenderTime, getPriority } from '../utils/helpers';
 import { logger } from '../utils/logger';
+import { getEffectiveQuota } from '../config/quotas';
+import { planRenderOutput } from '../utils/renderDimensions';
 
 const MEDIA_ELEMENT_TYPES = new Set(['image', 'video', 'audio', 'gif', 'lottie']);
+
+function assertResolutionAllowed(
+  output: ReturnType<typeof planRenderOutput>,
+  quota: ReturnType<typeof getEffectiveQuota>
+): void {
+  if (output.downscaled && quota.overResolution === 'block') {
+    throw ApiError.withCode(
+      403,
+      'RESOLUTION_NOT_ALLOWED',
+      `This project is larger than ${quota.maxResolution}, the highest resolution on your plan. Lower the project size or upgrade.`
+    );
+  }
+}
+
+// Must match the codec map in services/render.service.ts.
+const SUPPORTED_OUTPUT_FORMATS = new Set(['mp4', 'webm', 'gif']);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -105,16 +123,29 @@ export const startRender = async (
     }
 
     // Get render settings from template project settings or use defaults
-    const fps = template?.data?.project?.fps || 30;
-    const outputFormat = template?.data?.project?.outputFormat || 'mp4';
-    const resolution = template?.data?.project ? `${template.data.project.height}p` : '1080p';
+    const project = template?.data?.project || {};
+    const fps = project.fps || 30;
+    const outputFormat = project.outputFormat || 'mp4';
+    if (!SUPPORTED_OUTPUT_FORMATS.has(outputFormat)) {
+      throw new ApiError(422, `Exporting as ${outputFormat} isn't supported yet. Choose MP4, WebM or GIF.`);
+    }
+    if (!(Number(project.duration) > 0) || !(Number(project.width) > 0) || !(Number(project.height) > 0)) {
+      throw new ApiError(422, 'This project has no duration or size set. Add content to the timeline and try again.');
+    }
+
+    // Plans cap output resolution: above the cap is downscaled or blocked,
+    // depending on the plan's policy.
+    const quota = getEffectiveQuota(user);
+    const output = planRenderOutput(Number(project.width), Number(project.height), quota.maxResolution);
+    assertResolutionAllowed(output, quota);
 
     const renderJob = await RenderJob.create({
       userId: user._id,
       templateId: template?._id,
       inputProps,
       outputFormat,
-      resolution,
+      resolution: output.resolution,
+      scale: output.scale,
       fps,
       renderType: 'Template',
       webhookUrl,
@@ -135,6 +166,8 @@ export const startRender = async (
       id: renderJob._id,
       status: renderJob.status,
       estimatedTime: estimateRenderTime(inputProps),
+      resolution: output.resolution,
+      downscaled: output.downscaled,
     });
   } catch (error) {
     next(error);
@@ -239,11 +272,16 @@ export const startReframeRender = async (
       ],
     };
 
+    const reframeQuota = getEffectiveQuota(user);
+    const reframeOutput = planRenderOutput(dims.width, dims.height, reframeQuota.maxResolution);
+    assertResolutionAllowed(reframeOutput, reframeQuota);
+
     const renderJob = await RenderJob.create({
       userId: user._id,
       inputProps,
       outputFormat: 'mp4',
-      resolution: `${dims.height}p`,
+      resolution: reframeOutput.resolution,
+      scale: reframeOutput.scale,
       fps,
       // Re-use the existing 'Template' code path in the render worker — the worker
       // reads inputProps directly and doesn't otherwise care about a Template doc.

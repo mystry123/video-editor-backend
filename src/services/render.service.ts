@@ -14,6 +14,7 @@ export interface RenderProgress {
   progress: number;
   outputFile?: string;
   errors?: any[];
+  fatalErrorEncountered?: boolean;
   framesRendered?: number;
   chunks?: number;
   costs?: {
@@ -30,7 +31,22 @@ export interface RenderProgress {
   outputSizeInBytes?: number;
 }
 
+// Output format (as stored on the template) → Remotion codec. Keep in sync with
+// SUPPORTED_OUTPUT_FORMATS in controllers/render.controller.ts.
+type LambdaCodec = Parameters<typeof renderMediaOnLambda>[0]['codec'];
+
+const CODEC_BY_FORMAT: Record<string, LambdaCodec> = {
+  mp4: 'h264',
+  webm: 'vp8',
+  gif: 'gif',
+};
+
 export async function startRemotionRender(job: any): Promise<RenderResult> {
+  const codec = CODEC_BY_FORMAT[job.outputFormat];
+  if (!codec) {
+    throw new Error(`Unsupported output format: ${job.outputFormat}`);
+  }
+
   logger.info('Starting Remotion render', { jobId: job._id });
 
   const response = await renderMediaOnLambda({
@@ -42,20 +58,23 @@ export async function startRemotionRender(job: any): Promise<RenderResult> {
       projectSettings: job.inputProps.project,
       elements: job.inputProps.elements || [],
     },
-    codec: job.outputFormat === 'mp4' ? 'h264' : job.outputFormat,
+    codec,
+    scale: job.scale || 1,
     framesPerLambda: 60,
     outName: `renders/${job.userId}/${job._id}.${job.outputFormat}`,
     maxRetries: 3,
     imageFormat: 'png',
     crf: 18,
-    pixelFormat: 'yuv420p',
+    // yuv420p is only valid for h264; vp8/gif pick their own pixel format.
+    ...(codec === 'h264' ? { pixelFormat: 'yuv420p' as const } : {}),
     privacy: 'public',
   });
 
-  logger.info('Render started with webhook', {
+  logger.info('Render started', {
     jobId: job._id,
     renderId: response.renderId,
-    webhookUrl: `${env.apiBaseUrl}/webhooks/remotion`,
+    codec,
+    scale: job.scale || 1,
   });
 
   return { renderId: response.renderId, bucketName: response.bucketName };

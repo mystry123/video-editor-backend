@@ -48,6 +48,9 @@ export interface IUser extends Document {
     lastReset?: Date;
   };
   
+  /** Per-user limit overrides set by an admin; see config/quotas getEffectiveQuota. */
+  planOverrides: IPlanOverride[];
+
   lastLoginAt?: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -56,6 +59,25 @@ export interface IUser extends Document {
   comparePassword(candidatePassword: string): Promise<boolean>;
   hasOAuthProvider(provider: OAuthProvider): boolean;
 }
+
+export interface IPlanOverride {
+  _id: Types.ObjectId;
+  field: string;
+  value: unknown;
+  expiresAt?: Date | null;
+  note?: string;
+  createdBy?: Types.ObjectId;
+  createdAt: Date;
+}
+
+const PlanOverrideSchema = new Schema<IPlanOverride>({
+  field: { type: String, required: true },
+  value: { type: Schema.Types.Mixed, required: true },
+  expiresAt: { type: Date, default: null },
+  note: { type: String, trim: true, maxlength: 200 },
+  createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  createdAt: { type: Date, default: Date.now },
+});
 
 const OAuthAccountSchema = new Schema<IOAuthAccount>(
   {
@@ -126,6 +148,8 @@ const UserSchema = new Schema<IUser>(
     // Refresh tokens (store hashed)
     refreshTokens: { type: [String], select: false, default: [] },
     
+    planOverrides: { type: [PlanOverrideSchema], default: [] },
+
     lastLoginAt: { type: Date },
   },
   { timestamps: true }

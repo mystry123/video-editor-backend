@@ -17,7 +17,11 @@ export const errorHandler = (
   });
 
   if (err instanceof ApiError) {
-    res.status(err.statusCode).json({ error: err.message });
+    res.status(err.statusCode).json({
+      error: err.message,
+      ...(err.code ? { code: err.code } : {}),
+      ...(err.details !== undefined ? { details: err.details } : {}),
+    });
     return;
   }
 
