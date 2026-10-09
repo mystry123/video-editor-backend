@@ -43,3 +43,32 @@ describe('POST /reframe', () => {
     expect(reframeQueue.add).not.toHaveBeenCalled();
   });
 });
+
+describe('GET /reframe', () => {
+  it("lists the user's reframes, one per video and shape, newest first, and nobody else's", async () => {
+    const { user, auth } = await createUser();
+    const other = await createUser();
+    const base = { name: 'v', mimeType: 'video/mp4', size: 1, cdnUrl: 'https://cdn.test/k', status: 'ready' };
+    await File.create({
+      ...base, storageKey: 'list-1', userId: user._id, originalName: 'talk.mp4',
+      reframe: {
+        '9_16': { status: 'completed', engine: 'v2', processedAt: new Date('2026-10-01') },
+        '1_1': { status: 'pending', engine: 'v2', processedAt: new Date('2026-10-05') },
+      },
+    });
+    await File.create({ ...base, storageKey: 'list-2', userId: user._id, originalName: 'plain.mp4' });
+    await File.create({ ...base, storageKey: 'list-3', userId: other.user._id, originalName: 'theirs.mp4', reframe: { '9_16': { status: 'completed' } } });
+
+    const res = await api().get('/api/v1/reframe').set(auth);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(2);
+    expect(res.body.items.map((i: any) => [i.fileName, i.aspectRatio, i.status])).toEqual([
+      ['talk.mp4', '1:1', 'queued'],
+      ['talk.mp4', '9:16', 'completed'],
+    ]);
+  });
+
+  it('needs a signed-in user', async () => {
+    expect((await api().get('/api/v1/reframe')).status).toBe(401);
+  });
+});

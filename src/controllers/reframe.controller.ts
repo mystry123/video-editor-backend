@@ -228,6 +228,37 @@ export const createReframe = async (
  * GET /api/v1/reframe/status/:fileId/:aspectRatio
  * Poll reframe job status
  */
+/** The user's reframes, newest first: one entry per video and shape, for the
+ * Projects page. `?limit` (default 50, max 100) and `?offset` page through them. */
+export const listReframes = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+    const files = await File.find(
+      { userId: req.userId, status: { $ne: 'deleted' }, reframe: { $exists: true } },
+      { name: 1, originalName: 1, cdnUrl: 1, thumbnailUrl: 1, metadata: 1, reframe: 1, updatedAt: 1 },
+    ).lean();
+    const items = files.flatMap((file: any) =>
+      Object.entries(file.reframe || {}).map(([key, data]: [string, any]) => ({
+        fileId: String(file._id),
+        fileName: file.originalName || file.name,
+        thumbnailUrl: file.thumbnailUrl || null,
+        videoUrl: file.cdnUrl,
+        duration: file.metadata?.duration ?? null,
+        aspectRatio: key.replace('_', ':'),
+        status: data?.status === 'pending' ? 'queued' : data?.status || 'queued',
+        engine: data?.engine || 'v1',
+        error: data?.error || null,
+        updatedAt: data?.processedAt || file.updatedAt,
+      })),
+    );
+    items.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    res.json({ items: items.slice(offset, offset + limit), total: items.length, limit, offset });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const getReframeStatus = async (
   req: AuthRequest,
   res: Response,
