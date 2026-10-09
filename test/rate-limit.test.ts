@@ -33,6 +33,12 @@ describe('rate limit keying', () => {
     expect(rateLimitKey(fakeRequest({ Authorization: `Bearer ${refresh}` }))).toBe('ip:10.0.0.5');
   });
 
+  it('keys a token refresh by the refresh token\'s user', () => {
+    const refresh = generateRefreshToken({ userId: 'u2', email: 'a@b.c', role: 'free' });
+    expect(rateLimitKey(fakeRequest({}, '10.0.0.5', { body: { refreshToken: refresh } }))).toBe('user:u2');
+    expect(rateLimitKey(fakeRequest({}, '10.0.0.5', { body: { refreshToken: token('u2') } }))).toBe('ip:10.0.0.5');
+  });
+
   it('uses the id set by the auth middleware when the limiter runs after it (API keys too)', () => {
     expect(rateLimitKey(fakeRequest({}, '10.0.0.5', { userId: 'u9' }))).toBe('user:u9');
   });

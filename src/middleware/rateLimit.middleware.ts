@@ -8,7 +8,7 @@ import { logger } from '../utils/logger';
 import crypto from 'crypto';
 import net from 'net';
 import { env } from '../config/env';
-import { verifyAccessToken } from '../utils/jwt';
+import { verifyAccessToken, verifyRefreshToken } from '../utils/jwt';
 
 // ============================================================================
 // Types
@@ -112,6 +112,13 @@ export function rateLimitKey(req: Request): string {
   if (header?.startsWith('Bearer ')) {
     const payload = verifyAccessToken(header.slice(7)) as (ReturnType<typeof verifyAccessToken> & { tokenType?: string }) | null;
     if (payload?.userId && (!payload.tokenType || payload.tokenType === 'upload')) return `user:${payload.userId}`;
+  }
+  // POST /auth/refresh carries no access token; the Remix server sends it for
+  // every visitor, so key it by the (verified) refresh token's user too.
+  const refreshToken = (req.body as { refreshToken?: unknown } | undefined)?.refreshToken;
+  if (typeof refreshToken === 'string' && refreshToken.length < 4096) {
+    const payload = verifyRefreshToken(refreshToken);
+    if (payload?.userId) return `user:${payload.userId}`;
   }
   return `ip:${clientIp(req)}`;
 }
