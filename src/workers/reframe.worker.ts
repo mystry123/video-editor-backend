@@ -22,6 +22,7 @@ import {
   planAnalysis,
   reframeEngineConfigured,
   submitAnalysis,
+  type ReframeCaptions,
   type ReframeQuality,
   type ReframeZoom,
 } from '../services/reframeEngine.service';
@@ -43,6 +44,7 @@ interface ReframeJobData {
   outputHeight?: number;
   zoom?: ReframeZoom;
   keepText?: string[];
+  captions?: ReframeCaptions;
 }
 
 // ============================================================================
@@ -99,9 +101,10 @@ async function processReframeV2(job: Job<ReframeJobData>) {
     }
   }
 
-  const options = { zoom: job.data.zoom || 'balanced', keepText: job.data.keepText || [] };
+  const options = { zoom: job.data.zoom || 'balanced', keepText: job.data.keepText || [], captions: job.data.captions || 'keep' };
   const result = await planAnalysis(submitted.id, {
     ratio: aspectRatio, zoom: options.zoom, keepText: options.keepText, outputHeight: job.data.outputHeight || 1080,
+    captions: options.captions,
   });
   await File.updateOne(
     { _id: fileId },
@@ -109,7 +112,7 @@ async function processReframeV2(job: Job<ReframeJobData>) {
       $set: {
         [`reframe.${key}`]: {
           status: 'completed', engine: 'v2', analysisId: submitted.id, quality, options, result,
-          text: status.text || [], progress: 1, processedAt: new Date(),
+          text: status.text || [], pictureCaptions: Boolean(status.pictureCaptions), progress: 1, processedAt: new Date(),
         },
         reframeAnalysis: { id: submitted.id, quality, transcriptAt: transcription?.updatedAt ?? null },
       },

@@ -20,13 +20,20 @@ export interface AnalysisStatus {
   error?: string;
   text?: Array<{ id: string; kind: string; region: string; description: string; onScreen: number; canKeep: boolean }>;
   duration?: number;
+  /** Burned-in captions inside the picture (the editor offers Keep / Replace). */
+  pictureCaptions?: boolean;
 }
+
+/** Burned-in captions inside the picture: keep them, or leave them out and add Shotline captions. */
+export type ReframeCaptions = 'keep' | 'replace';
+export const REFRAME_CAPTIONS: readonly ReframeCaptions[] = ['keep', 'replace'];
 
 export interface PlanOptions {
   ratio: string;
   zoom: ReframeZoom;
   keepText: string[];
   outputHeight: number;
+  captions?: ReframeCaptions;
 }
 
 const OUTPUT_HEIGHTS = [720, 1080, 1440, 2160];
