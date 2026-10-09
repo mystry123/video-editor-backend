@@ -83,13 +83,22 @@ export async function connectRedis(): Promise<void> {
 }
 
 /** Runs `callback` once Redis is ready (now, if it already is). */
+// One 'ready' listener for all callers: each rate limiter registers here, and
+// a listener apiece trips Node's 10-listener leak warning.
+const readyCallbacks: Array<() => void> = [];
+
 export function onRedisReady(callback: () => void): void {
   const client = getRedis();
   if (client.status === 'ready') {
     callback();
     return;
   }
-  client.once('ready', callback);
+  readyCallbacks.push(callback);
+  if (readyCallbacks.length === 1) {
+    client.once('ready', () => {
+      for (const run of readyCallbacks.splice(0)) run();
+    });
+  }
 }
 
 export function isRedisReady(): boolean {

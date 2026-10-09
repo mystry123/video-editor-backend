@@ -5,6 +5,10 @@ import { onRedisReady } from '../config/redis';
 import rateLimit, { Options } from 'express-rate-limit';
 import { Request, Response, NextFunction, RequestHandler } from 'express';
 import { logger } from '../utils/logger';
+import crypto from 'crypto';
+import net from 'net';
+import { env } from '../config/env';
+import { verifyAccessToken } from '../utils/jwt';
 
 // ============================================================================
 // Types
@@ -62,6 +66,57 @@ async function getRedisStore(prefix: string): Promise<any> {
 }
 
 // ============================================================================
+// Who is calling
+// ============================================================================
+
+/** Headers the Remix server adds to its server-side calls (data/axios/axiosInstances.ts). */
+export const PROXY_SECRET_HEADER = 'x-shotline-proxy-secret';
+export const PROXY_CLIENT_IP_HEADER = 'x-shotline-client-ip';
+
+function sameSecret(given: string, expected: string): boolean {
+  const a = crypto.createHash('sha256').update(given).digest();
+  const b = crypto.createHash('sha256').update(expected).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+/**
+ * The browser's IP. Normally req.ip (honours `trust proxy`, i.e. nginx). But
+ * calls the Remix server makes while rendering a page arrive from the Remix
+ * box, so every user would share its IP; when such a call carries the shared
+ * INTERNAL_PROXY_SECRET, its X-Shotline-Client-IP header is used instead.
+ * Without the secret that header is ignored: anyone could send it.
+ */
+export function clientIp(req: Request): string {
+  const secret = env.internalProxySecret;
+  const given = req.header(PROXY_SECRET_HEADER);
+  if (secret.length >= 32 && given && sameSecret(given, secret)) {
+    const forwarded = (req.header(PROXY_CLIENT_IP_HEADER) || '').trim();
+    if (net.isIP(forwarded)) return forwarded;
+  }
+  return req.ip || 'anonymous';
+}
+
+/**
+ * Key for per-caller limits: the signed-in user when the request carries a
+ * valid access token (checked by signature, so an id can't be made up), else
+ * the client IP. The general limiter runs before authentication, so
+ * req.userId isn't set yet there. Revocation isn't checked here: a revoked token still names its user,
+ * and the auth middleware rejects the request anyway.
+ */
+export function rateLimitKey(req: Request): string {
+  // Limiters mounted after requireAuth: our own middleware set this (also
+  // covers API keys).
+  const authenticated = (req as Request & { userId?: string }).userId;
+  if (authenticated) return `user:${authenticated}`;
+  const header = req.header('Authorization');
+  if (header?.startsWith('Bearer ')) {
+    const payload = verifyAccessToken(header.slice(7)) as (ReturnType<typeof verifyAccessToken> & { tokenType?: string }) | null;
+    if (payload?.userId && (!payload.tokenType || payload.tokenType === 'upload')) return `user:${payload.userId}`;
+  }
+  return `ip:${clientIp(req)}`;
+}
+
+// ============================================================================
 // Rate Limiter Factory
 // ============================================================================
 
@@ -74,9 +129,9 @@ function createLimiterOptions(config: LimiterConfig): Partial<Options> {
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: message },
-    keyGenerator: keyGenerator || ((req: Request) => (req as any).userId || req.ip || 'anonymous'),
+    keyGenerator: keyGenerator || rateLimitKey,
     handler: (req: Request, res: Response) => {
-      logger.warn(`Rate limit hit: ${config.prefix}`, { ip: req.ip, path: req.path });
+      logger.warn(`Rate limit hit: ${config.prefix}`, { ip: clientIp(req), path: req.path });
       sendError(req, res, 429, message, 'RATE_LIMITED');
     },
   };
@@ -159,7 +214,7 @@ export const authLimiter: RequestHandler = createLimiter({
   max: 30,
   prefix: 'auth',
   message: 'Too many attempts. Wait a few minutes and try again.',
-  keyGenerator: (req: Request) => req.ip || 'anonymous',
+  keyGenerator: clientIp,
 });
 
 // Login limiter - 10 attempts/15min per IP + email, so guessing one account's
@@ -170,7 +225,17 @@ export const loginLimiter: RequestHandler = createLimiter({
   max: 10,
   prefix: 'login',
   message: 'Too many sign-in attempts for this account. Wait a few minutes and try again.',
-  keyGenerator: (req: Request) => `${req.ip || 'anonymous'}:${String(req.body?.email || '').toLowerCase().slice(0, 200)}`,
+  keyGenerator: (req: Request) => `${clientIp(req)}:${String(req.body?.email || '').toLowerCase().slice(0, 200)}`,
+});
+
+// CSP violation reports (POST /csp-report): browsers send these directly, and
+// one bad page load can send dozens. Excess reports are just dropped.
+export const cspReportLimiter: RequestHandler = createLimiter({
+  windowMs: 60 * 1000,
+  max: 60,
+  prefix: 'csp-report',
+  message: 'Too many reports',
+  keyGenerator: clientIp,
 });
 
 // Caption limiter - 20 captions/hour per user
