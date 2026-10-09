@@ -41,6 +41,17 @@ const CODEC_BY_FORMAT: Record<string, LambdaCodec> = {
   gif: 'gif',
 };
 
+const FRAMES_PER_LAMBDA = 60;
+
+/** How to split a render across Lambdas: 60-frame chunks, unless that would
+ * need more Lambdas than the account allows at once, then exactly that many
+ * (bigger chunks, slower render, but it runs). */
+export function renderChunking(project: any, maxLambdas = env.remotionMaxLambdas): { framesPerLambda: number } | { concurrency: number } {
+  const frames = Math.ceil((Number(project?.duration) || 0) * (Number(project?.fps) || 30));
+  if (Math.ceil(frames / FRAMES_PER_LAMBDA) <= maxLambdas) return { framesPerLambda: FRAMES_PER_LAMBDA };
+  return { concurrency: maxLambdas };
+}
+
 export async function startRemotionRender(job: any): Promise<RenderResult> {
   const codec = CODEC_BY_FORMAT[job.outputFormat];
   if (!codec) {
@@ -60,7 +71,7 @@ export async function startRemotionRender(job: any): Promise<RenderResult> {
     },
     codec,
     scale: job.scale || 1,
-    framesPerLambda: 60,
+    ...renderChunking(job.inputProps.project),
     outName: `renders/${job.userId}/${job._id}.${job.outputFormat}`,
     maxRetries: 3,
     imageFormat: 'png',

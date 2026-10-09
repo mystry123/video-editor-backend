@@ -76,6 +76,10 @@ export const env = {
   // Remotion
   remotionServeUrl: process.env.REMOTION_SERVE_URL || '',
   remotionFunctionName: process.env.REMOTION_FUNCTION_NAME || '',
+  // Most render Lambdas one render may use at once. Keep it under the AWS
+  // account's Lambda concurrency limit (minus one for the orchestrator), or
+  // long renders fail with "AWS Concurrency limit reached".
+  remotionMaxLambdas: Math.max(1, Number(process.env.REMOTION_MAX_LAMBDAS) || 8),
   remotionBucket: process.env.REMOTION_BUCKET || '',
   
   // ElevenLabs
