@@ -229,11 +229,14 @@ export const createReframe = async (
  * Poll reframe job status
  */
 /** The user's reframes, newest first: one entry per video and shape, for the
- * Projects page. `?limit` (default 50, max 100) and `?offset` page through them. */
+ * Projects page. `?status` (queued, processing, completed, failed) filters them;
+ * `?limit` (default 50, max 100) and `?offset` page through them. Running ones
+ * carry the engine's current stage and progress (0..1). */
 export const listReframes = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
     const offset = Math.max(0, Number(req.query.offset) || 0);
+    const status = typeof req.query.status === 'string' ? req.query.status : '';
     const files = await File.find(
       { userId: req.userId, status: { $ne: 'deleted' }, reframe: { $exists: true } },
       { name: 1, originalName: 1, cdnUrl: 1, thumbnailUrl: 1, metadata: 1, reframe: 1, updatedAt: 1 },
@@ -248,10 +251,12 @@ export const listReframes = async (req: AuthRequest, res: Response, next: NextFu
         aspectRatio: key.replace('_', ':'),
         status: data?.status === 'pending' ? 'queued' : data?.status || 'queued',
         engine: data?.engine || 'v1',
+        stage: data?.status === 'processing' ? data?.stage || null : null,
+        progress: data?.status === 'processing' && typeof data?.progress === 'number' ? data.progress : null,
         error: data?.error || null,
         updatedAt: data?.processedAt || file.updatedAt,
       })),
-    );
+    ).filter((item) => !status || item.status === status);
     items.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
     res.json({ items: items.slice(offset, offset + limit), total: items.length, limit, offset });
   } catch (error) {

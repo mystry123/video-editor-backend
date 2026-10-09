@@ -68,6 +68,31 @@ describe('GET /reframe', () => {
     ]);
   });
 
+  it('filters by status, and shows how far running ones have got', async () => {
+    const { user, auth } = await createUser();
+    await File.create({
+      name: 'v', mimeType: 'video/mp4', size: 1, cdnUrl: 'https://cdn.test/k', status: 'ready',
+      storageKey: 'list-4', userId: user._id, originalName: 'talk.mp4',
+      reframe: {
+        '9_16': { status: 'processing', engine: 'v2', stage: 'Finding faces', progress: 0.42 },
+        '1_1': { status: 'failed', engine: 'v2', error: 'Analysis took too long.' },
+        '4_5': { status: 'pending', engine: 'v2' },
+      },
+    });
+
+    const running = await api().get('/api/v1/reframe?status=processing').set(auth);
+    expect(running.body.total).toBe(1);
+    expect(running.body.items[0]).toMatchObject({ aspectRatio: '9:16', stage: 'Finding faces', progress: 0.42 });
+
+    const queued = await api().get('/api/v1/reframe?status=queued').set(auth);
+    expect(queued.body.items.map((i: any) => i.aspectRatio)).toEqual(['4:5']);
+
+    const failed = await api().get('/api/v1/reframe?status=failed').set(auth);
+    expect(failed.body.items[0]).toMatchObject({ aspectRatio: '1:1', stage: null, progress: null, error: 'Analysis took too long.' });
+
+    expect((await api().get('/api/v1/reframe').set(auth)).body.total).toBe(3);
+  });
+
   it('needs a signed-in user', async () => {
     expect((await api().get('/api/v1/reframe')).status).toBe(401);
   });
