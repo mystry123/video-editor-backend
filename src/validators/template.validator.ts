@@ -44,6 +44,34 @@ export const updateTemplateSchema = z.object({
   }),
 });
 
+const versionParams = z.object({
+  id: z.string(),
+  version: z.string().regex(/^\d+$/, 'Version must be a whole number.'),
+});
+
+export const listTemplateVersionsSchema = z.object({
+  query: z.object({
+    /** Newest N snapshots, 1–50 (default 20). */
+    limit: z.string().regex(/^\d+$/, 'limit must be a whole number.').optional(),
+    /** "true": leave out each snapshot's data and add a summary. */
+    summary: z.enum(['true', 'false']).optional(),
+  }),
+});
+
+export const getTemplateVersionSchema = z.object({
+  params: versionParams,
+});
+
+export const restoreTemplateVersionSchema = z.object({
+  body: z
+    .object({
+      /** Version the editor has open; a different current version is a 409. */
+      baseVersion: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
+  params: versionParams,
+});
+
 export const listTemplatesSchema = z.object({
   query: z.object({
     page: z.string().optional(),

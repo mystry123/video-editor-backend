@@ -6,8 +6,17 @@ import { RenderJob } from '../models/RenderJob';
 import { User } from '../models/User';
 import { getEffectiveQuota } from '../config/quotas';
 import { ensureShareTokens, publicRender } from '../services/renderOutput.service';
-import { snapshotTemplate, type SnapshotReason } from '../services/templateVersion.service';
+import {
+  KEEP_VERSIONS,
+  keepSnapshot,
+  listVersionSummaries,
+  snapshotTemplate,
+  type SnapshotReason,
+} from '../services/templateVersion.service';
 import { ApiError } from '../utils/ApiError';
+
+/** Snapshots GET /templates/:id/versions returns without ?limit. */
+const DEFAULT_VERSION_LIST = 20;
 
 export const createTemplate = async (
   req: AuthRequest,
@@ -260,9 +269,18 @@ export const getTemplateVersions = async (
       throw ApiError.notFound('Template not found');
     }
 
-    const versions = await TemplateVersion.find({ templateId: id })
+    // ?limit (default 20, at most KEEP_VERSIONS); ?summary=true leaves out
+    // each snapshot's data (megabytes) and adds `summary` instead.
+    const limit = Math.min(Math.max(Number(req.query.limit ?? DEFAULT_VERSION_LIST), 1), KEEP_VERSIONS);
+    if (req.query.summary === 'true') {
+      const versions = await listVersionSummaries(template._id, limit);
+      res.json({ currentVersion: template.version, versions });
+      return;
+    }
+
+    const versions = await TemplateVersion.find({ templateId: template._id })
       .sort({ version: -1 })
-      .limit(20)
+      .limit(limit)
       .lean();
 
     res.json({
@@ -274,46 +292,96 @@ export const getTemplateVersions = async (
   }
 };
 
+/** GET /templates/:id/versions/:version — one snapshot with its data. */
+export const getTemplateVersion = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const version = Number(req.params.version);
+    const userId = req.userId!;
+
+    const user = await User.findById(userId);
+    if (!user) throw ApiError.notFound('User not found');
+
+    const template = await Template.findOne({ _id: id, userId: user._id }).select('version').lean();
+    if (!template) {
+      throw ApiError.notFound('Template not found');
+    }
+
+    const snapshot = await TemplateVersion.findOne({ templateId: template._id, version }).lean();
+    if (!snapshot) {
+      throw ApiError.withCode(404, 'VERSION_NOT_FOUND', 'This version is no longer in the history.');
+    }
+
+    res.json({ currentVersion: template.version, version: snapshot });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const restoreVersion = async (
   req: AuthRequest,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
   try {
-    const { id, version } = req.params;
+    const { id } = req.params;
+    const version = Number(req.params.version);
     const userId = req.userId!;
 
     const user = await User.findById(userId);
     if (!user) throw ApiError.notFound('User not found');
 
-    const templateVersion = await TemplateVersion.findOne({
-      templateId: id,
-      version: parseInt(version),
-    });
-
-    if (!templateVersion) {
-      throw ApiError.notFound('Version not found');
-    }
-
+    // Ownership first, so other users' version numbers aren't probeable.
     const template = await Template.findOne({ _id: id, userId: user._id });
     if (!template) {
       throw ApiError.notFound('Template not found');
     }
 
-    // Save current as new version before restoring
-    await TemplateVersion.create({
-      templateId: template._id,
-      version: template.version,
-      data: template.data,
-      createdBy: user._id,
-    });
+    // Same lock as saves: the editor restores on top of the version it has
+    // open; if another tab saved since, the user should see that first.
+    const baseVersion = req.body?.baseVersion;
+    if (typeof baseVersion === 'number' && baseVersion !== template.version) {
+      throw ApiError.withCode(409, 'VERSION_CONFLICT', 'This project was changed in another tab or device.', {
+        currentVersion: template.version,
+        baseVersion,
+      });
+    }
 
-    await Template.findByIdAndUpdate(id, {
-      data: templateVersion.data,
-      $inc: { version: 1 },
-    });
+    const snapshot = await TemplateVersion.findOne({ templateId: template._id, version }).lean();
+    if (!snapshot) {
+      throw ApiError.withCode(404, 'VERSION_NOT_FOUND', 'This version is no longer in the history.');
+    }
 
-    res.json({ success: true });
+    // Keep the state being replaced. Idempotent (a Render may already have
+    // snapshotted this version), and if it can't be stored nothing is restored.
+    await keepSnapshot(template, user._id, 'before-restore');
+
+    // Conditional on the version we checked, so a save can't slip in between.
+    const restored = await Template.findOneAndUpdate(
+      { _id: template._id, userId: user._id, version: template.version },
+      { data: snapshot.data, $inc: { version: 1 } },
+      { new: true }
+    );
+    if (!restored) {
+      throw ApiError.withCode(409, 'VERSION_CONFLICT', 'This project was changed in another tab or device.', {
+        currentVersion: (await Template.findById(template._id).select('version').lean())?.version,
+        baseVersion,
+      });
+    }
+
+    // `success` stays for older clients. The project data isn't echoed back
+    // (it can be megabytes): the editor reloads the template anyway.
+    res.json({
+      success: true,
+      id: restored._id,
+      version: restored.version,
+      restoredFrom: version,
+      updatedAt: restored.updatedAt,
+    });
   } catch (error) {
     next(error);
   }
