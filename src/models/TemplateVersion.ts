@@ -6,7 +6,7 @@ export interface ITemplateVersion extends Document {
   version: number;
   data: any;
   createdBy: Types.ObjectId;
-  /** Why it was taken: autosave (every 5 min), render or leave. */
+  /** Why it was taken: autosave (every 5 min), render, leave or before-restore (missing on older ones). */
   reason?: string;
   createdAt: Date;
 }

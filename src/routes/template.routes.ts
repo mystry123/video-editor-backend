@@ -7,6 +7,9 @@ import {
   createTemplateSchema,
   updateTemplateSchema,
   listTemplatesSchema,
+  listTemplateVersionsSchema,
+  getTemplateVersionSchema,
+  restoreTemplateVersionSchema,
 } from '../validators/template.validator';
 
 const router: ExpressRouter = Router();
@@ -27,8 +30,9 @@ router.get('/:id/renders', templateController.getTemplateRenders);
 router.post('/bulk-delete', templateController.bulkDeleteTemplates);
 
 // Version management
-router.get('/:id/versions', templateController.getTemplateVersions);
-router.post('/:id/restore/:version', templateController.restoreVersion);
+router.get('/:id/versions', validate(listTemplateVersionsSchema), templateController.getTemplateVersions);
+router.get('/:id/versions/:version', validate(getTemplateVersionSchema), templateController.getTemplateVersion);
+router.post('/:id/restore/:version', validate(restoreTemplateVersionSchema), templateController.restoreVersion);
 
 // Duplicate
 router.post('/:id/duplicate', checkTemplateQuota, templateController.duplicateTemplate);
