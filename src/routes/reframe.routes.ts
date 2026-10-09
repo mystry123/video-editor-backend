@@ -9,6 +9,9 @@ const router: ExpressRouter = Router();
 
 router.use(requireAuth);
 
+// GET /api/v1/reframe — The user's reframes, newest first (one per video and shape)
+router.get('/', reframeController.listReframes);
+
 // POST /api/v1/reframe — Start a reframe job
 router.post('/', reframeController.createReframe);
 
