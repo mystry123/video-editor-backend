@@ -4,6 +4,7 @@ import {
   DeleteObjectCommand,
   DeleteObjectsCommand,
   HeadObjectCommand,
+  GetObjectCommand,
   ListObjectsV2Command,
 } from '@aws-sdk/client-s3';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
@@ -28,11 +29,24 @@ interface PresignedUploadParams {
   maxSize: number;
 }
 
+/**
+ * Content-Disposition to store with an object. SVGs are images that can carry
+ * scripts: opened directly (a link to the CDN URL) they'd run as a page on the
+ * media origin. "attachment" makes a direct visit download the file instead;
+ * <img>, CSS and canvas ignore the header, so the editor still shows them.
+ */
+export function contentDispositionFor(contentType: string | undefined): string | undefined {
+  return (contentType || '').toLowerCase().split(';')[0].trim() === 'image/svg+xml' ? 'attachment' : undefined;
+}
+
 export async function createPresignedUpload({
   key,
   contentType,
   maxSize,
 }: PresignedUploadParams) {
+  // Every field is signed into the policy as an exact match, so the browser
+  // can't change the type or drop the Content-Disposition.
+  const disposition = contentDispositionFor(contentType);
   const { url, fields } = await createPresignedPost(s3Client, {
     Bucket: env.s3Bucket,
     Key: key,
@@ -42,11 +56,33 @@ export async function createPresignedUpload({
     ],
     Fields: {
       'Content-Type': contentType,
+      ...(disposition ? { 'Content-Disposition': disposition } : {}),
     },
     Expires: 3600, // 1 hour
   });
 
   return { url, fields };
+}
+
+/**
+ * The first `bytes` bytes of an object in the media bucket (fewer if it's
+ * smaller), via a ranged GET. Null if the object doesn't exist.
+ */
+export async function readObjectStart(key: string, bytes: number): Promise<Buffer | null> {
+  try {
+    const result = await s3Client.send(
+      new GetObjectCommand({ Bucket: env.s3Bucket, Key: key, Range: `bytes=0-${Math.max(0, bytes - 1)}` })
+    );
+    if (!result.Body) return Buffer.alloc(0);
+    return Buffer.from(await result.Body.transformToByteArray());
+  } catch (error) {
+    const err = error as { name?: string; $metadata?: { httpStatusCode?: number } };
+    const status = err?.$metadata?.httpStatusCode;
+    if (status === 404 || err?.name === 'NoSuchKey') return null;
+    // An empty object can't satisfy any range.
+    if (status === 416 || err?.name === 'InvalidRange') return Buffer.alloc(0);
+    throw error;
+  }
 }
 
 /** Size in bytes of an object in the media bucket, or null if it doesn't exist. */
@@ -115,6 +151,7 @@ export async function uploadBufferToS3(
       Key: key,
       Body: buffer,
       ContentType: contentType,
+      ContentDisposition: contentDispositionFor(contentType),
       CacheControl: 'public, max-age=31536000',
     })
   );
@@ -138,6 +175,7 @@ export async function uploadStreamToS3(
       Key: key,
       Body: stream,
       ContentType: contentType,
+      ContentDisposition: contentDispositionFor(contentType),
     },
   });
 

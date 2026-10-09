@@ -1,6 +1,5 @@
 import express, { Express, Request, Response } from 'express';
 import cors from 'cors';
-import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
@@ -17,6 +16,8 @@ import mongoose from 'mongoose';
 import { isRedisReady } from './config/redis';
 import renderLinkRoutes from './routes/renderLink.routes';
 import { openApiSpec } from './docs/openapi';
+import { apiSecurityHeaders, docsSecurityHeaders, CSP_REPORT_PATH } from './middleware/securityHeaders.middleware';
+import cspReportRoutes from './routes/cspReport.routes';
 
 import geoip from 'geoip-lite';
 
@@ -60,13 +61,9 @@ app.use((req, res, next) => {
 });
 
 
-// Helmet for security headers (relaxed CSP so Swagger UI assets load)
-app.use(
-  helmet({
-    contentSecurityPolicy: false,
-    crossOriginEmbedderPolicy: false,
-  })
-);
+// Helmet security headers, with a deny-everything CSP for the JSON API
+// (Swagger UI gets its own below). See middleware/securityHeaders.middleware.ts.
+app.use(apiSecurityHeaders);
 
 // CORS configuration
 app.use(
@@ -78,6 +75,10 @@ app.use(
     exposedHeaders: ['X-Request-Id'],
   })
 );
+
+// CSP violation reports. Before the global body parsers: this route parses
+// its own report content types with a small size limit.
+app.use(CSP_REPORT_PATH, cspReportRoutes);
 
 // ============================================
 // BODY PARSING & COOKIES
@@ -142,6 +143,7 @@ app.get('/health', (_req: Request, res: Response) => {
 // endpoint they describe still requires auth).
 app.use(
   '/api/v1/docs',
+  docsSecurityHeaders,
   swaggerUi.serve,
   swaggerUi.setup(openApiSpec, {
     customSiteTitle: 'Shotline Render API',

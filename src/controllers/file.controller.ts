@@ -3,7 +3,8 @@ import { enqueueJob } from '../utils/jobs';
 import { v4 as uuidv4 } from 'uuid';
 import { assertPublicUrl, BlockedUrlError, safeRequest } from '../utils/safeRequest';
 import { probeMedia, storageExtension, summarizeProbe } from '../utils/media';
-import { getObjectSize } from '../services/storage.service';
+import { getObjectSize, readObjectStart } from '../services/storage.service';
+import { findSvgActiveContent, matchesDeclaredType, SNIFF_BYTES, SVG_SCAN_BYTES } from '../utils/fileSniff';
 import axios from 'axios';
 import { AuthRequest } from '../types';
 import { File } from '../models/File';
@@ -97,6 +98,66 @@ export const getUploadUrl = async (
   }
 };
 
+const CATEGORY_LABEL: Record<string, string> = {
+  video: 'a video',
+  audio: 'an audio file',
+  image: 'an image',
+  svg: 'an SVG image',
+  font: 'a font',
+  json: 'a Lottie (JSON) file',
+};
+
+/**
+ * Checks what actually landed in S3 before the upload is accepted: its first
+ * bytes must match the declared type, and an SVG must not contain scripts.
+ * On a mismatch the object is deleted, the file is marked failed and a 422
+ * explains why. Storage isn't charged until the upload is marked ready, so
+ * there's nothing to refund.
+ *
+ * If S3 can't be read, the check is skipped (logged) rather than failing a
+ * genuine upload over a transient error.
+ */
+async function rejectIfContentDoesNotMatch(file: InstanceType<typeof File>): Promise<void> {
+  const isSvg = file.storageKey.toLowerCase().endsWith('.svg');
+  let head: Buffer | null;
+  try {
+    head = await readObjectStart(file.storageKey, isSvg ? SVG_SCAN_BYTES : SNIFF_BYTES);
+  } catch (error) {
+    logger.warn('Upload content check skipped: could not read the object', { fileId: file._id, error: (error as Error).message });
+    return;
+  }
+  if (head === null) return; // gone; the size check reports it
+
+  const sniff = matchesDeclaredType(file.storageKey, head);
+  let code: string | null = null;
+  let message = '';
+  if (!sniff.ok) {
+    code = 'FILE_CONTENT_MISMATCH';
+    message = `This file doesn't look like ${CATEGORY_LABEL[sniff.expected!] || 'the type it was uploaded as'}. Check the file and upload it again.`;
+  } else if (isSvg) {
+    const activeContent = findSvgActiveContent(head.toString('utf8'));
+    if (activeContent) {
+      code = 'SVG_ACTIVE_CONTENT';
+      message = "This SVG contains scripts or interactive code, which can't be uploaded. Export it again as a plain SVG (or a PNG) and retry.";
+      logger.warn('SVG upload rejected', { fileId: file._id, reason: activeContent });
+    }
+  }
+  if (!code) return;
+
+  logger.warn('Upload rejected: content does not match its type', {
+    fileId: file._id,
+    mimeType: file.mimeType,
+    expected: sniff.expected,
+    detected: sniff.detected,
+    code,
+  });
+  await deleteFromS3(file.storageKey).catch((error) =>
+    logger.warn('Failed to delete rejected upload from S3', { fileId: file._id, error: error.message })
+  );
+  await File.updateOne({ _id: file._id, status: 'processing' }, { status: 'failed', importError: message });
+  throw ApiError.withCode(422, code, message);
+}
+
 export const completeUpload = async (
   req: AuthRequest,
   res: Response,
@@ -111,6 +172,18 @@ export const completeUpload = async (
 
     const file = await File.findOne({ _id: id, userId: user._id });
     if (!file) throw ApiError.notFound('File not found');
+    if (file.status === 'failed') {
+      throw ApiError.withCode(422, 'UPLOAD_FAILED', file.importError || 'This upload failed. Upload the file again.');
+    }
+
+    // Storage is charged for what actually landed in S3, not the size the
+    // browser declared, and only once: on the processing → ready transition.
+    const actualSize = await getObjectSize(file.storageKey);
+    if (actualSize === null && file.status === 'processing') {
+      throw ApiError.withCode(400, 'UPLOAD_NOT_FOUND', "The upload didn't finish. Try uploading the file again.");
+    }
+    // Before ffprobe or anything else touches the file.
+    if (file.status === 'processing') await rejectIfContentDoesNotMatch(file);
 
     // Extract metadata using ffprobe
     let metadata: any = {};
@@ -141,12 +214,6 @@ export const completeUpload = async (
       };
     }
 
-    // Storage is charged for what actually landed in S3, not the size the
-    // browser declared, and only once: on the processing → ready transition.
-    const actualSize = await getObjectSize(file.storageKey);
-    if (actualSize === null && file.status === 'processing') {
-      throw ApiError.withCode(400, 'UPLOAD_NOT_FOUND', "The upload didn't finish. Try uploading the file again.");
-    }
     const finished = await File.findOneAndUpdate(
       { _id: id, status: 'processing' },
       { status: 'ready', metadata, size: actualSize ?? file.size },

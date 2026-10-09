@@ -65,6 +65,10 @@ export const env = {
   reframeServiceUrl: process.env.REFRAME_SERVICE_URL || '',
   reframeServiceToken: process.env.REFRAME_SERVICE_TOKEN || '',
   remotionWebhookSecret: process.env.REMOTION_WEBHOOK_SECRET || '',
+  // Shared with the Remix server (same name there). When it sends this secret,
+  // its X-Shotline-Client-IP header is trusted as the browser's IP for rate
+  // limiting; without it, every SSR call looks like it comes from the Remix box.
+  internalProxySecret: process.env.INTERNAL_PROXY_SECRET || '',
   // Public URL of POST /api/v1/webhooks/remotion. With the secret set, renders
   // complete via Remotion's webhook instead of a worker polling Lambda.
   remotionWebhookUrl: process.env.REMOTION_WEBHOOK_URL || '',
@@ -121,6 +125,7 @@ function checkEnvironment(): void {
   if (env.corsOrigin === '*') warnings.push('CORS_ORIGIN is "*"; set it to the frontend origin(s)');
   if (!env.s3Bucket || !env.cdnUrl) warnings.push('S3_BUCKET / CDN_URL not set: uploads will fail');
   if (!env.remotionServeUrl || !env.remotionFunctionName) warnings.push('REMOTION_SERVE_URL / REMOTION_FUNCTION_NAME not set: renders will fail');
+  if (env.internalProxySecret && env.internalProxySecret.length < 32) warnings.push('INTERNAL_PROXY_SECRET is shorter than 32 characters; it is ignored');
   if (Boolean(env.remotionWebhookUrl) !== Boolean(env.remotionWebhookSecret)) {
     warnings.push('Set both REMOTION_WEBHOOK_URL and REMOTION_WEBHOOK_SECRET to complete renders by webhook; until then workers poll Lambda');
   }

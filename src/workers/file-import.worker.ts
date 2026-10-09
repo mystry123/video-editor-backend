@@ -2,7 +2,7 @@ import { Job, Worker } from 'bullmq';
 import { probeMedia, summarizeProbe } from '../utils/media';
 import { limitStream, safeRequest } from '../utils/safeRequest';
 import { isFinalAttempt } from '../utils/jobs';
-import { getObjectSize } from '../services/storage.service';
+import { contentDispositionFor, getObjectSize } from '../services/storage.service';
 
 // Largest file a URL import may download (bytes). Overridable for bigger plans later.
 const MAX_IMPORT_BYTES = Number(process.env.MAX_IMPORT_BYTES) || 5 * 1024 * 1024 * 1024;
@@ -162,6 +162,7 @@ function createS3Upload(key: string, stream: Readable, contentType: string): Upl
       Key: key,
       Body: stream,
       ContentType: contentType,
+      ContentDisposition: contentDispositionFor(contentType),
     },
   });
 }
