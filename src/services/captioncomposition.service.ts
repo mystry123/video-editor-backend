@@ -1,3 +1,4 @@
+import { parseCaptionStyle, sanitizeStoredCaptionStyle } from '../schemas/captionStyle';
 import { v4 as uuidv4 } from 'uuid';
 import { Types } from 'mongoose';
 import {
@@ -166,7 +167,8 @@ export class CaptionCompositionService {
       }
       presetStyles = dbPreset.styles;
       presetName = dbPreset.name;
-      await CaptionPreset.incrementUsage(presetId);
+      // Usage is recorded once per project when it's created
+      // (recordPresetUse); counting here too counted every render
     } else {
       const defaultPreset = await CaptionPreset.getDefault();
       if (defaultPreset) {
@@ -234,6 +236,38 @@ export class CaptionCompositionService {
     const lastWord = transcription.words[transcription.words.length - 1];
     const captionDuration = lastWord ? lastWord.endMs / 1000 : duration;
 
+    // The caption's style, in layers: the defaults and the preset, then the
+    // older single-field overrides (clients that send them), then the full
+    // style the editor sends (validated; the captions page used to lose
+    // everything except a few colours), then its position.
+    const legacyOverrides = Object.fromEntries(
+      Object.entries({
+        highlightColor: settings?.highlightColor,
+        inactiveColor: settings?.inactiveColor,
+        inactiveOpacity: settings?.inactiveOpacity,
+        upcomingColor: settings?.upcomingColor,
+        upcomingOpacity: settings?.upcomingOpacity,
+        backgroundColor: settings?.backgroundColor,
+        backgroundXPadding: settings?.backgroundXPadding,
+        backgroundYPadding: settings?.backgroundYPadding,
+        backgroundBorderRadius: settings?.backgroundBorderRadius,
+      }).filter(([, v]) => v !== undefined && v !== null && v !== '')
+    );
+    // Stored presets: keep their valid fields; the editor's style was
+    // validated when the project was created
+    const presetStyle = sanitizeStoredCaptionStyle(presetStyles);
+    const editorStyle = settings?.style ? parseCaptionStyle(settings.style) : null;
+    const { schemaVersion: _version, ...style } = {
+      lineHeight: 1.2,
+      letterSpacing: 0,
+      textAlign: 'center' as const,
+      verticalAlign: 'middle' as const,
+      ...presetStyle,
+      ...legacyOverrides,
+      ...(editorStyle?.ok ? editorStyle.style : {}),
+    };
+    const placement = settings?.placement;
+
     const captionElement: CaptionElement = {
       id: uuidv4(),
       type: 'caption',
@@ -242,67 +276,25 @@ export class CaptionCompositionService {
       track: 2,
       time: 0,
       duration: duration,
-      
-      // Position & dimensions
-      x: '50%',
-      y: captionSettings.yPosition,
-      width: `${captionSettings.widthPercent}%`,
-      height: `${captionSettings.heightPercent}%`,
+
+      // Position & dimensions (the editor's, or the default for the shape)
+      x: placement?.x ?? '50%',
+      y: placement?.y ?? captionSettings.yPosition,
+      width: placement?.width ?? `${captionSettings.widthPercent}%`,
+      height: placement?.height ?? `${captionSettings.heightPercent}%`,
       xAnchor: 50,
       yAnchor: 50,
       opacity: 1,
       visible: true,
-      
+
       // Transcription
       transcription,
-      
-      // Display settings
-      displayMode: presetStyles.displayMode || 'line',
-      wordsPerLine: captionSettings.wordsPerLine,
-      linesPerPage: captionSettings.linesPerPage,
-      
-      // Text styling from preset
-      fontSize: settings?.fontSize || captionSettings.fontSize,
-      fontFamily: presetStyles.fontFamily,
-      fontWeight: presetStyles.fontWeight,
-      fontStyle: presetStyles.fontStyle,
-      lineHeight: presetStyles.lineHeight || 1.2,
-      letterSpacing: 0,
-      
-      // Colors from preset or settings
-      fillColor: presetStyles.fillColor,
-      highlightStyle: presetStyles.highlightStyle,
-      highlightColor: settings?.highlightColor || presetStyles.highlightColor,
-      highlightBackgroundColor: presetStyles.highlightBackgroundColor,
-      highlightScale: presetStyles.highlightScale,
-      inactiveColor: settings?.inactiveColor || presetStyles.inactiveColor,
-      inactiveOpacity: settings?.inactiveOpacity ?? presetStyles.inactiveOpacity,
-      upcomingColor: settings?.upcomingColor || presetStyles.upcomingColor,
-      upcomingOpacity: settings?.upcomingOpacity ?? presetStyles.upcomingOpacity,
-      
-      // Stroke from preset
-      strokeEnabled: presetStyles.strokeEnabled,
-      strokeColor: presetStyles.strokeColor,
-      strokeWidth: presetStyles.strokeWidth,
-      strokeOpacity: presetStyles.strokeOpacity,
-      
-      // Shadow from preset
-      shadowEnabled: presetStyles.shadowEnabled,
-      shadowColor: presetStyles.shadowColor,
-      shadowOpacity: presetStyles.shadowOpacity,
-      shadowOffsetX: presetStyles.shadowOffsetX,
-      shadowOffsetY: presetStyles.shadowOffsetY,
-      shadowBlur: presetStyles.shadowBlur,
-      
-      // Background from preset or settings
-      backgroundColor: settings?.backgroundColor || presetStyles.backgroundColor,
-      backgroundXPadding: settings?.backgroundXPadding ?? presetStyles.backgroundXPadding,
-      backgroundYPadding: settings?.backgroundYPadding ?? presetStyles.backgroundYPadding,
-      backgroundBorderRadius: settings?.backgroundBorderRadius ?? presetStyles.backgroundBorderRadius,
-      
-      // Alignment
-      textAlign: 'center',
-      verticalAlign: 'middle',
+
+      ...style,
+      displayMode: style.displayMode || 'line',
+      wordsPerLine: settings?.wordsPerLine ?? style.wordsPerLine ?? captionSettings.wordsPerLine,
+      linesPerPage: settings?.linesPerPage ?? style.linesPerPage ?? captionSettings.linesPerPage,
+      fontSize: settings?.fontSize ?? style.fontSize ?? captionSettings.fontSize,
     };
 
     // =========================================================================

@@ -18,7 +18,7 @@ export type HighlightStyle =
 /**
  * Display mode for captions
  */
-export type DisplayMode = 'word' | 'line' | 'tiktok' | 'karaoke';
+export type DisplayMode = 'word' | 'line' | 'tiktok' | 'karaoke' | 'static';
 
 /**
  * Caption styles - text appearance
@@ -112,9 +112,11 @@ export interface ICaptionPreset extends Document {
   
   // Actual caption styling
   styles: ICaptionStyles;
+  /** Version of the style format in `styles` (schemas/captionStyle) */
+  schemaVersion?: number;
   
   // Preview styling for UI cards
-  previewStyles: IPreviewStyles;
+  previewStyles?: IPreviewStyles;
   
   // Stats
   usageCount: number;
@@ -135,68 +137,6 @@ export interface ICaptionPresetModel extends Model<ICaptionPreset> {
 // ============================================================================
 // Schema
 // ============================================================================
-
-const CaptionStylesSchema = new Schema<ICaptionStyles>(
-  {
-    // Layout (was stripped before: not in the schema)
-    wordsPerLine: { type: Number, min: 1, max: 20 },
-    linesPerPage: { type: Number, min: 1, max: 5 },
-    // Font
-    fontFamily: { type: String, required: true, default: 'Inter' },
-    fontWeight: { type: Number, required: true, default: 700 },
-    fontStyle: { 
-      type: String, 
-      enum: ['normal', 'italic'], 
-      default: 'normal' 
-    },
-    
-    // Colors
-    fillColor: { type: String, required: true, default: '#FFFFFF' },
-    highlightColor: { type: String, required: true, default: '#FFFF00' },
-    inactiveColor: { type: String },
-    inactiveOpacity: { type: Number, min: 0, max: 1, default: 1 },
-    upcomingColor: { type: String },
-    upcomingOpacity: { type: Number, min: 0, max: 1 },
-    
-    // Highlight
-    highlightStyle: {
-      type: String,
-      enum: ['none', 'color', 'background', 'scale', 'glow', 'underline'],
-      default: 'color',
-    },
-    highlightBackgroundColor: { type: String },
-    highlightScale: { type: Number },
-    
-    // Stroke
-    strokeEnabled: { type: Boolean, default: false },
-    strokeColor: { type: String, default: '#000000' },
-    strokeWidth: { type: Number, default: 0 },
-    strokeOpacity: { type: Number, min: 0, max: 1, default: 1 },
-    
-    // Shadow
-    shadowEnabled: { type: Boolean, default: false },
-    shadowColor: { type: String, default: '#000000' },
-    shadowOpacity: { type: Number, min: 0, max: 1, default: 0.5 },
-    shadowOffsetX: { type: Number, default: 0 },
-    shadowOffsetY: { type: Number, default: 2 },
-    shadowBlur: { type: Number, default: 4 },
-    
-    // Background
-    backgroundColor: { type: String },
-    backgroundXPadding: { type: Number, default: 10 },
-    backgroundYPadding: { type: Number, default: 5 },
-    backgroundBorderRadius: { type: Number, default: 10 },
-    
-    // Display
-    displayMode: {
-      type: String,
-      enum: ['word', 'line', 'tiktok', 'karaoke'],
-      default: 'line',
-    },
-    lineHeight: { type: Number, default: 1 },
-  },
-  { _id: false }
-);
 
 const PreviewStylesSchema = new Schema<IPreviewStyles>(
   {
@@ -250,14 +190,20 @@ const CaptionPresetSchema = new Schema<ICaptionPreset, ICaptionPresetModel>(
     isPublic: { type: Boolean, default: false },
     isDefault: { type: Boolean, default: false },
     
+    // The caption style, validated by schemas/captionStyle before every save
+    // (a fixed sub-schema here silently dropped any setting it didn't list,
+    // e.g. text case or animations). Existing documents keep their stored
+    // values; new settings need no migration.
     styles: {
-      type: CaptionStylesSchema,
+      type: Schema.Types.Mixed,
       required: true,
     },
-    
+    /** Version of the style format in `styles` (schemas/captionStyle) */
+    schemaVersion: { type: Number, default: 1 },
+
+    // Card decoration from before cards were drawn from `styles`; optional
     previewStyles: {
       type: PreviewStylesSchema,
-      required: true,
     },
     
     usageCount: { type: Number, default: 0 },

@@ -3,6 +3,9 @@ import { sendError } from '../utils/errorResponse';
 import { Types } from 'mongoose';
 import { CaptionPreset, ICaptionStyles, IPreviewStyles } from '../models/CaptionPreset';
 import { PRESET_CATEGORIES } from '../constants/preset-categories';
+import { recordPresetUse } from '../services/captionPresetUsage.service';
+import { createPresetSchema, formatIssues, updatePresetSchema } from '../schemas/captionPreset';
+import { CAPTION_STYLE_VERSION } from '../schemas/captionStyle';
 
 // ============================================================================
 // Types
@@ -174,13 +177,12 @@ export class CaptionPresetController {
         return;
       }
 
-      const body: CreatePresetBody = req.body;
-
-      // Validate required fields
-      if (!body.name || !body.styles || !body.previewStyles) {
-        sendError(req, res, 400, 'Missing required fields: name, styles, previewStyles', 'VALIDATION_ERROR');
+      const parsed = createPresetSchema.safeParse(req.body);
+      if (!parsed.success) {
+        sendError(req, res, 400, `Invalid preset: ${formatIssues(parsed.error)}`, 'VALIDATION_ERROR');
         return;
       }
+      const body = parsed.data;
 
       // Check for duplicate name for this user
       const existingPreset = await CaptionPreset.findOne({
@@ -200,8 +202,9 @@ export class CaptionPresetController {
         description: body.description,
         category: body.category || 'custom',
         tags: body.tags || [],
-        styles: body.styles,
-        previewStyles: body.previewStyles,
+        styles: { ...body.styles, schemaVersion: CAPTION_STYLE_VERSION },
+        schemaVersion: CAPTION_STYLE_VERSION,
+        ...(body.previewStyles && { previewStyles: body.previewStyles }),
         isSystem: false,
         isPublic: body.isPublic || false,
         usageCount: 0,
@@ -254,7 +257,12 @@ export class CaptionPresetController {
         return;
       }
 
-      const body: UpdatePresetBody = req.body;
+      const parsed = updatePresetSchema.safeParse(req.body);
+      if (!parsed.success) {
+        sendError(req, res, 400, `Invalid preset: ${formatIssues(parsed.error)}`, 'VALIDATION_ERROR');
+        return;
+      }
+      const body = parsed.data;
 
       // Update allowed fields
       if (body.name !== undefined) preset.name = body.name;
@@ -262,15 +270,16 @@ export class CaptionPresetController {
       if (body.category !== undefined) preset.category = body.category;
       if (body.tags !== undefined) preset.tags = body.tags;
       if (body.isPublic !== undefined) preset.isPublic = body.isPublic;
-      
-      // Update styles (merge with existing)
+
+      // A new style replaces the old one (a merge kept stale fields, e.g. a
+      // removed animation); validated above
       if (body.styles) {
-        preset.styles = { ...preset.styles, ...body.styles } as any;
+        preset.styles = { ...body.styles, schemaVersion: CAPTION_STYLE_VERSION } as any;
+        preset.schemaVersion = CAPTION_STYLE_VERSION;
+        preset.markModified('styles');
       }
-      
-      // Update preview styles (merge with existing)
       if (body.previewStyles) {
-        preset.previewStyles = { ...preset.previewStyles, ...body.previewStyles } as any;
+        preset.previewStyles = body.previewStyles as any;
       }
 
       await preset.save();
@@ -411,16 +420,36 @@ export class CaptionPresetController {
     next: NextFunction
   ): Promise<void> {
     try {
+      const userId = req.user?._id?.toString();
       const presetId = req.params.id;
 
+      if (!userId) {
+        sendError(req, res, 401, 'Authentication required', 'AUTH_REQUIRED');
+        return;
+      }
       if (!Types.ObjectId.isValid(presetId)) {
         sendError(req, res, 400, 'Invalid preset ID', 'INVALID_ID');
         return;
       }
+      // What it was used in: one count per user, preset and project
+      const projectKey = typeof req.body?.projectId === 'string' ? req.body.projectId.trim() : '';
+      if (!projectKey || projectKey.length > 100) {
+        sendError(req, res, 400, 'projectId is required', 'VALIDATION_ERROR');
+        return;
+      }
 
-      await CaptionPreset.incrementUsage(presetId);
+      // Only styles this user may use (system, public or their own)
+      const preset = await CaptionPreset.findOne({
+        _id: presetId,
+        $or: [{ isSystem: true }, { isPublic: true }, { userId: new Types.ObjectId(userId) }],
+      }).select('_id');
+      if (!preset) {
+        sendError(req, res, 404, 'Preset not found', 'NOT_FOUND');
+        return;
+      }
 
-      res.json({ message: 'Usage recorded' });
+      const counted = await recordPresetUse(presetId, userId, `template:${projectKey}`);
+      res.json({ message: 'Usage recorded', counted });
     } catch (error) {
       next(error);
     }
