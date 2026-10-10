@@ -12,7 +12,8 @@ import { canTranscribe } from '../utils/checkAudioStream';
 import { logger } from '../utils/logger';
 
 // Import queue getter - lazy initialization
-import { captionProjectSettingsSchema } from '../schemas/captionStyle';
+import { env } from '../config/env';
+import { captionProjectSettingsSchema, fontUrlOnCdn } from '../schemas/captionStyle';
 import { recordPresetUse } from '../services/captionPresetUsage.service';
 
 let _captionQueue: any = null;
@@ -192,6 +193,9 @@ export class CaptionProjectController {
         );
       }
       const setting = parsedSettings.data;
+      if (!fontUrlOnCdn(setting.style, env.cdnUrl)) {
+        throw ApiError.badRequest('Invalid caption settings: style.fontUrl: must be a font you uploaded');
+      }
 
 
       // Validate fileId

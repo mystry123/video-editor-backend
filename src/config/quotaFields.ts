@@ -60,6 +60,8 @@ export const QUOTA_FIELDS: QuotaFieldDef[] = [
 
   { key: 'customPresetsAllowed', label: 'Custom caption styles', description: 'Can create their own caption presets.', type: 'boolean', group: 'features' },
   { key: 'maxCustomPresets', label: 'Custom caption style limit', description: 'Number of custom caption presets.', type: 'count', group: 'features' },
+  { key: 'customFontsAllowed', label: 'Custom fonts', description: 'Can upload their own fonts for caption styles.', type: 'boolean', group: 'features' },
+  { key: 'maxCustomFonts', label: 'Custom font limit', description: 'Number of uploaded fonts.', type: 'count', group: 'features' },
 ];
 
 const FIELD_BY_KEY = new Map(QUOTA_FIELDS.map((f) => [f.key as string, f]));

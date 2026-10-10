@@ -39,7 +39,8 @@ describe('POST /files/upload-url', () => {
   });
 
   it('accepts fonts sent without a MIME type', async () => {
-    const { auth } = await createUser();
+    // Fonts need a plan that allows them (customFontsAllowed)
+    const { auth } = await createUser({ role: 'pro' });
     const res = await api().post('/api/v1/files/upload-url').set(auth).send({ filename: 'Brand.otf', mimeType: 'application/octet-stream', size: 10 });
     expect(res.status).toBe(200);
     expect(res.body.cdnUrl).toMatch(/\.otf$/);

@@ -19,6 +19,10 @@ export interface UserQuota {
   reframeQuality: ReframeQuality;
   customPresetsAllowed: boolean;     // Can create custom presets
   maxCustomPresets: number;          // How many custom presets
+  /** Can upload their own fonts for caption styles */
+  customFontsAllowed: boolean;
+  /** How many uploaded fonts (-1 = unlimited) */
+  maxCustomFonts: number;
   priorityRendering: boolean;        // Priority queue for rendering
   watermarkFree: boolean;            // No watermark on exports
   /** What happens when a render is above maxResolution. */
@@ -48,6 +52,8 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     reframeQuality: 'standard',
     customPresetsAllowed: false,
     maxCustomPresets: 0,
+    customFontsAllowed: false,
+    maxCustomFonts: 0,
     priorityRendering: false,
     watermarkFree: false,
     overResolution: 'downscale',
@@ -71,6 +77,8 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     reframeQuality: 'high',
     customPresetsAllowed: true,
     maxCustomPresets: 10,
+    customFontsAllowed: true,
+    maxCustomFonts: 10,
     priorityRendering: false,
     watermarkFree: true,
     overResolution: 'downscale',
@@ -94,6 +102,8 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     reframeQuality: 'high',
     customPresetsAllowed: true,
     maxCustomPresets: -1,              // Unlimited
+    customFontsAllowed: true,
+    maxCustomFonts: -1,
     priorityRendering: true,
     watermarkFree: true,
     overResolution: 'downscale',
@@ -117,6 +127,8 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     reframeQuality: 'max',
     customPresetsAllowed: true,
     maxCustomPresets: -1,
+    customFontsAllowed: true,
+    maxCustomFonts: -1,
     priorityRendering: true,
     watermarkFree: true,
     overResolution: 'downscale',
