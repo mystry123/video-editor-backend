@@ -135,7 +135,9 @@ export const NEW_PRESETS = [
     sortOrder: 40,
     tags: ['trending', 'pill', 'bold'],
     styles: {
-      fontFamily: 'Archivo Black', fontWeight: 400, textTransform: 'uppercase', fillColor: '#FFFFFF', ...outline(6),
+      // A soft shadow, not an outline: an outline thickens the black text on
+      // the pill until it reads as a blob
+      fontFamily: 'Archivo Black', fontWeight: 400, textTransform: 'uppercase', fillColor: '#FFFFFF', ...softShadow,
       displayMode: 'tiktok', wordsPerLine: 3, linesPerPage: 1,
       highlightStyle: 'background', highlightBackgroundColor: '#FFE600', highlightColor: '#000000',
       inactiveOpacity: 1, upcomingOpacity: 1, lineHeight: 1.15,
