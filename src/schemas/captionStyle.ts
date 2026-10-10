@@ -21,6 +21,11 @@ const HEX = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 const FUNCTION_COLOR = /^(?:rgba?|hsla?)\(\s*-?[\d.]+%?\s*(?:,\s*-?[\d.]+%?\s*){2,3}\)$/i;
 const NAMED = /^[a-z]{3,20}$/i;
 const FONT_FAMILY = /^[\w\s'",-]{1,80}$/;
+/**
+ * A font the user uploaded: our upload path shape only (the backend also
+ * pins the host to the media CDN when a style is saved).
+ */
+export const FONT_URL = /^https:\/\/[a-z0-9.-]{3,120}(?::\d{2,5})?\/(?:[\w.-]+\/)*users\/[a-f0-9]{24}\/uploads\/[0-9a-f-]{36}\.(?:woff2|woff|ttf|otf)$/i;
 
 const color = z
   .string()
@@ -86,6 +91,8 @@ export const captionStyleSchema = z.object({
 
   // Text
   fontFamily: z.string().regex(FONT_FAMILY, 'not a font family name').optional(),
+  /** An uploaded font (fontFamily is its internal name) */
+  fontUrl: z.string().max(300).regex(FONT_URL, 'must be a font you uploaded').optional(),
   fontWeight: num(100, 1000).optional(),
   fontStyle: z.enum(['normal', 'italic', 'oblique']).optional(),
   fontSize: num(0.5, 50).optional(),
@@ -196,3 +203,9 @@ export const captionProjectSettingsSchema = z.object({
   style: captionStyleSchema.optional(),
   placement: z.object({ x: percent.optional(), y: percent.optional(), width: percent.optional(), height: percent.optional() }).optional(),
 });
+
+/** An uploaded font must be on our media CDN (not just shaped like it). */
+export function fontUrlOnCdn(style: { fontUrl?: string } | undefined, cdnUrl: string): boolean {
+  if (!style?.fontUrl) return true;
+  return !!cdnUrl && style.fontUrl.startsWith(`${cdnUrl.replace(/\/+$/, '')}/`);
+}

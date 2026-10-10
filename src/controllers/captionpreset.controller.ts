@@ -3,9 +3,10 @@ import { sendError } from '../utils/errorResponse';
 import { Types } from 'mongoose';
 import { CaptionPreset, ICaptionStyles, IPreviewStyles } from '../models/CaptionPreset';
 import { PRESET_CATEGORIES } from '../constants/preset-categories';
+import { env } from '../config/env';
 import { recordPresetUse } from '../services/captionPresetUsage.service';
 import { createPresetSchema, formatIssues, updatePresetSchema } from '../schemas/captionPreset';
-import { CAPTION_STYLE_VERSION } from '../schemas/captionStyle';
+import { CAPTION_STYLE_VERSION, fontUrlOnCdn } from '../schemas/captionStyle';
 
 // ============================================================================
 // Types
@@ -102,10 +103,16 @@ export class CaptionPresetController {
         query.$text = { $search: search };
       }
 
-      const presets = await CaptionPreset.find(query)
+      const found = await CaptionPreset.find(query)
         .sort({ sortOrder: 1, createdAt: 1 })
         .select('-__v')
         .lean();
+      // The user's own styles are marked (the editor offers rename/update/
+      // delete on them); other users' account ids aren't sent
+      const presets = found.map(({ userId: owner, ...preset }) => {
+        const isOwn = !!userId && !!owner && String(owner) === userId;
+        return { ...preset, isOwn, ...(isOwn && { userId: owner }) };
+      });
 
       // Group by category for frontend
       const groupedByCategory: Record<string, any[]> = {};
@@ -190,6 +197,10 @@ export class CaptionPresetController {
         return;
       }
       const body = parsed.data;
+      if (!fontUrlOnCdn(body.styles, env.cdnUrl)) {
+        sendError(req, res, 400, 'Invalid preset: styles.fontUrl: must be a font you uploaded', 'VALIDATION_ERROR');
+        return;
+      }
 
       // Check for duplicate name for this user
       const existingPreset = await CaptionPreset.findOne({
@@ -270,6 +281,10 @@ export class CaptionPresetController {
         return;
       }
       const body = parsed.data;
+      if (!fontUrlOnCdn(body.styles, env.cdnUrl)) {
+        sendError(req, res, 400, 'Invalid preset: styles.fontUrl: must be a font you uploaded', 'VALIDATION_ERROR');
+        return;
+      }
 
       // Update allowed fields
       if (body.name !== undefined) preset.name = body.name;

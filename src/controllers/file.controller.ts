@@ -47,6 +47,33 @@ function assertCanStore(user: any, size: number, mimeType: string | undefined): 
   return remaining;
 }
 
+const FONT_EXTENSIONS = new Set(['ttf', 'otf', 'woff', 'woff2']);
+
+/**
+ * Fonts for caption styles: only on plans that allow them (customFontsAllowed,
+ * set per plan in admin, with per-user overrides), up to maxCustomFonts.
+ */
+async function assertCanUploadFont(user: any): Promise<void> {
+  const quota = getEffectiveQuota(user);
+  if (!quota.customFontsAllowed) {
+    throw ApiError.withCode(403, 'CUSTOM_FONTS_NOT_ALLOWED', 'Uploading your own fonts is available on paid plans.');
+  }
+  if (quota.maxCustomFonts !== -1) {
+    const count = await File.countDocuments({
+      userId: user._id,
+      status: { $ne: 'deleted' },
+      storageKey: { $regex: '\\.(ttf|otf|woff2?)$' },
+    });
+    if (count >= quota.maxCustomFonts) {
+      throw ApiError.withCode(
+        403,
+        'CUSTOM_FONT_LIMIT_REACHED',
+        `You can upload up to ${quota.maxCustomFonts} fonts on your plan. Delete one or upgrade.`
+      );
+    }
+  }
+}
+
 export const getUploadUrl = async (
   req: AuthRequest,
   res: Response,
@@ -67,6 +94,7 @@ export const getUploadUrl = async (
     if (!ext) {
       throw ApiError.withCode(400, 'UNSUPPORTED_FILE_TYPE', `Files of type "${mimeType}" can't be uploaded.`);
     }
+    if (FONT_EXTENSIONS.has(ext)) await assertCanUploadFont(user);
     const key = `users/${user._id}/uploads/${uuidv4()}.${ext}`;
 
     const { url, fields } = await createPresignedUpload({
@@ -247,7 +275,9 @@ export const listFiles = async (
     };
 
     if (type && String(type).toLowerCase() !== "all") {
-      query.mimeType = { $regex: `^${String(type).toLowerCase()}/` };
+      // Fonts are often uploaded without a font type: match the extension
+      if (String(type).toLowerCase() === 'font') query.storageKey = { $regex: '\\.(ttf|otf|woff2?)$' };
+      else query.mimeType = { $regex: `^${String(type).toLowerCase()}/` };
     }
 
     const pageNum = parseInt(page as string);
