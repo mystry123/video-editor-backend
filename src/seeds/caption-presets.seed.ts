@@ -1,6 +1,8 @@
 import mongoose from 'mongoose';
 import { CaptionPreset } from '../models/CaptionPreset';
 import { logger } from '../utils/logger';
+import { CAPTION_STYLE_VERSION } from '../schemas/captionStyle';
+import { CURATION, NEW_PRESETS } from './caption-library';
 import { CaptionPresetController } from '../controllers/captionpreset.controller';
 
 const CAPTION_PRESETS = [
@@ -1082,29 +1084,66 @@ export const presetSlug = (name: string) =>
   name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
 /**
- * Idempotent: upserts each system preset by slug, so changes to the list
- * (new fields such as wordsPerLine, restyles) reach existing databases. The
- * first preset is the default. Presets seeded before slugs existed are
- * matched by name once and given their slug.
+ * The system library: the original presets with their curation
+ * (caption-library: category, order, retired, renamed, style fixes) plus
+ * the new styles.
+ */
+export function systemCaptionPresets() {
+  const originals = CAPTION_PRESETS.map((preset, index) => {
+    const curation = CURATION[preset.name];
+    return {
+      ...preset,
+      name: curation?.rename ?? preset.name,
+      /** Matched by its original slug when renamed */
+      matchSlug: presetSlug(preset.name),
+      category: curation?.category ?? preset.category,
+      sortOrder: curation?.sortOrder ?? 1000 + index,
+      isHidden: !!curation?.hidden,
+      tags: curation?.tags ? [...new Set([...(preset.tags || []), ...curation.tags])] : preset.tags,
+      styles: { ...preset.styles, ...(curation?.styles || {}), schemaVersion: CAPTION_STYLE_VERSION },
+      isDefault: index === 0,
+    };
+  });
+  const added = NEW_PRESETS.map((preset) => ({
+    ...preset,
+    matchSlug: presetSlug(preset.name),
+    usageCount: 0,
+    isSystem: true,
+    isPublic: true,
+    isHidden: false,
+    styles: { ...preset.styles, schemaVersion: CAPTION_STYLE_VERSION },
+    isDefault: false,
+  }));
+  return [...originals, ...added];
+}
+
+/**
+ * Idempotent: upserts each system style by slug, so changes to the list
+ * (curation, new styles, restyles) reach existing databases. Retired styles
+ * are hidden, never deleted (projects may point at them). Renamed styles
+ * keep their document. Presets seeded before slugs existed are matched by
+ * name once and given their slug. Usage counts are left alone.
  */
 export async function seedCaptionPresets(): Promise<void> {
   try {
     logger.info('Starting caption presets seed...');
     let created = 0;
     let updated = 0;
-    for (const [index, preset] of CAPTION_PRESETS.entries()) {
+    const presets = systemCaptionPresets();
+    for (const { matchSlug, usageCount: _count, id: _legacyId, ...preset } of presets as any[]) {
       const slug = presetSlug(preset.name);
-      const fields = { ...preset, slug, isSystem: true, isDefault: index === 0 };
+      const fields = { ...preset, slug, isSystem: true, schemaVersion: CAPTION_STYLE_VERSION };
       const legacy = await CaptionPreset.findOne({ slug: { $exists: false }, isSystem: true, name: preset.name }).select('_id').lean();
+      const existing = legacy ?? (await CaptionPreset.findOne({ slug: { $in: [slug, matchSlug] }, isSystem: true }).select('_id').lean());
       const result = await CaptionPreset.updateOne(
-        legacy ? { _id: legacy._id } : { slug },
-        { $set: fields },
+        existing ? { _id: existing._id } : { slug },
+        { $set: fields, $setOnInsert: { usageCount: 0 } },
         { upsert: true, runValidators: true }
       );
       if (result.upsertedCount) created++;
       else if (result.modifiedCount) updated++;
     }
-    logger.info(`Caption presets seeded: ${created} created, ${updated} updated, ${CAPTION_PRESETS.length} total`);
+    logger.info(`Caption presets seeded: ${created} created, ${updated} updated, ${presets.length} total`);
   } catch (error) {
     logger.error('Error seeding caption presets:', error);
     throw error;

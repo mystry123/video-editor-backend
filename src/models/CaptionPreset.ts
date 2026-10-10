@@ -114,6 +114,10 @@ export interface ICaptionPreset extends Document {
   styles: ICaptionStyles;
   /** Version of the style format in `styles` (schemas/captionStyle) */
   schemaVersion?: number;
+  /** Retired from the galleries (still usable by id: projects may point at it) */
+  isHidden?: boolean;
+  /** Position in the galleries (lower first) */
+  sortOrder?: number;
   
   // Preview styling for UI cards
   previewStyles?: IPreviewStyles;
@@ -200,6 +204,8 @@ const CaptionPresetSchema = new Schema<ICaptionPreset, ICaptionPresetModel>(
     },
     /** Version of the style format in `styles` (schemas/captionStyle) */
     schemaVersion: { type: Number, default: 1 },
+    isHidden: { type: Boolean, default: false },
+    sortOrder: { type: Number, default: 1000 },
 
     // Card decoration from before cards were drawn from `styles`; optional
     previewStyles: {
