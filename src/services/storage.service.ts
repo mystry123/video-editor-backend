@@ -6,7 +6,13 @@ import {
   HeadObjectCommand,
   GetObjectCommand,
   ListObjectsV2Command,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  ListPartsCommand,
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand,
 } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { Upload } from '@aws-sdk/lib-storage';
 import { Readable } from 'stream';
@@ -22,6 +28,18 @@ const s3Client = new S3Client({
 
 // Export s3Client for use in workers
 export { s3Client };
+
+// For presigned part URLs. By default the SDK signs a checksum of the (empty)
+// body into the URL, so the browser's real part would be rejected; only add
+// checksums S3 requires.
+const presignClient = new S3Client({
+  region: env.awsRegion,
+  credentials: {
+    accessKeyId: env.awsAccessKeyId,
+    secretAccessKey: env.awsSecretAccessKey,
+  },
+  requestChecksumCalculation: 'WHEN_REQUIRED',
+});
 
 interface PresignedUploadParams {
   key: string;
@@ -62,6 +80,100 @@ export async function createPresignedUpload({
   });
 
   return { url, fields };
+}
+
+// ---------------------------------------------------------------------------
+// Multipart uploads: the browser sends a big file in parts, each to its own
+// presigned URL, so a dropped connection costs one part, not the whole file,
+// and an upload can resume after a reload. The server asks S3 which parts
+// arrived (ListParts) instead of trusting the browser's list.
+// ---------------------------------------------------------------------------
+
+const MiB = 1024 * 1024;
+/** S3: at most 10,000 parts, each at least 5 MiB except the last */
+const MAX_PARTS = 10_000;
+const MIN_PART_SIZE = 8 * MiB;
+
+/** The part size for a file: 8 MiB, larger for files over ~78 GiB */
+export function multipartPartSize(size: number): number {
+  return Math.max(MIN_PART_SIZE, Math.ceil(size / MAX_PARTS / MiB) * MiB);
+}
+
+export async function startMultipartUpload(key: string, contentType: string): Promise<string> {
+  const disposition = contentDispositionFor(contentType);
+  const out = await s3Client.send(
+    new CreateMultipartUploadCommand({
+      Bucket: env.s3Bucket,
+      Key: key,
+      ContentType: contentType,
+      ...(disposition ? { ContentDisposition: disposition } : {}),
+    })
+  );
+  if (!out.UploadId) throw new Error('S3 did not return an upload id');
+  return out.UploadId;
+}
+
+/** Presigned PUT URLs for these parts (valid for an hour) */
+export async function presignUploadParts(key: string, uploadId: string, partNumbers: number[]): Promise<Record<number, string>> {
+  const urls: Record<number, string> = {};
+  await Promise.all(
+    partNumbers.map(async (partNumber) => {
+      urls[partNumber] = await getSignedUrl(
+        presignClient,
+        new UploadPartCommand({ Bucket: env.s3Bucket, Key: key, UploadId: uploadId, PartNumber: partNumber }),
+        { expiresIn: 3600 }
+      );
+    })
+  );
+  return urls;
+}
+
+export interface UploadedPart {
+  partNumber: number;
+  etag: string;
+  size: number;
+}
+
+/** The parts S3 has for an upload, in order. Null if the upload doesn't exist (finished or aborted). */
+export async function listUploadedParts(key: string, uploadId: string): Promise<UploadedPart[] | null> {
+  const parts: UploadedPart[] = [];
+  let marker: string | undefined;
+  try {
+    do {
+      const out = await s3Client.send(
+        new ListPartsCommand({ Bucket: env.s3Bucket, Key: key, UploadId: uploadId, PartNumberMarker: marker })
+      );
+      for (const p of out.Parts ?? []) {
+        if (p.PartNumber && p.ETag) parts.push({ partNumber: p.PartNumber, etag: p.ETag, size: p.Size ?? 0 });
+      }
+      marker = out.IsTruncated ? out.NextPartNumberMarker : undefined;
+    } while (marker);
+  } catch (error: any) {
+    if (error?.name === 'NoSuchUpload' || error?.$metadata?.httpStatusCode === 404) return null;
+    throw error;
+  }
+  return parts.sort((a, b) => a.partNumber - b.partNumber);
+}
+
+export async function completeMultipartUpload(key: string, uploadId: string, parts: UploadedPart[]): Promise<void> {
+  await s3Client.send(
+    new CompleteMultipartUploadCommand({
+      Bucket: env.s3Bucket,
+      Key: key,
+      UploadId: uploadId,
+      MultipartUpload: { Parts: parts.map((p) => ({ PartNumber: p.partNumber, ETag: p.etag })) },
+    })
+  );
+}
+
+/** Drops an unfinished upload and the parts S3 kept for it. Fine if it's already gone. */
+export async function abortMultipartUpload(key: string, uploadId: string): Promise<void> {
+  try {
+    await s3Client.send(new AbortMultipartUploadCommand({ Bucket: env.s3Bucket, Key: key, UploadId: uploadId }));
+  } catch (error: any) {
+    if (error?.name === 'NoSuchUpload' || error?.$metadata?.httpStatusCode === 404) return;
+    throw error;
+  }
 }
 
 /**

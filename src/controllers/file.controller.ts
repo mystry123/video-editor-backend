@@ -3,7 +3,17 @@ import { enqueueJob } from '../utils/jobs';
 import { v4 as uuidv4 } from 'uuid';
 import { assertPublicUrl, BlockedUrlError, safeRequest } from '../utils/safeRequest';
 import { probeMedia, storageExtension, summarizeProbe } from '../utils/media';
-import { getObjectSize, readObjectStart } from '../services/storage.service';
+import {
+  abortMultipartUpload,
+  completeMultipartUpload,
+  getObjectSize,
+  listUploadedParts,
+  multipartPartSize,
+  presignUploadParts,
+  readObjectStart,
+  startMultipartUpload,
+  type UploadedPart,
+} from '../services/storage.service';
 import { findSvgActiveContent, matchesDeclaredType, SNIFF_BYTES, SVG_SCAN_BYTES } from '../utils/fileSniff';
 import axios from 'axios';
 import { AuthRequest } from '../types';
@@ -74,6 +84,21 @@ async function assertCanUploadFont(user: any): Promise<void> {
   }
 }
 
+/**
+ * Checks a new upload against the plan (storage left, video size, fonts) and
+ * returns where it goes. The extension comes from an allowlist, never from
+ * the client's filename: it ends up in the storage key and CDN URL.
+ */
+async function newUploadKey(user: any, filename: string, mimeType: string, size: number): Promise<string> {
+  assertCanStore(user, size, mimeType);
+  const ext = storageExtension(mimeType, filename);
+  if (!ext) {
+    throw ApiError.withCode(400, 'UNSUPPORTED_FILE_TYPE', `Files of type "${mimeType}" can't be uploaded.`);
+  }
+  if (FONT_EXTENSIONS.has(ext)) await assertCanUploadFont(user);
+  return `users/${user._id}/uploads/${uuidv4()}.${ext}`;
+}
+
 export const getUploadUrl = async (
   req: AuthRequest,
   res: Response,
@@ -86,16 +111,7 @@ export const getUploadUrl = async (
     const user = await User.findById(userId);
     if (!user) throw ApiError.notFound('User not found');
 
-    assertCanStore(user, size, mimeType);
-
-    // The extension comes from an allowlist, never from the client's filename:
-    // it ends up in the storage key and CDN URL.
-    const ext = storageExtension(mimeType, filename);
-    if (!ext) {
-      throw ApiError.withCode(400, 'UNSUPPORTED_FILE_TYPE', `Files of type "${mimeType}" can't be uploaded.`);
-    }
-    if (FONT_EXTENSIONS.has(ext)) await assertCanUploadFont(user);
-    const key = `users/${user._id}/uploads/${uuidv4()}.${ext}`;
+    const key = await newUploadKey(user, filename, mimeType, size);
 
     const { url, fields } = await createPresignedUpload({
       key,
@@ -257,6 +273,154 @@ export const completeUpload = async (
   }
 };
 
+// ============================================
+// MULTIPART UPLOADS
+// ============================================
+// Big files go up in parts (8 MiB+), each to its own presigned URL, so a
+// network drop costs one part and an upload can resume after a reload:
+//   POST   /multipart              start: { fileId, partSize, partCount }
+//   POST   /:id/multipart/urls     presigned URLs for some parts
+//   GET    /:id/multipart/parts    which parts S3 already has (resume)
+//   POST   /:id/multipart/complete put it together, then the usual checks
+//   DELETE /:id/multipart          cancel
+
+/** A file of this user's with an unfinished multipart upload */
+async function ownMultipartFile(req: AuthRequest) {
+  const file = await File.findOne({ _id: req.params.id, userId: req.userId! });
+  if (!file) throw ApiError.notFound('File not found');
+  if (file.status === 'failed') {
+    throw ApiError.withCode(422, 'UPLOAD_FAILED', file.importError || 'This upload failed. Upload the file again.');
+  }
+  return file;
+}
+
+const uploadExpired = () =>
+  ApiError.withCode(410, 'UPLOAD_EXPIRED', 'This upload expired before it finished. Upload the file again.');
+
+export const startMultipartUploadHandler = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { filename, mimeType, size } = req.body;
+    const user = await User.findById(req.userId!);
+    if (!user) throw ApiError.notFound('User not found');
+    const key = await newUploadKey(user, filename, mimeType, size);
+    const partSize = multipartPartSize(size);
+    const partCount = Math.max(1, Math.ceil(size / partSize));
+    const uploadId = await startMultipartUpload(key, mimeType);
+    const file = await File.create({
+      userId: user._id,
+      name: filename,
+      originalName: filename,
+      mimeType,
+      size,
+      storageKey: key,
+      cdnUrl: `${env.cdnUrl}/${key}`,
+      status: 'processing',
+      source: 'upload',
+      multipart: { uploadId, partSize, partCount },
+    });
+    res.json({ fileId: file._id, cdnUrl: file.cdnUrl, partSize, partCount });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const signUploadParts = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const file = await ownMultipartFile(req);
+    if (!file.multipart) throw ApiError.withCode(409, 'UPLOAD_NOT_MULTIPART', 'This upload is already finished.');
+    const partNumbers: number[] = [...new Set<number>(req.body.partNumbers)];
+    if (partNumbers.some((n) => n > file.multipart!.partCount)) {
+      throw ApiError.withCode(400, 'INVALID_PART', `This upload has ${file.multipart.partCount} parts.`);
+    }
+    const urls = await presignUploadParts(file.storageKey, file.multipart.uploadId, partNumbers);
+    res.json({ urls });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const listUploadParts = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const file = await ownMultipartFile(req);
+    if (!file.multipart) throw ApiError.withCode(409, 'UPLOAD_NOT_MULTIPART', 'This upload is already finished.');
+    const parts = await listUploadedParts(file.storageKey, file.multipart.uploadId);
+    if (parts === null) throw uploadExpired();
+    res.json({
+      partSize: file.multipart.partSize,
+      partCount: file.multipart.partCount,
+      parts: parts.map(({ partNumber, size }) => ({ partNumber, size })),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/** Every part there, each the agreed size, adding up to the declared size */
+function checkParts(parts: UploadedPart[], partSize: number, partCount: number, size: number): { missing: number[]; wrongSize: boolean } {
+  const have = new Map(parts.map((p) => [p.partNumber, p.size]));
+  const missing: number[] = [];
+  let wrongSize = parts.some((p) => p.partNumber > partCount);
+  for (let n = 1; n <= partCount; n++) {
+    const got = have.get(n);
+    if (got === undefined) missing.push(n);
+    else if (got !== (n < partCount ? partSize : size - partSize * (partCount - 1))) wrongSize = true;
+  }
+  return { missing, wrongSize };
+}
+
+export const completeMultipartUploadHandler = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const file = await ownMultipartFile(req);
+    if (file.multipart) {
+      const { uploadId, partSize, partCount } = file.multipart;
+      const parts = await listUploadedParts(file.storageKey, uploadId);
+      if (parts === null) {
+        // Gone: either S3 already put it together (a retry after a lost
+        // response) or it expired
+        if ((await getObjectSize(file.storageKey)) === null) throw uploadExpired();
+      } else {
+        const { missing, wrongSize } = checkParts(parts, partSize, partCount, file.size);
+        if (wrongSize) {
+          // More (or other) bytes than were declared and checked against the plan
+          await abortMultipartUpload(file.storageKey, uploadId).catch(() => undefined);
+          await File.updateOne(
+            { _id: file._id },
+            { status: 'failed', importError: "The uploaded file didn't match its declared size.", $unset: { multipart: 1 } }
+          );
+          throw ApiError.withCode(422, 'UPLOAD_SIZE_MISMATCH', "The uploaded file didn't match its declared size. Upload it again.");
+        }
+        if (missing.length > 0) {
+          const list = missing.slice(0, 10).join(', ') + (missing.length > 10 ? '…' : '');
+          throw ApiError.withCode(409, 'UPLOAD_INCOMPLETE', `Some parts haven't arrived yet (${list}).`, { missing });
+        }
+        await completeMultipartUpload(file.storageKey, uploadId, parts);
+      }
+      await File.updateOne({ _id: file._id, 'multipart.uploadId': uploadId }, { $unset: { multipart: 1 } });
+    }
+    // Then the same checks and accounting as a single-request upload
+    return completeUpload(req, res, next);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const abortMultipartUploadHandler = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const file = await File.findOne({ _id: req.params.id, userId: req.userId! });
+    if (!file) throw ApiError.notFound('File not found');
+    if (file.multipart) {
+      await abortMultipartUpload(file.storageKey, file.multipart.uploadId);
+      await File.updateOne(
+        { _id: file._id, status: 'processing' },
+        { status: 'failed', importError: 'The upload was cancelled.', $unset: { multipart: 1 } }
+      );
+    }
+    res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const listFiles = async (
   req: AuthRequest,
   res: Response,
@@ -393,6 +557,11 @@ export const deleteFile = async (
     );
     if (previous?.status === 'ready') {
       await quotaService.removeStorageUsage(userId, previous.size, file._id.toString());
+    }
+    if (file.multipart) {
+      await abortMultipartUpload(file.storageKey, file.multipart.uploadId).catch((error) =>
+        logger.warn('Failed to abort a multipart upload', { fileId: id, error: error.message })
+      );
     }
     await deleteFromS3(file.storageKey).catch((error) =>
       logger.warn('Failed to delete file from S3; the sweep will not retry it', { fileId: id, error: error.message })

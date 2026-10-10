@@ -2,7 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { api, createUser } from './helpers';
 import { File } from '../src/models/File';
 import { User } from '../src/models/User';
-import { deleteFromS3, getObjectSize, readObjectStart } from '../src/services/storage.service';
+import {
+  abortMultipartUpload,
+  completeMultipartUpload,
+  deleteFromS3,
+  getObjectSize,
+  listUploadedParts,
+  readObjectStart,
+} from '../src/services/storage.service';
 
 vi.mock('../src/services/storage.service', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/services/storage.service')>();
@@ -11,6 +18,13 @@ vi.mock('../src/services/storage.service', async (importOriginal) => {
     createPresignedUpload: vi.fn(async ({ key }: { key: string }) => ({ url: 'https://s3.test/', fields: { key } })),
     getObjectSize: vi.fn(async () => 5000 as number | null),
     deleteFromS3: vi.fn(async () => undefined),
+    startMultipartUpload: vi.fn(async () => 'upload-1'),
+    presignUploadParts: vi.fn(async (_key: string, _id: string, parts: number[]) =>
+      Object.fromEntries(parts.map((n) => [n, `https://s3.test/part-${n}`]))
+    ),
+    listUploadedParts: vi.fn(async () => [] as Array<{ partNumber: number; etag: string; size: number }> | null),
+    completeMultipartUpload: vi.fn(async () => undefined),
+    abortMultipartUpload: vi.fn(async () => undefined),
     // Uploads in these tests are PNGs unless a test says otherwise.
     readObjectStart: vi.fn(async () => Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex') as Buffer | null),
   };
@@ -208,5 +222,129 @@ describe('upload content check on complete', () => {
     vi.mocked(readObjectStart).mockRejectedValueOnce(new Error('socket hang up'));
     const res = await api().post(`/api/v1/files/${fileId}/complete`).set(auth);
     expect(res.status).toBe(200);
+  });
+});
+
+describe('multipart uploads', () => {
+  const MiB = 1024 * 1024;
+  const SIZE = 20 * MiB + 123; // 8 + 8 + 4 MiB and a bit
+  async function start(auth: Record<string, string>, size = SIZE, mimeType = 'image/png') {
+    const res = await api().post('/api/v1/files/multipart').set(auth).send({ filename: 'big.png', mimeType, size });
+    expect(res.status).toBe(200);
+    return res.body as { fileId: string; partSize: number; partCount: number };
+  }
+  const allParts = (size = SIZE) => [
+    { partNumber: 1, etag: '"a"', size: 8 * MiB },
+    { partNumber: 2, etag: '"b"', size: 8 * MiB },
+    { partNumber: 3, etag: '"c"', size: size - 16 * MiB },
+  ];
+
+  it('starts with 8 MiB parts and signs only parts that exist', async () => {
+    const { auth } = await createUser();
+    const { fileId, partSize, partCount } = await start(auth);
+    expect(partSize).toBe(8 * MiB);
+    expect(partCount).toBe(3);
+    const ok = await api().post(`/api/v1/files/${fileId}/multipart/urls`).set(auth).send({ partNumbers: [1, 3] });
+    expect(ok.status).toBe(200);
+    expect(Object.keys(ok.body.urls)).toEqual(['1', '3']);
+    const bad = await api().post(`/api/v1/files/${fileId}/multipart/urls`).set(auth).send({ partNumbers: [4] });
+    expect(bad.status).toBe(400);
+  });
+
+  it('checks the plan before starting', async () => {
+    const { auth } = await createUser();
+    const res = await api().post('/api/v1/files/multipart').set(auth).send({ filename: 'huge.png', mimeType: 'image/png', size: 1e15 });
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('STORAGE_LIMIT_EXCEEDED');
+  });
+
+  it("lists the parts S3 has, so a reload can resume", async () => {
+    const { auth } = await createUser();
+    const { fileId } = await start(auth);
+    vi.mocked(listUploadedParts).mockResolvedValueOnce(allParts().slice(0, 2));
+    const res = await api().get(`/api/v1/files/${fileId}/multipart/parts`).set(auth);
+    expect(res.status).toBe(200);
+    expect(res.body.parts).toEqual([{ partNumber: 1, size: 8 * MiB }, { partNumber: 2, size: 8 * MiB }]);
+  });
+
+  it('says which parts are missing instead of finishing', async () => {
+    const { auth } = await createUser();
+    const { fileId } = await start(auth);
+    vi.mocked(listUploadedParts).mockResolvedValueOnce([allParts()[0]]);
+    const res = await api().post(`/api/v1/files/${fileId}/multipart/complete`).set(auth);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('UPLOAD_INCOMPLETE');
+    expect(completeMultipartUpload).not.toHaveBeenCalled();
+  });
+
+  it('puts the parts together, then charges what landed, once', async () => {
+    const { user, auth } = await createUser();
+    const { fileId } = await start(auth);
+    vi.mocked(listUploadedParts).mockResolvedValueOnce(allParts());
+    vi.mocked(getObjectSize).mockResolvedValue(SIZE);
+    try {
+      const res = await api().post(`/api/v1/files/${fileId}/multipart/complete`).set(auth);
+      expect(res.status).toBe(200);
+      expect(completeMultipartUpload).toHaveBeenCalledWith(expect.any(String), 'upload-1', allParts());
+      const file = await File.findById(fileId);
+      expect(file!.status).toBe('ready');
+      expect(file!.multipart).toBeUndefined();
+      // A retry after a lost response: still fine, not charged twice
+      const again = await api().post(`/api/v1/files/${fileId}/multipart/complete`).set(auth);
+      expect(again.status).toBe(200);
+      expect((await User.findById(user._id))!.quotaUsage.storageUsed).toBe(SIZE);
+    } finally {
+      vi.mocked(getObjectSize).mockResolvedValue(5000);
+    }
+  });
+
+  it('finishes when S3 already put it together but the reply was lost', async () => {
+    const { auth } = await createUser();
+    const { fileId } = await start(auth);
+    vi.mocked(listUploadedParts).mockResolvedValueOnce(null);
+    const res = await api().post(`/api/v1/files/${fileId}/multipart/complete`).set(auth);
+    expect(res.status).toBe(200);
+    expect((await File.findById(fileId))!.status).toBe('ready');
+  });
+
+  it('says the upload expired when S3 has neither the parts nor the file', async () => {
+    const { auth } = await createUser();
+    const { fileId } = await start(auth);
+    vi.mocked(listUploadedParts).mockResolvedValueOnce(null);
+    vi.mocked(getObjectSize).mockResolvedValueOnce(null);
+    const res = await api().post(`/api/v1/files/${fileId}/multipart/complete`).set(auth);
+    expect(res.status).toBe(410);
+    expect(res.body.code).toBe('UPLOAD_EXPIRED');
+  });
+
+  it('refuses parts that add up to more than was declared', async () => {
+    const { auth } = await createUser();
+    const { fileId } = await start(auth);
+    const parts = allParts();
+    parts[2] = { ...parts[2], size: parts[2].size + 1 };
+    vi.mocked(listUploadedParts).mockResolvedValueOnce(parts);
+    const res = await api().post(`/api/v1/files/${fileId}/multipart/complete`).set(auth);
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('UPLOAD_SIZE_MISMATCH');
+    expect(abortMultipartUpload).toHaveBeenCalled();
+    expect(completeMultipartUpload).not.toHaveBeenCalled();
+    expect((await File.findById(fileId))!.status).toBe('failed');
+  });
+
+  it('cancels: drops the parts and marks the upload failed', async () => {
+    const { auth } = await createUser();
+    const { fileId } = await start(auth);
+    const res = await api().delete(`/api/v1/files/${fileId}/multipart`).set(auth);
+    expect(res.status).toBe(200);
+    expect(abortMultipartUpload).toHaveBeenCalledWith(expect.any(String), 'upload-1');
+    expect((await File.findById(fileId))!.status).toBe('failed');
+  });
+
+  it("keeps other users out", async () => {
+    const { auth } = await createUser();
+    const other = await createUser();
+    const { fileId } = await start(auth);
+    expect((await api().get(`/api/v1/files/${fileId}/multipart/parts`).set(other.auth)).status).toBe(404);
+    expect((await api().post(`/api/v1/files/${fileId}/multipart/complete`).set(other.auth)).status).toBe(404);
   });
 });
