@@ -59,6 +59,43 @@ function describeBadUrl(value: string): string {
 // Variables
 // ---------------------------------------------------------------------------
 
+/**
+ * A caption shows its timed words (`transcription.words`, else `words`) and
+ * only falls back to `text` when it has none, so setting `text` alone left a
+ * transcribed caption unchanged while the render reported success. The new
+ * text replaces the words, spread evenly over the time the old ones covered
+ * (or the whole caption when it had none).
+ */
+function replaceCaptionText(element: any, text: string): any {
+  const oldWords: any[] = Array.isArray(element.transcription?.words)
+    ? element.transcription.words
+    : Array.isArray(element.words)
+    ? element.words
+    : [];
+  const startOf = (w: any) => Number(w?.startMs ?? w?.start ?? 0) || 0;
+  const endOf = (w: any) => Number(w?.endMs ?? w?.end ?? 0) || 0;
+  const spanStart = oldWords.length ? Math.min(...oldWords.map(startOf)) : 0;
+  const spanEnd = oldWords.length
+    ? Math.max(...oldWords.map(endOf))
+    : Math.max(0, Number(element.duration) || 0) * 1000;
+
+  const tokens = text.split(/\s+/).filter(Boolean);
+  const step = tokens.length ? Math.max(0, spanEnd - spanStart) / tokens.length : 0;
+  const words = tokens.map((word, i) => ({
+    word,
+    text: word,
+    startMs: Math.round(spanStart + i * step),
+    endMs: Math.round(spanStart + (i + 1) * step),
+  }));
+
+  const next: any = { ...element, text };
+  if (element.transcription && typeof element.transcription === 'object') {
+    next.transcription = { ...element.transcription, words, text };
+  }
+  if (Array.isArray(element.words) || !element.transcription) next.words = words;
+  return next;
+}
+
 function applyToElement(element: any, override: unknown, name: string): any {
   if (isPlainObject(override)) {
     // Object overrides can set any field, so check the URLs they produce.
@@ -74,7 +111,8 @@ function applyToElement(element: any, override: unknown, name: string): any {
     return merged;
   }
   const type: string = element.type;
-  if (type === 'text' || type === 'caption') return { ...element, text: String(override) };
+  if (type === 'caption') return replaceCaptionText(element, String(override));
+  if (type === 'text') return { ...element, text: String(override) };
   if (MEDIA_ELEMENT_TYPES.has(type)) {
     if (!isPublicMediaUrl(override)) {
       throw ApiError.withCode(400, 'INVALID_MEDIA_URL', `variables.${name}: media override must be a public http(s) URL.`);
