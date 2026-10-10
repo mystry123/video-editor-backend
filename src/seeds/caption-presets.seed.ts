@@ -1094,8 +1094,9 @@ export function systemCaptionPresets() {
     return {
       ...preset,
       name: curation?.rename ?? preset.name,
-      /** Matched by its original slug when renamed */
+      /** Matched by its original slug / name when renamed */
       matchSlug: presetSlug(preset.name),
+      originalName: preset.name,
       category: curation?.category ?? preset.category,
       sortOrder: curation?.sortOrder ?? 1000 + index,
       isHidden: !!curation?.hidden,
@@ -1130,10 +1131,18 @@ export async function seedCaptionPresets(): Promise<void> {
     let created = 0;
     let updated = 0;
     const presets = systemCaptionPresets();
-    for (const { matchSlug, usageCount: _count, id: _legacyId, ...preset } of presets as any[]) {
+    for (const { matchSlug, originalName, usageCount: _count, id: _legacyId, ...preset } of presets as any[]) {
       const slug = presetSlug(preset.name);
       const fields = { ...preset, slug, isSystem: true, schemaVersion: CAPTION_STYLE_VERSION };
-      const legacy = await CaptionPreset.findOne({ slug: { $exists: false }, isSystem: true, name: preset.name }).select('_id').lean();
+      // Seeded before slugs: matched by name - the original name too, for a
+      // renamed style (it was missed, and the rename created a second one)
+      const legacy = await CaptionPreset.findOne({
+        slug: { $exists: false },
+        isSystem: true,
+        name: { $in: [...new Set([preset.name, originalName ?? preset.name])] },
+      })
+        .select('_id')
+        .lean();
       const existing = legacy ?? (await CaptionPreset.findOne({ slug: { $in: [slug, matchSlug] }, isSystem: true }).select('_id').lean());
       const result = await CaptionPreset.updateOne(
         existing ? { _id: existing._id } : { slug },
