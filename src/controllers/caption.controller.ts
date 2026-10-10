@@ -12,6 +12,9 @@ import { canTranscribe } from '../utils/checkAudioStream';
 import { logger } from '../utils/logger';
 
 // Import queue getter - lazy initialization
+import { captionProjectSettingsSchema } from '../schemas/captionStyle';
+import { recordPresetUse } from '../services/captionPresetUsage.service';
+
 let _captionQueue: any = null;
 async function getCaptionQueue() {
   if (!_captionQueue) {
@@ -177,8 +180,19 @@ export class CaptionProjectController {
   ): Promise<void> {
     try {
       const userId = req.userId!;
-      const { fileId, presetId, setting, name } = req.body;
-      
+      const { fileId, presetId, name } = req.body;
+
+      // Settings (incl. the editor's full caption style and position) are
+      // validated: they're rendered as sent
+      const parsedSettings = captionProjectSettingsSchema.safeParse(req.body.setting ?? {});
+      if (!parsedSettings.success) {
+        throw ApiError.badRequest(
+          'Invalid caption settings: ' +
+            parsedSettings.error.issues.slice(0, 5).map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')
+        );
+      }
+      const setting = parsedSettings.data;
+
 
       // Validate fileId
       if (!fileId) {
@@ -243,6 +257,9 @@ export class CaptionProjectController {
         status: 'pending',
         progress: 0,
       });
+
+      // One use of the style for this project (renders don't count again)
+      if (presetId) await recordPresetUse(presetId, userId, `caption-project:${project._id}`);
       
       // Add to processing queue
       const queue = await getCaptionQueue();

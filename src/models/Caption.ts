@@ -27,6 +27,10 @@ export interface CaptionSettings {
   backgroundYPadding?: number;
   backgroundBorderRadius?: number;
   outputFormat?: "mp4" | "webm" | "mov";
+  /** The full caption style from the editor (schemas/captionStyle) */
+  style?: Record<string, unknown>;
+  /** Where the caption sits (% of the frame), from the editor */
+  placement?: { x?: string; y?: string; width?: string; height?: string };
 }
 
 export interface ICaptionProject extends Document {

@@ -1,3 +1,4 @@
+import type { CaptionStyle } from '../schemas/captionStyle';
 // ============================================================================
 // Composition Types - Matching Frontend Editor Structure
 // ============================================================================
@@ -82,66 +83,16 @@ export interface TranscriptionData {
 /**
  * Caption element - matches frontend CaptionElement
  */
-export interface CaptionElement extends BaseElement {
+/**
+ * A caption: the style fields come from schemas/captionStyle (the one
+ * definition the frontend shares), so the two can't drift apart.
+ */
+export interface CaptionElement extends BaseElement, Omit<CaptionStyle, 'schemaVersion'> {
   type: "caption";
   sourceElementId?: string;
 
   // Transcription data
   transcription: TranscriptionData;
-
-  // Display settings
-  displayMode: "word" | "line" | "tiktok" | "karaoke";
-  wordsPerLine: number;
-  linesPerPage: number;
-
-  // Text styling (vmin-based)
-  fontSize: number;
-  fontFamily: string;
-  fontWeight: number;
-  fontStyle?: "normal" | "italic";
-  lineHeight: number;
-  letterSpacing?: number;
-
-  // Colors
-  fillColor: string;
-  highlightStyle:
-    | "none"
-    | "color"
-    | "background"
-    | "scale"
-    | "glow"
-    | "underline";
-  highlightColor: string;
-  highlightBackgroundColor?: string;
-  highlightScale?: number;
-  inactiveColor?: string;
-  inactiveOpacity?: number;
-  upcomingColor?: string;
-  upcomingOpacity?: number;
-
-  // Stroke
-  strokeEnabled?: boolean;
-  strokeColor?: string;
-  strokeWidth?: number;
-  strokeOpacity?: number;
-
-  // Shadow
-  shadowEnabled?: boolean;
-  shadowColor?: string;
-  shadowOpacity?: number;
-  shadowOffsetX?: number;
-  shadowOffsetY?: number;
-  shadowBlur?: number;
-
-  // Background box
-  backgroundColor?: string;
-  backgroundXPadding?: number;
-  backgroundYPadding?: number;
-  backgroundBorderRadius?: number;
-
-  // Text alignment
-  textAlign?: "left" | "center" | "right";
-  verticalAlign?: "top" | "middle" | "bottom";
 }
 
 /**
