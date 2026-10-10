@@ -41,6 +41,14 @@ describe('built-in caption library', () => {
     expect((await CaptionPreset.findOne({ name: 'Neon Blue' }).lean())!.isHidden).toBe(true);
   });
 
+  it('a renamed style seeded before slugs existed is renamed, not duplicated', async () => {
+    const old = await CaptionPreset.create({ name: 'Montserrat Bold', isSystem: true, styles: { fontFamily: 'Alfa Slab One' } });
+    await CaptionPreset.collection.updateOne({ _id: old._id }, { $unset: { slug: 1 } });
+    await seedCaptionPresets();
+    expect(await CaptionPreset.countDocuments({ name: { $in: ['Montserrat Bold', 'Slab Bold'] } })).toBe(1);
+    expect((await CaptionPreset.findById(old._id).lean())!.name).toBe('Slab Bold');
+  });
+
   it('the gallery lists visible styles in order, never retired ones', async () => {
     await seedCaptionPresets();
     const { auth } = await createUser();
