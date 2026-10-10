@@ -52,6 +52,8 @@ export interface IFile extends Document {
   sourceId?: string;
   importProgress?: number;
   importError?: string;
+  /** An unfinished multipart upload (cleared once it's put together) */
+  multipart?: { uploadId: string; partSize: number; partCount: number };
   reframe?: Map<string, IReframeData>;
   /** Latest reframe engine analysis of this file, reused for every shape. */
   reframeAnalysis?: { id: string; quality: string; transcriptAt?: Date | null };
@@ -92,6 +94,14 @@ const FileSchema = new Schema<IFile>(
     sourceId: { type: String },
     importProgress: { type: Number, default: 0 },
     importError: { type: String },
+    multipart: {
+      type: {
+        uploadId: { type: String, required: true },
+        partSize: { type: Number, required: true },
+        partCount: { type: Number, required: true },
+      },
+      default: undefined,
+    },
     reframeAnalysis: {
       id: { type: String },
       quality: { type: String },

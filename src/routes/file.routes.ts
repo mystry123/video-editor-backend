@@ -5,7 +5,7 @@ import { uploadLimiter } from '../middleware/rateLimit.middleware';
 import { validate } from '../middleware/validate.middleware';
 import { checkStorageQuota, checkVideoUploadQuota, attachUsageSummary } from '../middleware/quota.middleware';
 import * as fileController from '../controllers/file.controller';
-import { getUploadUrlSchema, importFromUrlSchema, importFromGoogleDriveSchema } from '../validators/file.validator';
+import { getUploadUrlSchema, importFromUrlSchema, importFromGoogleDriveSchema, signUploadPartsSchema } from '../validators/file.validator';
 
 const router: ExpressRouter = Router();
 
@@ -13,6 +13,10 @@ const router: ExpressRouter = Router();
 // httpOnly session cookies). Everything else on this router needs a session.
 const UPLOAD_TICKET_ROUTES: Array<[string, RegExp]> = [
   ['POST', /^\/upload-url$/],
+  ['POST', /^\/multipart$/],
+  ['POST', /^\/[^/]+\/multipart\/(urls|complete)$/],
+  ['GET', /^\/[^/]+\/multipart\/parts$/],
+  ['DELETE', /^\/[^/]+\/multipart$/],
   ['POST', /^\/[^/]+\/complete$/],
   ['POST', /^\/[^/]+\/thumbnail$/],
   ['POST', /^\/import\/url$/],
@@ -29,6 +33,12 @@ router.use(requireAuth);
 // Existing routes
 router.post('/upload-url', uploadLimiter, validate(getUploadUrlSchema), fileController.getUploadUrl);
 router.post('/:id/complete', fileController.completeUpload);
+// Multipart: big files in parts, resumable (see file.controller)
+router.post('/multipart', uploadLimiter, validate(getUploadUrlSchema), fileController.startMultipartUploadHandler);
+router.post('/:id/multipart/urls', validate(signUploadPartsSchema), fileController.signUploadParts);
+router.get('/:id/multipart/parts', fileController.listUploadParts);
+router.post('/:id/multipart/complete', fileController.completeMultipartUploadHandler);
+router.delete('/:id/multipart', fileController.abortMultipartUploadHandler);
 router.get('/', fileController.listFiles);
 router.get('/:id', fileController.getFile);
 router.post('/:id/thumbnail', fileController.uploadThumbnail);

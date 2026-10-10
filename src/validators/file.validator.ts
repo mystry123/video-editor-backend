@@ -24,3 +24,8 @@ export const importFromGoogleDriveSchema = z.object({
     size: z.number().optional(),
   }),
 });
+export const signUploadPartsSchema = z.object({
+  body: z.object({
+    partNumbers: z.array(z.number().int().min(1).max(10_000)).min(1).max(100),
+  }),
+});
