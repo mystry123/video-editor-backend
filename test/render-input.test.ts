@@ -73,6 +73,34 @@ describe('render start', () => {
 });
 
 describe('render input', () => {
+  it('replaces a transcribed caption\'s words, over the time the old ones covered', () => {
+    const caption = {
+      type: 'caption',
+      name: 'Captions',
+      duration: 10,
+      transcription: {
+        words: [
+          { word: 'old', startMs: 1000, endMs: 1500 },
+          { word: 'words', startMs: 1500, endMs: 3000 },
+        ],
+      },
+    };
+    const { elements } = applyVariables([caption], { Captions: 'one two three four' });
+    const words = elements[0].transcription.words;
+    expect(words.map((w: any) => w.word)).toEqual(['one', 'two', 'three', 'four']);
+    expect(words[0].startMs).toBe(1000);
+    expect(words[3].endMs).toBe(3000);
+    expect(elements[0].text).toBe('one two three four');
+  });
+
+  it('gives a caption without timed words new words across its duration', () => {
+    const { elements } = applyVariables([{ type: 'caption', name: 'C', duration: 4, words: [] }], { C: 'a b' });
+    expect(elements[0].words).toEqual([
+      { word: 'a', text: 'a', startMs: 0, endMs: 2000 },
+      { word: 'b', text: 'b', startMs: 2000, endMs: 4000 },
+    ]);
+  });
+
   it('media variables set `source` (what the composition reads), including in compositions', () => {
     const { elements, unmatched } = applyVariables(
       [{ type: 'composition', elements: [{ type: 'image', name: 'Logo', source: 'https://cdn.test/a.png' }] }],
