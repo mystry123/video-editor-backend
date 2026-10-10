@@ -52,12 +52,14 @@ const WORD_ANIMATIONS = [
   'caption-word-none', 'caption-word-pop', 'caption-word-bounce', 'caption-word-slide-up',
   'caption-word-slide-down', 'caption-word-scale', 'caption-word-pulse', 'caption-word-shake',
   'caption-word-wave', 'caption-word-flip', 'caption-word-rubber-band',
+  'caption-word-blur-in', 'caption-word-stomp', 'caption-word-tilt', 'caption-word-glow',
 ] as const;
 
 const PAGE_ANIMATIONS = [
   'caption-page-fade', 'caption-page-slide-up', 'caption-page-slide-down', 'caption-page-slide-left',
   'caption-page-slide-right', 'caption-page-scale', 'caption-page-pop', 'caption-page-bounce',
   'caption-page-flip', 'caption-page-blur',
+  'caption-page-rise', 'caption-page-zoom-punch', 'caption-page-reveal', 'caption-page-flip-3d', 'caption-page-drift',
 ] as const;
 
 /** Animation settings: plain, short values only */
