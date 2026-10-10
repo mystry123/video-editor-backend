@@ -55,10 +55,17 @@ export class CaptionPresetController {
   ): Promise<void> {
     try {
       const userId = req.user?._id?.toString();
-      const { category, search, type, tag } = req.query;
+      // Query values as plain strings: `?category[$ne]=x` arrives as an
+      // object and would otherwise become a database operator
+      const text = (value: unknown) => (typeof value === 'string' ? value.slice(0, 100) : undefined);
+      const category = text(req.query.category);
+      const search = text(req.query.search);
+      const type = text(req.query.type);
+      const tag = text(req.query.tag);
 
-      // Build query
+      // Build query (retired system styles stay out of the galleries)
       const query: any = {
+        isHidden: { $ne: true },
         $or: [
           { isSystem: true },
           ...(userId ? [{ userId: new Types.ObjectId(userId) }] : []),
@@ -92,11 +99,11 @@ export class CaptionPresetController {
 
       // Text search
       if (search) {
-        query.$text = { $search: search as string };
+        query.$text = { $search: search };
       }
 
       const presets = await CaptionPreset.find(query)
-        .sort({ createdAt: 1 })
+        .sort({ sortOrder: 1, createdAt: 1 })
         .select('-__v')
         .lean();
 
