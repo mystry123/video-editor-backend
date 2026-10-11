@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { api, createUser } from './helpers';
 import { RenderJob } from '../src/models/RenderJob';
+import { CaptionProject } from '../src/models';
 import { completeRender } from '../src/services/renderLifecycle.service';
 import { parseS3Url } from '../src/services/renderOutput.service';
 
@@ -69,6 +70,19 @@ describe('render links', () => {
     expect(await completeRender(String(job._id), { outputUrl: OUTPUT })).toBe(false);
     expect(s3Send).toHaveBeenCalledTimes(1);
     expect((s3Send.mock.calls[0] as any[])[0].input).toEqual({ Bucket: 'remotionlambda-test', Key: 'renders/r1/renders/u/j.mp4' });
+  });
+
+  it("the projects list links a caption project to its render's output", async () => {
+    const { user, auth, job, token } = await completedRender();
+    await RenderJob.updateOne({ _id: job._id }, { thumbnailUrl: 'https://cdn.test/thumb.jpg' });
+    const project = await CaptionProject.create({
+      userId: user._id, fileId: user._id, name: 'My captions', status: 'completed', renderJobId: job._id, outputUrl: OUTPUT,
+    } as any);
+    const link = `http://localhost:3000/r/${job._id}?t=${token}`;
+    const list = await api().get('/api/v1/projects').set(auth);
+    expect(list.body.data[0]).toMatchObject({ _id: String(project._id), name: 'My captions', outputUrl: link, thumbnailUrl: 'https://cdn.test/thumb.jpg' });
+    const one = await api().get(`/api/v1/projects/${project._id}`).set(auth);
+    expect(one.body).toMatchObject({ name: 'My captions', outputUrl: link });
   });
 
   it('parses both S3 URL styles', () => {
