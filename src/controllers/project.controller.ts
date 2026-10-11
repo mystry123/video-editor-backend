@@ -20,6 +20,7 @@ interface ProjectQuery extends PaginationQuery {
 
 interface ProjectResponse {
   _id: string;
+  name?: string;
   templateId?: string;
   outputFormat: string;
   resolution: string;
@@ -46,17 +47,34 @@ interface PaginatedProjectsResponse {
 // HELPERS
 // ============================================
 
+/**
+ * A caption project's video is its render job's output, so its link and
+ * thumbnail come from that job (looking the project's own id up as a render
+ * job finds nothing, which left every caption card without a video).
+ */
+async function withCaptionOutputs(projects: any[]): Promise<any[]> {
+  const jobIds = projects.filter((p) => p.status === 'completed' && p.renderJobId).map((p) => p.renderJobId);
+  if (jobIds.length === 0) return projects;
+  const jobs = await ensureShareTokens(await RenderJob.find({ _id: { $in: jobIds } }).lean());
+  const byId = new Map(jobs.map((job: any) => [String(job._id), job]));
+  return projects.map((p) => {
+    const job = p.renderJobId && byId.get(String(p.renderJobId));
+    return job ? { ...p, captionOutput: { outputUrl: outputFields(job).outputUrl, thumbnailUrl: job.thumbnailUrl } } : p;
+  });
+}
+
 function formatProjectResponse(project: any): ProjectResponse {
   return {
     _id: project._id.toString(),
+    name: project.name,
     templateId: project.presetId?.toString(), // Use presetId instead of templateId
     outputFormat: project.settings?.outputFormat || 'mp4',
     resolution: '1920x1080', // Default resolution for caption projects
     fps: 30, // Default fps for caption projects
     renderId: project.renderJobId?.toString(),
     // The Shotline link (call ensureShareTokens first), never the storage URL.
-    outputUrl: outputFields(project).outputUrl,
-    thumbnailUrl: project.thumbnailUrl,
+    outputUrl: project.captionOutput ? project.captionOutput.outputUrl : outputFields(project).outputUrl,
+    thumbnailUrl: project.thumbnailUrl ?? project.captionOutput?.thumbnailUrl,
     status: project.status,
     progress: project.progress,
     error: project.error,
@@ -218,7 +236,7 @@ export const getAll = async (
 
 
     // Format response
-    const formattedProjects = (await ensureShareTokens(projects)).map(formatProjectResponse);
+    const formattedProjects = (await withCaptionOutputs(projects)).map(formatProjectResponse);
 
     const response: PaginatedProjectsResponse = {
       data: formattedProjects,
@@ -241,14 +259,14 @@ export const getOne = async (
     const { id } = req.params;
     const userId = req.userId!;
 
-    const project = await CaptionProject.findOne({ _id: id, userId });
+    const project = await CaptionProject.findOne({ _id: id, userId }).lean();
 
     if (!project) {
       throw ApiError.notFound('Project not found');
     }
 
-    await ensureShareTokens([project]);
-    res.json(formatProjectResponse(project));
+    const [withOutput] = await withCaptionOutputs([project]);
+    res.json(formatProjectResponse(withOutput));
   } catch (error) {
     next(error);
   }

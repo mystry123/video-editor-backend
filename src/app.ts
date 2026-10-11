@@ -16,7 +16,7 @@ import mongoose from 'mongoose';
 import { isRedisReady } from './config/redis';
 import renderLinkRoutes from './routes/renderLink.routes';
 import { openApiSpec } from './docs/openapi';
-import { apiSecurityHeaders, docsSecurityHeaders, CSP_REPORT_PATH } from './middleware/securityHeaders.middleware';
+import { allowCrossOriginLoads, apiSecurityHeaders, docsSecurityHeaders, CSP_REPORT_PATH } from './middleware/securityHeaders.middleware';
 import cspReportRoutes from './routes/cspReport.routes';
 
 import geoip from 'geoip-lite';
@@ -78,7 +78,7 @@ app.use(
 
 // CSP violation reports. Before the global body parsers: this route parses
 // its own report content types with a small size limit.
-app.use(CSP_REPORT_PATH, cspReportRoutes);
+app.use(CSP_REPORT_PATH, allowCrossOriginLoads, cspReportRoutes);
 
 // ============================================
 // BODY PARSING & COOKIES
@@ -158,7 +158,7 @@ app.get('/api/v1/docs.json', (_req: Request, res: Response) => {
 // ============================================
 
 // Render links live outside /api so they stay short: <PUBLIC_API_URL>/r/<id>?t=...
-app.use('/r', renderLinkRoutes);
+app.use('/r', allowCrossOriginLoads, renderLinkRoutes);
 app.use('/api/v1', routes); // Re-enabled with only project routes
 
 

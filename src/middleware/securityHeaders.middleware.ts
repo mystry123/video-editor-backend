@@ -31,11 +31,22 @@ export const apiSecurityHeaders: RequestHandler = helmet({
       reportUri: [CSP_REPORT_PATH],
     },
   },
-  // Media and render outputs are loaded from the bucket/CDN, not this origin,
-  // so the default same-origin resource policy is fine for JSON. COEP stays
-  // off: it only matters for pages, and Swagger UI doesn't need it.
+  // Same-origin resource policy by default (fine for JSON); the routes that
+  // other sites load opt out with allowCrossOriginLoads. COEP stays off: it
+  // only matters for pages, and Swagger UI doesn't need it.
   crossOriginEmbedderPolicy: false,
 });
+
+/**
+ * For responses other origins load directly rather than through CORS:
+ * render links (/r/:id, played by <video> on shotline.in and anywhere a link
+ * is shared; the token guards them) and /csp-report. With the default
+ * same-origin policy the browser blocks them (ERR_BLOCKED_BY_RESPONSE).
+ */
+export const allowCrossOriginLoads: RequestHandler = (_req, res, next) => {
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  next();
+};
 
 /**
  * Swagger UI (/api/v1/docs): report-only. Mount after apiSecurityHeaders so
