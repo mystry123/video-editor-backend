@@ -116,4 +116,25 @@ describe('render input', () => {
     ).not.toThrow();
     expect(() => validateRenderInput({ project, elements: [{ type: 'video', source: '' }] })).toThrow(/Video #1 has no media/);
   });
+
+  it('accepts keyframes and rejects malformed ones', () => {
+    const base = { project, elements: [] as any[] };
+    const withKeyframes = (keyframes: unknown) => ({ ...base, elements: [{ ...text, keyframes }] });
+    expect(() =>
+      validateRenderInput(withKeyframes({ x: [{ time: 0, value: 20, easing: 'linear' }, { time: 2, value: 80 }], volume: [{ time: 1, value: 50 }] }))
+    ).not.toThrow();
+    const reason = (keyframes: unknown) => {
+      try {
+        validateRenderInput(withKeyframes(keyframes));
+        return null;
+      } catch (e: any) {
+        return e.message as string;
+      }
+    };
+    expect(reason({ width: [{ time: 0, value: 1 }] })).toMatch(/can't be animated/);
+    expect(reason({ x: [{ time: 'soon', value: 1 }] })).toMatch(/valid time, value or easing/);
+    expect(reason({ x: [{ time: 0, value: 1, easing: 'wobble' }] })).toMatch(/valid time, value or easing/);
+    expect(reason({ x: Array.from({ length: 501 }, (_, i) => ({ time: i, value: 0 })) })).toMatch(/more than 500/);
+    expect(reason('fast')).toMatch(/unknown format/);
+  });
 });
