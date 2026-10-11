@@ -157,6 +157,43 @@ export function applyVariables(
 // Validation
 // ---------------------------------------------------------------------------
 
+// Keyframes (the frontend's keyframes/keyframes.ts): property values over a
+// clip's time. They go straight to the renderer, which interpolates them every
+// frame, so only the known shape is accepted.
+const KEYFRAME_PROPERTIES = new Set(['x', 'y', 'scale', 'rotation', 'opacity', 'volume']);
+const KEYFRAME_EASINGS = new Set(['linear', 'ease-in', 'ease-out', 'ease-in-out', 'hold']);
+export const MAX_KEYFRAMES_PER_PROPERTY = 500;
+
+function checkKeyframes(keyframes: unknown, elementId: string | undefined, who: string, issues: RenderInputIssue[]): void {
+  if (keyframes === undefined || keyframes === null) return;
+  if (!isPlainObject(keyframes)) {
+    issues.push({ elementId, element: who, message: 'has keyframes in an unknown format.' });
+    return;
+  }
+  for (const [property, list] of Object.entries(keyframes)) {
+    if (!KEYFRAME_PROPERTIES.has(property)) {
+      issues.push({ elementId, element: who, message: `has keyframes for "${property}", which can't be animated.` });
+      continue;
+    }
+    if (!Array.isArray(list)) {
+      issues.push({ elementId, element: who, message: `has ${property} keyframes in an unknown format.` });
+      continue;
+    }
+    if (list.length > MAX_KEYFRAMES_PER_PROPERTY) {
+      issues.push({ elementId, element: who, message: `has more than ${MAX_KEYFRAMES_PER_PROPERTY} ${property} keyframes.` });
+      continue;
+    }
+    const valid = (k: unknown): boolean => {
+      if (!isPlainObject(k)) return false;
+      const { time, value, easing } = k as { time?: unknown; value?: unknown; easing?: unknown };
+      return Number.isFinite(Number(time)) && Number.isFinite(Number(value)) && (easing === undefined || KEYFRAME_EASINGS.has(String(easing)));
+    };
+    if (!list.every(valid)) {
+      issues.push({ elementId, element: who, message: `has a ${property} keyframe without a valid time, value or easing.` });
+    }
+  }
+}
+
 function checkElements(items: unknown[], issues: RenderInputIssue[]): void {
   items.forEach((element: any, index) => {
     if (!isPlainObject(element)) {
@@ -183,6 +220,8 @@ function checkElements(items: unknown[], issues: RenderInputIssue[]): void {
         }
       }
     }
+
+    checkKeyframes(element.keyframes, elementId, who, issues);
 
     if (Array.isArray(element.elements)) checkElements(element.elements, issues);
   });
