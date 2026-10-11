@@ -17,6 +17,12 @@ describe('Content-Security-Policy', () => {
     expect((await api().get('/r/not-an-id?t=x')).headers['content-security-policy']).toContain("default-src 'none'");
   });
 
+  it('lets other origins load render links and send reports, but not API responses', async () => {
+    expect((await api().get('/r/not-an-id?t=x')).headers['cross-origin-resource-policy']).toBe('cross-origin');
+    expect((await api().post('/csp-report').set('Content-Type', 'application/csp-report').send('{}')).headers['cross-origin-resource-policy']).toBe('cross-origin');
+    expect((await api().get('/health')).headers['cross-origin-resource-policy']).toBe('same-origin');
+  });
+
   it('gives the Swagger UI page a report-only policy that allows its own assets', async () => {
     const res = await api().get('/api/v1/docs/');
     expect(res.status).toBe(200);
