@@ -89,7 +89,7 @@ async function listStockVoices(): Promise<TtsVoice[]> {
     .map((v) => ({
       id: String(v.voice_id),
       // "Rachel - Calm narrator" style names: the first part is the name
-      name: String(v.name).split(' - ')[0].trim(),
+      name: String(v.name).split(NAME_DASH)[0].trim(),
       gender: v.labels?.gender,
       accent: v.labels?.accent,
       age: v.labels?.age,
@@ -153,6 +153,9 @@ async function deleteVoice(voiceId: string): Promise<void> {
   }
 }
 
+/** "Rahul - Hinglish", "Apsara – Natural agent": the name, then a description */
+const NAME_DASH = /\s[-–—]\s/;
+
 /** ElevenLabs' Voice Library: thousands of voices shared by the community; usable directly on paid plans. */
 async function searchLibrary({ text, language, gender, page = 0 }: VoiceSearch): Promise<{ voices: TtsVoice[]; hasMore: boolean }> {
   const params = new URLSearchParams({ page_size: '30', page: String(page), sort: 'trending' });
@@ -165,12 +168,12 @@ async function searchLibrary({ text, language, gender, page = 0 }: VoiceSearch):
     .filter((v) => v?.voice_id && v?.name)
     .map((v) => ({
       id: String(v.voice_id),
-      name: String(v.name).split(' - ')[0].trim(),
+      name: String(v.name).split(NAME_DASH)[0].trim(),
       gender: v.gender || undefined,
       accent: v.accent && v.accent !== 'standard' ? v.accent : undefined,
       age: v.age || undefined,
       // "Rahul - Hinglish" style names carry the description after the dash
-      description: String(v.name).split(' - ').slice(1).join(' - ').trim() || v.descriptive || v.description || undefined,
+      description: String(v.name).split(NAME_DASH).slice(1).join(' - ').trim() || v.descriptive || v.description || undefined,
       useCase: v.use_case ? String(v.use_case).replace(/_/g, ' ') : undefined,
       previewUrl: v.preview_url || undefined,
     }));
