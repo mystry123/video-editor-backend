@@ -2,6 +2,8 @@
 //
 //   POST /voice/cleanup        { fileId }              the file's sound with background noise removed
 //   POST /voice/sound-effect   { prompt, duration? }   a sound effect from a description
+//   POST /voice/dub            { fileId, language }    start dubbing a file's sound (202)
+//   GET  /voice/dub/:id                                where that dub is (moves it on)
 //
 // Both make a new MP3 in the user's media (counted toward storage). Clean-up
 // is metered in minutes of the source (audioCleanupMinutes), sound effects per
@@ -23,6 +25,7 @@ import { quotaService } from '../services/quota.service';
 import { releaseUsage, reserveUsage, settleUsage } from '../services/usage.service';
 import { getAudioTools } from '../services/audio';
 import { assertCanStore } from './file.controller';
+import { advanceDub, DUB_LANGUAGES, dubView, startDub } from '../services/dubbing.service';
 
 /** The longest source cleaned in one go (the request waits for it) */
 export const CLEANUP_MAX_SECONDS = 10 * 60;
@@ -136,4 +139,34 @@ export const createSoundEffect = async (req: AuthRequest, res: Response, next: N
   } catch (error) {
     next(error);
   }
+};
+
+export const createDub = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { fileId, language } = req.body as { fileId: string; language: string };
+    if (!DUB_LANGUAGES[language]) throw ApiError.withCode(400, 'LANGUAGE_NOT_SUPPORTED', 'Pick one of the listed languages.');
+    const user = await loadUser(req);
+    const source = await File.findOne({ _id: fileId, userId: user._id, status: 'ready' });
+    if (!source || !source.cdnUrl) throw ApiError.notFound('File not found');
+    if (!/^(audio|video)\//.test(source.mimeType)) throw ApiError.withCode(400, 'NOT_AUDIO', 'Only video and audio can be dubbed.');
+    if ((source.metadata as any)?.hasAudio === false) throw ApiError.withCode(400, 'NO_AUDIO', 'This video has no sound to dub.');
+    const dub = await startDub(user, source, language, getEffectiveQuota(user).maxDubbingMinutes);
+    res.status(202).json({ dub: dubView(dub) });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getDub = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const file = await File.findOne({ _id: req.params.id, userId: req.userId, source: 'dubbing' });
+    if (!file) throw ApiError.notFound('Dub not found');
+    res.json({ dub: dubView(await advanceDub(file)) });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const listDubLanguages = (_req: AuthRequest, res: Response) => {
+  res.json({ languages: Object.entries(DUB_LANGUAGES).map(([code, label]) => ({ code, label })) });
 };

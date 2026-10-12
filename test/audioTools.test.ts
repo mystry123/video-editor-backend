@@ -4,6 +4,7 @@ import { File } from '../src/models/File';
 import { UsageCounter } from '../src/models/Usage';
 import { currentPeriod } from '../src/services/usage.service';
 import { setAudioTools, type AudioTools } from '../src/services/audio';
+import { runMaintenanceSweep } from '../src/services/maintenance.service';
 
 const storage = vi.hoisted(() => ({ uploaded: [] as string[] }));
 vi.mock('../src/services/storage.service', async (importOriginal) => {
@@ -33,9 +34,14 @@ vi.mock('../src/utils/audioEncode', async (importOriginal) => {
   };
 });
 
+const dubState = vi.hoisted(() => ({ status: { state: 'dubbing' } as any }));
 const tools = {
   isolateVoice: vi.fn(async () => Buffer.alloc(20_000, 2)),
   soundEffect: vi.fn(async () => Buffer.alloc(8_000, 3)),
+  startDub: vi.fn(async () => ({ id: 'dub123', expectedSeconds: 40 })),
+  dubStatus: vi.fn(async () => dubState.status),
+  dubbedAudio: vi.fn(async () => Buffer.alloc(30_000, 4)),
+  deleteDub: vi.fn(async () => undefined),
 } satisfies AudioTools;
 
 beforeEach(() => {
@@ -44,6 +50,8 @@ beforeEach(() => {
   extract.urls = [];
   tools.isolateVoice.mockClear();
   tools.soundEffect.mockClear();
+  Object.values(tools).forEach((f) => f.mockClear());
+  dubState.status = { state: 'dubbing' };
   setAudioTools(tools);
 });
 afterEach(() => setAudioTools(null));
@@ -117,5 +125,64 @@ describe('sound effects', () => {
     expect(JSON.stringify(sixth.body)).toMatch(/SOUND_EFFECTS_EXCEEDED/);
     expect((await api().post('/api/v1/voice/sound-effect').set(user.auth).send({ prompt: 'x' })).status).toBe(400);
     expect((await api().post('/api/v1/voice/sound-effect').set(user.auth).send({ prompt: 'boom', duration: 60 })).status).toBe(400);
+  });
+});
+
+describe('dubbing', () => {
+  it('starts a dub of the sound, then finishes it when the provider is done', async () => {
+    const user = await createUser({ role: 'pro' });
+    const video = await videoFor(user.user._id, 30);
+    const start = await api().post('/api/v1/voice/dub').set(user.auth).send({ fileId: String(video._id), language: 'hi' });
+    expect(start.status).toBe(202);
+    expect(start.body.dub).toMatchObject({ status: 'processing', language: 'hi', expectedSeconds: 40 });
+    expect(tools.startDub).toHaveBeenCalledWith(Buffer.from('ID3source'), 'Interview take 3.mp3', 'hi');
+    expect(await used(user.user._id, 'dubbingMinutes')).toBe(30); // reserved
+    // Not in Media while it works
+    expect((await api().get('/api/v1/files?type=audio').set(user.auth)).body.data.length).toBe(0);
+
+    const id = start.body.dub.fileId;
+    expect((await api().get(`/api/v1/voice/dub/${id}`).set(user.auth)).body.dub.status).toBe('processing');
+    dubState.status = { state: 'dubbed' };
+    const done = await api().get(`/api/v1/voice/dub/${id}`).set(user.auth);
+    expect(done.body.dub).toMatchObject({ status: 'ready', file: { name: 'Interview take 3 (Hindi).mp3', mimeType: 'audio/mpeg', duration: 12.5 } });
+    expect(tools.dubbedAudio).toHaveBeenCalledWith('dub123', 'hi');
+    expect(tools.deleteDub).toHaveBeenCalledWith('dub123');
+    expect(await used(user.user._id, 'dubbingMinutes')).toBe(30);
+    expect((await api().get('/api/v1/files?type=audio').set(user.auth)).body.data.length).toBe(1);
+  });
+
+  it('refunds a failed dub, and the sweep finishes dubs nobody is watching', async () => {
+    const user = await createUser({ role: 'pro' });
+    const a = await videoFor(user.user._id, 20);
+    const failing = (await api().post('/api/v1/voice/dub').set(user.auth).send({ fileId: String(a._id), language: 'es' })).body.dub.fileId;
+    dubState.status = { state: 'failed', error: 'no speech' };
+    const failed = await api().get(`/api/v1/voice/dub/${failing}`).set(user.auth);
+    expect(failed.body.dub).toMatchObject({ status: 'failed' });
+    expect(await used(user.user._id, 'dubbingMinutes')).toBe(0);
+
+    dubState.status = { state: 'dubbing' };
+    const b = await videoFor(user.user._id, 10);
+    const pending = (await api().post('/api/v1/voice/dub').set(user.auth).send({ fileId: String(b._id), language: 'fr' })).body.dub.fileId;
+    await File.updateOne({ _id: pending }, { $set: { updatedAt: new Date(Date.now() - 10 * 60 * 1000) } }, { timestamps: false });
+    dubState.status = { state: 'dubbed' };
+    const counts = await runMaintenanceSweep();
+    expect(counts.dubsFinished).toBe(1);
+    expect((await File.findById(pending).lean())?.status).toBe('ready');
+  });
+
+  it('checks the language, length, plan and owner', async () => {
+    const user = await createUser(); // free: 1 minute
+    const short = await videoFor(user.user._id, 30);
+    expect((await api().post('/api/v1/voice/dub').set(user.auth).send({ fileId: String(short._id), language: 'xx' })).status).toBe(400);
+    const long = await videoFor(user.user._id, 6 * 60);
+    expect((await api().post('/api/v1/voice/dub').set(user.auth).send({ fileId: String(long._id), language: 'hi' })).status).toBe(400);
+    const tooMuch = await videoFor(user.user._id, 90);
+    const over = await api().post('/api/v1/voice/dub').set(user.auth).send({ fileId: String(tooMuch._id), language: 'hi' });
+    expect(over.status).toBe(403);
+    expect(JSON.stringify(over.body)).toMatch(/DUBBING_MINUTES_EXCEEDED/);
+    const other = await createUser();
+    expect((await api().get(`/api/v1/voice/dub/${String(short._id)}`).set(other.auth)).status).toBe(404);
+    expect(tools.startDub).not.toHaveBeenCalled();
+    expect(await File.countDocuments({ source: 'dubbing' })).toBe(0);
   });
 });

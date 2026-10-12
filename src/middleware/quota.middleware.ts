@@ -801,6 +801,7 @@ export interface UsageSnapshot {
   /** Audio clean-up this month, in minutes */
   audioCleanupMinutes: number;
   soundEffects: number;
+  dubbingMinutes: number;
   periodStart: Date;
   periodEnd: Date;
 }
@@ -825,6 +826,7 @@ export async function getUsageSnapshot(userId: string): Promise<UsageSnapshot> {
     ttsCharacters,
     audioCleanupSeconds,
     soundEffects,
+    dubbingSeconds,
   ] = await Promise.all([
     usageFetchers.getRenderMinutesUsed(userId, periodStart),
     usageFetchers.getTranscriptionMinutesUsed(userId, periodStart),
@@ -837,6 +839,7 @@ export async function getUsageSnapshot(userId: string): Promise<UsageSnapshot> {
     getMonthlyTotal(userId, 'ttsCharacters'),
     getMonthlyTotal(userId, 'audioCleanupMinutes'),
     getMonthlyTotal(userId, 'soundEffects'),
+    getMonthlyTotal(userId, 'dubbingMinutes'),
   ]);
 
   return {
@@ -851,6 +854,7 @@ export async function getUsageSnapshot(userId: string): Promise<UsageSnapshot> {
     ttsCharacters,
     audioCleanupMinutes: audioCleanupSeconds / 60,
     soundEffects,
+    dubbingMinutes: dubbingSeconds / 60,
     periodStart,
     periodEnd,
   };

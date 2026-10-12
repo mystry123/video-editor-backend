@@ -4,7 +4,7 @@ import { uploadLimiter, voiceLimiter } from '../middleware/rateLimit.middleware'
 import { validate } from '../middleware/validate.middleware';
 import * as voiceController from '../controllers/voice.controller';
 import * as audioToolsController from '../controllers/audioTools.controller';
-import { cleanUpAudioSchema, createOwnVoiceSchema, createSampleUploadSchema, createSpeechSchema, previewVoiceSchema, soundEffectSchema } from '../validators/voice.validator';
+import { cleanUpAudioSchema, createDubSchema, getDubSchema, createOwnVoiceSchema, createSampleUploadSchema, createSpeechSchema, previewVoiceSchema, soundEffectSchema } from '../validators/voice.validator';
 
 const router: ExpressRouter = Router();
 
@@ -20,5 +20,8 @@ router.delete('/own', voiceController.deleteOwnVoice);
 // Audio tools
 router.post('/cleanup', voiceLimiter, validate(cleanUpAudioSchema), audioToolsController.cleanUpAudio);
 router.post('/sound-effect', voiceLimiter, validate(soundEffectSchema), audioToolsController.createSoundEffect);
+router.get('/dub/languages', audioToolsController.listDubLanguages);
+router.post('/dub', voiceLimiter, validate(createDubSchema), audioToolsController.createDub);
+router.get('/dub/:id', validate(getDubSchema), audioToolsController.getDub);
 
 export default router;

@@ -22,6 +22,7 @@ import {
   getTranscriptionQueue,
 } from '../queues';
 import { deleteFromS3 } from '../services/storage.service';
+import { advanceDub } from './dubbing.service';
 import { enqueueJob, transition } from '../utils/jobs';
 import { logger } from '../utils/logger';
 
@@ -150,6 +151,15 @@ async function sweepReframes(counts: Record<string, number>) {
   }
 }
 
+/** Dubs whose editor was closed: finish them (or fail them) here. */
+async function sweepDubs(counts: Record<string, number>) {
+  const pending = await File.find({ status: 'processing', source: 'dubbing', updatedAt: { $lt: ago(2 * 60 * 1000) } }).limit(BATCH);
+  for (const file of pending) {
+    const after = await advanceDub(file);
+    if (after.status !== 'processing') counts[after.status === 'ready' ? 'dubsFinished' : 'dubsFailed'] = (counts[after.status === 'ready' ? 'dubsFinished' : 'dubsFailed'] || 0) + 1;
+  }
+}
+
 async function sweepFiles(counts: Record<string, number>) {
   // Upload URL requested but the browser never finished: nothing was charged,
   // so remove the record and any partial object. Voice samples never become
@@ -197,6 +207,10 @@ async function reservationOutcome(kind: string, jobId: string): Promise<'done' |
     const t = Types.ObjectId.isValid(jobId) ? await Transcription.findById(jobId).select('status').lean() : null;
     return finalState(t?.status, ['completed'], ['pending', 'processing']);
   }
+  if (kind === 'dubbingMinutes') {
+    const f = Types.ObjectId.isValid(jobId) ? await File.findById(jobId).select('status').lean() : null;
+    return finalState(f?.status, ['ready'], ['processing']);
+  }
   if (kind === 'captionRenderMinutes' || kind === 'captionExports') {
     const projectId = jobId.replace(/^caption-(render|export)-/, '');
     const p = Types.ObjectId.isValid(projectId) ? await CaptionProject.findById(projectId).select('status').lean() : null;
@@ -229,6 +243,7 @@ export async function runMaintenanceSweep(): Promise<Record<string, number>> {
     ['captions', sweepCaptions],
     ['reframes', sweepReframes],
     ['files', sweepFiles],
+    ['dubs', sweepDubs],
     // Last, so records the steps above just failed get their minutes back.
     ['usage', sweepUsage],
   ];

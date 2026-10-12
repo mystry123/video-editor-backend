@@ -35,6 +35,8 @@ export interface UserQuota {
   maxAudioCleanupMinutes: number;
   /** Sound effects generated per month (-1 = unlimited). */
   maxSoundEffects: number;
+  /** Minutes of audio dubbed into another language per month (-1 = unlimited). */
+  maxDubbingMinutes: number;
 }
 
 export type OverResolutionPolicy = 'downscale' | 'block';
@@ -69,6 +71,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     voiceCloneAllowed: false,
     maxAudioCleanupMinutes: 2,
     maxSoundEffects: 5,
+    maxDubbingMinutes: 1,
   },
   pro: {
     // Existing
@@ -98,6 +101,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     voiceCloneAllowed: true,
     maxAudioCleanupMinutes: 30,
     maxSoundEffects: 100,
+    maxDubbingMinutes: 10,
   },
   team: {
     // Existing
@@ -127,6 +131,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     voiceCloneAllowed: true,
     maxAudioCleanupMinutes: 120,
     maxSoundEffects: 500,
+    maxDubbingMinutes: 60,
   },
   admin: {
     // Existing
@@ -156,6 +161,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     voiceCloneAllowed: true,
     maxAudioCleanupMinutes: -1,
     maxSoundEffects: -1,
+    maxDubbingMinutes: -1,
   },
 };
 

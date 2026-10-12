@@ -52,3 +52,14 @@ export const soundEffectSchema = z.object({
     duration: z.number().min(0.5).max(22).optional(),
   }),
 });
+
+export const createDubSchema = z.object({
+  body: z.object({
+    fileId: z.string().regex(/^[a-f0-9]{24}$/, 'Pick a video or audio clip'),
+    language: z.string().regex(/^[a-z]{2}$/, 'Pick a language'),
+  }),
+});
+
+export const getDubSchema = z.object({
+  params: z.object({ id: z.string().regex(/^[a-f0-9]{24}$/, 'Dub not found') }),
+});
