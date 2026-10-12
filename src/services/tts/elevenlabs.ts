@@ -9,9 +9,9 @@
 import { env } from '../../config/env';
 import { ApiError } from '../../utils/ApiError';
 import { logger } from '../../utils/logger';
-import { voiceUnavailable } from './errors';
+import { voiceFeatureNotEnabled, voiceUnavailable } from './errors';
 import { wordsFromAlignment } from './alignment';
-import type { OwnVoiceSample, SpeakRequest, SpeechAudio, TtsProvider, TtsVoice } from './types';
+import type { OwnVoiceSample, SpeakRequest, SpeechAudio, TtsProvider, TtsVoice, VoiceSearch } from './types';
 
 const API = 'https://api.elevenlabs.io';
 /** Best quality and 29 languages; billed 1 credit per character. */
@@ -21,6 +21,15 @@ const SPEED = { min: 0.7, max: 1.2 } as const;
 const unavailable = voiceUnavailable;
 
 /** An ElevenLabs error as ours: our own setup or credits problems never reach the user as-is. */
+/** For "not switched on" messages: the first word of `what` → the feature's name */
+const FEATURE_NAMES: Record<string, string> = {
+  voice: 'The voice list',
+  text: 'Text to speech',
+  audio: 'Clean up audio',
+  sound: 'Sound effects',
+  dubbing: 'Dubbing',
+};
+
 async function failure(response: Response, what: string): Promise<ApiError> {
   let detail: any = null;
   try {
@@ -33,6 +42,9 @@ async function failure(response: Response, what: string): Promise<ApiError> {
   logger.error(`ElevenLabs ${what} failed`, { httpStatus: response.status, status, message });
   if (status === 'voice_not_found' || response.status === 404) {
     return ApiError.withCode(404, 'VOICE_NOT_FOUND', "That voice isn't available any more. Pick another one.");
+  }
+  if (status === 'missing_permissions') {
+    return voiceFeatureNotEnabled(FEATURE_NAMES[what.split(' ')[0]] ?? 'This voice feature');
   }
   if (what === 'voice clone' && response.status === 400 && status !== 'quota_exceeded' && status !== 'voice_limit_reached') {
     return ApiError.withCode(422, 'VOICE_SAMPLE_REJECTED', message || "We couldn't make a voice from that recording. Record it again somewhere quiet.");
@@ -141,11 +153,36 @@ async function deleteVoice(voiceId: string): Promise<void> {
   }
 }
 
+/** ElevenLabs' Voice Library: thousands of voices shared by the community; usable directly on paid plans. */
+async function searchLibrary({ text, language, gender, page = 0 }: VoiceSearch): Promise<{ voices: TtsVoice[]; hasMore: boolean }> {
+  const params = new URLSearchParams({ page_size: '30', page: String(page), sort: 'trending' });
+  if (text?.trim()) params.set('search', text.trim());
+  if (language) params.set('language', language);
+  if (gender) params.set('gender', gender);
+  const response = await elevenLabsCall(`/v1/shared-voices?${params}`, { method: 'GET' }, 'voice library');
+  const body = (await response.json()) as { voices?: any[]; has_more?: boolean };
+  const voices: TtsVoice[] = (body.voices || [])
+    .filter((v) => v?.voice_id && v?.name)
+    .map((v) => ({
+      id: String(v.voice_id),
+      name: String(v.name).split(' - ')[0].trim(),
+      gender: v.gender || undefined,
+      accent: v.accent && v.accent !== 'standard' ? v.accent : undefined,
+      age: v.age || undefined,
+      // "Rahul - Hinglish" style names carry the description after the dash
+      description: String(v.name).split(' - ').slice(1).join(' - ').trim() || v.descriptive || v.description || undefined,
+      useCase: v.use_case ? String(v.use_case).replace(/_/g, ' ') : undefined,
+      previewUrl: v.preview_url || undefined,
+    }));
+  return { voices, hasMore: !!body.has_more };
+}
+
 export const elevenLabsProvider: TtsProvider = {
   id: 'elevenlabs',
   languages: null, // the multilingual model reads the language from the text
   speedRange: SPEED,
   listVoices: listStockVoices,
+  searchVoices: searchLibrary,
   speak: textToSpeech,
   ownVoices: { create: cloneVoice, remove: deleteVoice },
 };

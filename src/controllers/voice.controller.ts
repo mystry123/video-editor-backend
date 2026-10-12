@@ -1,6 +1,7 @@
 // controllers/voice.controller.ts
 //
 //   GET    /voice/voices            the provider's voices and options, plus the user's own voice
+//   GET    /voice/voices/search     the provider's wider voice library (ElevenLabs), by text/language/gender
 //   POST   /voice/speech            text to speech: a new MP3 in their media
 //   POST   /voice/preview           a short sample of a voice (providers without hosted previews)
 //   POST   /voice/own/sample-url    where to upload a sample for their own voice
@@ -123,6 +124,8 @@ export const listVoices = async (req: AuthRequest, res: Response, next: NextFunc
       previews: provider.previewSpeech ? 'generated' : 'hosted',
       ownVoice: ownVoiceView(user, provider),
       ownVoiceSupported: !!provider.ownVoices,
+      // GET /voice/voices/search works: a voice library beyond `voices`
+      librarySearch: !!provider.searchVoices,
       ownVoiceAllowed: !!quota.voiceCloneAllowed && !!provider.ownVoices,
     });
   } catch (error) {
@@ -134,7 +137,14 @@ export const createSpeech = async (req: AuthRequest, res: Response, next: NextFu
   const jobId = uuidv4();
   let reserved = false;
   try {
-    const { text, voiceId, speed, language } = req.body as { text: string; voiceId: string; speed?: number; language?: string };
+    const { text, voiceId, speed, language, voiceName: libraryName } = req.body as {
+      text: string;
+      voiceId: string;
+      speed?: number;
+      language?: string;
+      /** A library voice's name, for the file name */
+      voiceName?: string;
+    };
     const user = await loadUser(req);
     const quota = getEffectiveQuota(user);
     const provider = getTtsProvider();
@@ -143,7 +153,15 @@ export const createSpeech = async (req: AuthRequest, res: Response, next: NextFu
     // Only the provider's voices and their own voice: never another user's
     const own = ownVoiceView(user, provider);
     const isOwn = own?.id === voiceId;
-    const voiceName = isOwn ? own!.name : (await provider.listVoices()).find((v) => v.id === voiceId)?.name;
+    let voiceName = isOwn ? own!.name : (await provider.listVoices()).find((v) => v.id === voiceId)?.name;
+    if (!voiceName && provider.searchVoices) {
+      // A library voice: any of them, but never another user's own voice
+      // (those live in the same provider account)
+      if (await User.exists({ 'voiceClone.voiceId': voiceId, _id: { $ne: user._id } })) {
+        throw ApiError.withCode(404, 'VOICE_NOT_FOUND', "That voice isn't available. Pick another one.");
+      }
+      voiceName = (libraryName || '').replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').trim().slice(0, 40) || 'Voice';
+    }
     if (!voiceName) throw ApiError.withCode(404, 'VOICE_NOT_FOUND', "That voice isn't available. Pick another one.");
     const { min, max } = provider.speedRange;
     const pace = Math.min(max, Math.max(min, speed ?? 1));
@@ -333,6 +351,24 @@ export const deleteOwnVoice = async (req: AuthRequest, res: Response, next: Next
       logger.info('Own voice deleted', { userId: String(user._id), voiceId, provider: madeWith });
     }
     res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const searchVoices = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const provider = getTtsProvider();
+    if (!provider.searchVoices) throw ApiError.withCode(400, 'NO_VOICE_LIBRARY', 'There is no voice library to search.');
+    const { text, language, gender, page } = req.query as Record<string, string | undefined>;
+    res.json(
+      await provider.searchVoices({
+        text: text?.slice(0, 100),
+        language,
+        gender: gender as 'male' | 'female' | 'neutral' | undefined,
+        page: page ? Number(page) : 0,
+      })
+    );
   } catch (error) {
     next(error);
   }

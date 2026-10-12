@@ -68,6 +68,12 @@ function fakeFetch(input: string | URL, init: RequestInit = {}) {
     return Promise.resolve(new Response(JSON.stringify({ detail: { status: 'missing_permissions', message: 'nope' } }), { status: failStatus }));
   }
   if (url.pathname === '/v2/voices') return Promise.resolve(Response.json({ voices: STOCK }));
+  if (url.pathname === '/v1/shared-voices') {
+    return Promise.resolve(Response.json({
+      has_more: true,
+      voices: [{ voice_id: 'lib1', name: 'Rahul - Hinglish', gender: 'male', accent: 'standard', use_case: 'social_media', preview_url: 'https://p.test/rahul.mp3', language: 'hi' }],
+    }));
+  }
   if (url.pathname.startsWith('/v1/text-to-speech/')) {
     // "Hi there": H i _ t h e r e, a tenth of a second each
     const characters = [...'Hi there'];
@@ -123,7 +129,8 @@ describe('voices', () => {
     const user = await createUser();
     const res = await api().get('/api/v1/voice/voices').set(user.auth);
     expect(res.status).toBe(503);
-    expect(JSON.stringify(res.body)).toMatch(/VOICE_UNAVAILABLE/);
+    expect(JSON.stringify(res.body)).toMatch(/VOICE_FEATURE_NOT_ENABLED/);
+    expect(JSON.stringify(res.body)).toMatch(/The voice list isn't switched on/);
     expect(JSON.stringify(res.body)).not.toMatch(/missing_permissions/);
   });
 });
@@ -165,11 +172,14 @@ describe('text to speech', () => {
     await User.updateOne({ _id: owner.user._id }, { $set: { voiceClone: { voiceId: 'ownersVoice', name: 'Me', createdAt: new Date() } } });
     const other = await createUser({ role: 'pro' });
 
-    for (const voiceId of ['ownersVoice', 'madeUpVoice']) {
-      const res = await api().post('/api/v1/voice/speech').set(other.auth).send({ text: 'Hello', voiceId });
-      expect(res.status).toBe(404);
-    }
+    const stolen = await api().post('/api/v1/voice/speech').set(other.auth).send({ text: 'Hello', voiceId: 'ownersVoice', voiceName: 'Me' });
+    expect(stolen.status).toBe(404);
     expect(eleven.calls.some((c) => c.path.startsWith('/v1/text-to-speech/'))).toBe(false);
+
+    // Any voice-library voice is fine
+    const library = await api().post('/api/v1/voice/speech').set(other.auth).send({ text: 'Hello', voiceId: 'libraryVoice9', voiceName: 'Rahul / Hinglish' });
+    expect(library.status).toBe(201);
+    expect(library.body.file.name).toBe('Hello - Rahul Hinglish.mp3');
 
     const mine = await api().post('/api/v1/voice/speech').set(owner.auth).send({ text: 'Hello', voiceId: 'ownersVoice' });
     expect(mine.status).toBe(201);
@@ -261,6 +271,29 @@ describe('captions for generated speech', () => {
     expect(captions.body).toMatchObject({ status: 'completed', transcriptionModel: 'elevenlabs-tts' });
     expect(captions.body.words.filter((w: any) => w.type === 'word').map((w: any) => w.text)).toEqual(['Hi', 'there']);
     expect((await UsageCounter.findOne({ userId: user.user._id, kind: 'transcriptionMinutes' }).lean())?.total ?? 0).toBe(0);
+  });
+});
+
+describe('voice library', () => {
+  it('searches ElevenLabs\' library with the filters given', async () => {
+    const user = await createUser();
+    const res = await api().get('/api/v1/voice/voices/search?text=hinglish&language=hi&gender=male&page=2').set(user.auth);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      hasMore: true,
+      voices: [{ id: 'lib1', name: 'Rahul', gender: 'male', description: 'Hinglish', useCase: 'social media', previewUrl: 'https://p.test/rahul.mp3' }],
+    });
+    const call = eleven.calls.find((c) => c.path === '/v1/shared-voices')!;
+    expect(call).toBeTruthy();
+    expect((await api().get('/api/v1/voice/voices').set(user.auth)).body.librarySearch).toBe(true);
+  });
+
+  it('a missing key permission says which feature is off', async () => {
+    eleven.fail['/v1/text-to-speech/'] = 401;
+    const user = await createUser();
+    const res = await api().post('/api/v1/voice/speech').set(user.auth).send({ text: 'Hi', voiceId: 'stockVoice1' });
+    expect(res.status).toBe(503);
+    expect(JSON.stringify(res.body)).toMatch(/Text to speech isn't switched on/);
   });
 });
 

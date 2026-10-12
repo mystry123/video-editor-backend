@@ -14,6 +14,16 @@ export const createSpeechSchema = z.object({
     // Each provider narrows this to its own range
     speed: z.number().min(0.5).max(2).optional(),
     language: LANGUAGE.optional(),
+    voiceName: z.string().trim().max(80).optional(),
+  }),
+});
+
+export const searchVoicesSchema = z.object({
+  query: z.object({
+    text: z.string().max(100).optional(),
+    language: z.string().regex(/^[a-z]{2,3}$/).optional(),
+    gender: z.enum(['male', 'female', 'neutral']).optional(),
+    page: z.coerce.number().int().min(0).max(50).optional(),
   }),
 });
 

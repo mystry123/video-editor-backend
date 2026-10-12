@@ -24,6 +24,15 @@ export interface TtsVoice {
   previewUrl?: string;
 }
 
+export interface VoiceSearch {
+  text?: string;
+  /** ISO 639-1, e.g. "hi" */
+  language?: string;
+  gender?: 'male' | 'female' | 'neutral';
+  /** 0-based */
+  page?: number;
+}
+
 export interface TtsLanguage {
   /** BCP-47, e.g. "hi-IN" */
   code: string;
@@ -61,6 +70,11 @@ export interface TtsProvider {
   readonly languages: TtsLanguage[] | null;
   readonly speedRange: { min: number; max: number };
   listVoices(): Promise<TtsVoice[]>;
+  /**
+   * A wider voice library to search (beyond listVoices), if the provider has
+   * one. Voices from it can be spoken with directly.
+   */
+  searchVoices?(query: VoiceSearch): Promise<{ voices: TtsVoice[]; hasMore: boolean }>;
   speak(request: SpeakRequest): Promise<SpeechAudio>;
   /** A short sample of a voice, for providers without hosted previews */
   previewSpeech?(voiceId: string, language: string): Promise<SpeechAudio>;
