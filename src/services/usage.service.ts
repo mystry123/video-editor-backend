@@ -17,6 +17,11 @@ const KINDS: Record<UsageKind, { limitField: string; legacyField: string; perUni
   captionRenderMinutes: { limitField: 'maxCaptionRenderMinutes', legacyField: 'captionRenderMinutesUsed', perUnit: 60, code: 'CAPTION_RENDER_MINUTES_EXCEEDED', label: 'caption render minutes' },
   transcriptionMinutes: { limitField: 'maxTranscriptionMinutes', legacyField: 'transcriptionMinutesUsed', perUnit: 60, code: 'TRANSCRIPTION_MINUTES_EXCEEDED', label: 'transcription minutes' },
   captionExports: { limitField: 'maxCaptionExports', legacyField: 'captionExportsUsed', perUnit: 1, code: 'CAPTION_EXPORT_LIMIT_REACHED', label: 'caption exports' },
+  // No legacy counter: text to speech started with the ledger.
+  ttsCharacters: { limitField: 'maxTtsCharacters', legacyField: 'ttsCharactersUsed', perUnit: 1, code: 'TTS_CHARACTERS_EXCEEDED', label: 'text-to-speech characters' },
+  audioCleanupMinutes: { limitField: 'maxAudioCleanupMinutes', legacyField: 'audioCleanupMinutesUsed', perUnit: 60, code: 'AUDIO_CLEANUP_MINUTES_EXCEEDED', label: 'audio clean-up minutes' },
+  soundEffects: { limitField: 'maxSoundEffects', legacyField: 'soundEffectsUsed', perUnit: 1, code: 'SOUND_EFFECTS_EXCEEDED', label: 'sound effects' },
+  dubbingMinutes: { limitField: 'maxDubbingMinutes', legacyField: 'dubbingMinutesUsed', perUnit: 60, code: 'DUBBING_MINUTES_EXCEEDED', label: 'dubbing minutes' },
 };
 
 export function currentPeriod(date = new Date()): string {

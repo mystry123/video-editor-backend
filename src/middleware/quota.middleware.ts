@@ -4,6 +4,7 @@ import { Types } from 'mongoose';
 import { getEffectiveQuota, getUserQuota, isUnlimited, UserQuota, type PlanOverride } from '../config/quotas';
 import { Template } from '../models/Template';
 import { File as FileModel } from '../models/File';
+import { getMonthlyTotal } from '../services/usage.service';
 
 // ============================================================================
 // Types & Interfaces
@@ -795,6 +796,12 @@ export interface UsageSnapshot {
   templates: number;
   activeCaptionProjects: number;
   customPresets: number;
+  /** Text-to-speech characters this month */
+  ttsCharacters: number;
+  /** Audio clean-up this month, in minutes */
+  audioCleanupMinutes: number;
+  soundEffects: number;
+  dubbingMinutes: number;
   periodStart: Date;
   periodEnd: Date;
 }
@@ -816,6 +823,10 @@ export async function getUsageSnapshot(userId: string): Promise<UsageSnapshot> {
     templates,
     activeCaptionProjects,
     customPresets,
+    ttsCharacters,
+    audioCleanupSeconds,
+    soundEffects,
+    dubbingSeconds,
   ] = await Promise.all([
     usageFetchers.getRenderMinutesUsed(userId, periodStart),
     usageFetchers.getTranscriptionMinutesUsed(userId, periodStart),
@@ -825,6 +836,10 @@ export async function getUsageSnapshot(userId: string): Promise<UsageSnapshot> {
     usageFetchers.getTemplateCount(userId),
     usageFetchers.getActiveCaptionProjects(userId),
     usageFetchers.getCustomPresetsCount(userId),
+    getMonthlyTotal(userId, 'ttsCharacters'),
+    getMonthlyTotal(userId, 'audioCleanupMinutes'),
+    getMonthlyTotal(userId, 'soundEffects'),
+    getMonthlyTotal(userId, 'dubbingMinutes'),
   ]);
 
   return {
@@ -836,6 +851,10 @@ export async function getUsageSnapshot(userId: string): Promise<UsageSnapshot> {
     templates,
     activeCaptionProjects,
     customPresets,
+    ttsCharacters,
+    audioCleanupMinutes: audioCleanupSeconds / 60,
+    soundEffects,
+    dubbingMinutes: dubbingSeconds / 60,
     periodStart,
     periodEnd,
   };

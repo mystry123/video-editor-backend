@@ -215,6 +215,15 @@ export const uploadLimiter:RequestHandler = createLimiter({
   message: 'Upload limit exceeded, please try again in 1 hour',
 });
 
+// Voice limiter - text to speech and own-voice requests: 60/hour (each one is
+// a paid ElevenLabs call; the monthly character limit is separate)
+export const voiceLimiter: RequestHandler = createLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: 60,
+  prefix: 'voice',
+  message: 'Too many voice requests. Wait a few minutes and try again.',
+});
+
 // Auth limiter - 30 attempts/15min per IP across login, signup and password reset
 export const authLimiter: RequestHandler = createLimiter({
   windowMs: 15 * 60 * 1000,

@@ -8,7 +8,7 @@
 
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
-export type UsageKind = 'renderMinutes' | 'captionRenderMinutes' | 'transcriptionMinutes' | 'captionExports';
+export type UsageKind = 'renderMinutes' | 'captionRenderMinutes' | 'transcriptionMinutes' | 'captionExports' | 'ttsCharacters' | 'audioCleanupMinutes' | 'soundEffects' | 'dubbingMinutes';
 export type UsageState = 'reserved' | 'settled' | 'released';
 
 export interface IUsageCounter extends Document {

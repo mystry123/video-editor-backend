@@ -88,6 +88,11 @@ export const env = {
   
   // ElevenLabs
   elevenLabsApiKey: process.env.ELEVENLABS_API_KEY || '',
+
+  // Text to speech: which provider ("elevenlabs" or "sarvam"), see services/tts
+  ttsProvider: (process.env.TTS_PROVIDER === 'sarvam' ? 'sarvam' : 'elevenlabs') as 'elevenlabs' | 'sarvam',
+  // Sarvam API subscription key (dashboard.sarvam.ai)
+  sarvamApiKey: process.env.SARVAM_API_KEY || '',
   
   // Email (optional - for password reset)
   smtpHost: process.env.SMTP_HOST || '',

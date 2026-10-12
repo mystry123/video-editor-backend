@@ -23,6 +23,7 @@ import { Webhook } from '../models/Webhook';
 import { WebhookLog } from '../models/WebhookLog';
 import { deleteS3Prefix } from './storage.service';
 import { logger } from '../utils/logger';
+import { getTtsProviderById, type TtsProviderId } from './tts';
 
 export interface CleanupReport {
   s3Objects: number;
@@ -30,9 +31,15 @@ export interface CleanupReport {
   documents: Record<string, number>;
 }
 
-export async function purgeUserData(userId: string): Promise<CleanupReport> {
+export async function purgeUserData(
+  userId: string,
+  options: { ownVoiceId?: string; ownVoiceProvider?: TtsProviderId } = {}
+): Promise<CleanupReport> {
   if (!Types.ObjectId.isValid(userId)) throw new Error(`Invalid user id ${userId}`);
   const owner = new Types.ObjectId(userId);
+
+  // 0. Their own voice at ElevenLabs (its id comes with the job: the user document is gone)
+  if (options.ownVoiceId) await getTtsProviderById(options.ownVoiceProvider || 'elevenlabs').ownVoices?.remove(options.ownVoiceId);
 
   // 1. Files in storage first, while the documents that point at them still exist.
   const s3Objects = await deleteS3Prefix(`users/${userId}/`);

@@ -191,15 +191,17 @@ export const deleteAccount = async (req: AuthRequest, res: Response, next: NextF
     }
 
     const userId = user._id.toString();
+    const ownVoiceId = user.voiceClone?.voiceId;
+    const ownVoiceProvider = user.voiceClone?.provider;
     await User.deleteOne({ _id: user._id });
 
     // jobId makes a repeated request a no-op instead of a second cleanup.
     try {
-      await accountCleanupQueue.add('purge', { userId }, { jobId: `account-cleanup-${userId}` });
+      await accountCleanupQueue.add('purge', { userId, ownVoiceId, ownVoiceProvider }, { jobId: `account-cleanup-${userId}` });
     } catch (error: any) {
       // Queue unavailable: clean up in-process rather than leave the data behind.
       logger.error('Account cleanup enqueue failed; purging inline', { userId, error: error.message });
-      purgeUserData(userId).catch((err) =>
+      purgeUserData(userId, { ownVoiceId, ownVoiceProvider }).catch((err) =>
         logger.error('Inline account purge failed; data needs manual cleanup', { userId, error: err.message })
       );
     }
