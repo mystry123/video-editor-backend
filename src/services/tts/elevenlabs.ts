@@ -1,33 +1,23 @@
-// services/voice.service.ts
+// services/tts/elevenlabs.ts
 //
-// ElevenLabs voices: the stock voices anyone can use, text to speech, and a
-// user's own voice made from a sample they recorded (instant voice cloning).
-// The API key needs the text_to_speech, voices_read and voices_write
-// permissions; without them every call here fails with VOICE_UNAVAILABLE.
+// ElevenLabs: stock voices in many accents (one multilingual model that works
+// out the language from the text), and users' own voices made from a sample
+// they recorded (instant voice cloning, paid ElevenLabs plans). The API key
+// needs Text to Speech and Voices (write) permissions; without them every
+// call here fails with VOICE_UNAVAILABLE.
 
-import { env } from '../config/env';
-import { ApiError } from '../utils/ApiError';
-import { logger } from '../utils/logger';
+import { env } from '../../config/env';
+import { ApiError } from '../../utils/ApiError';
+import { logger } from '../../utils/logger';
+import { voiceUnavailable } from './errors';
+import type { OwnVoiceSample, SpeakRequest, SpeechAudio, TtsProvider, TtsVoice } from './types';
 
 const API = 'https://api.elevenlabs.io';
 /** Best quality and 29 languages; billed 1 credit per character. */
 export const TTS_MODEL = 'eleven_multilingual_v2';
-export const TTS_MAX_CHARACTERS = 5000;
-export const TTS_SPEED = { min: 0.7, max: 1.2 } as const;
+const SPEED = { min: 0.7, max: 1.2 } as const;
 
-export interface StockVoice {
-  id: string;
-  name: string;
-  gender?: string;
-  accent?: string;
-  age?: string;
-  description?: string;
-  useCase?: string;
-  previewUrl?: string;
-}
-
-const unavailable = () =>
-  ApiError.withCode(503, 'VOICE_UNAVAILABLE', "Text to speech isn't available right now. Try again in a few minutes.");
+const unavailable = voiceUnavailable;
 
 /** An ElevenLabs error as ours: our own setup or credits problems never reach the user as-is. */
 async function failure(response: Response, what: string): Promise<ApiError> {
@@ -69,18 +59,18 @@ async function call(path: string, init: RequestInit, what: string): Promise<Resp
 
 // Stock voices change rarely: one fetch per 6 hours
 const VOICES_TTL = 6 * 60 * 60 * 1000;
-let voicesCache: { at: number; voices: StockVoice[] } | null = null;
+let voicesCache: { at: number; voices: TtsVoice[] } | null = null;
 
 export function clearVoicesCache(): void {
   voicesCache = null;
 }
 
 /** ElevenLabs' stock voices, best known first. */
-export async function listStockVoices(): Promise<StockVoice[]> {
+async function listStockVoices(): Promise<TtsVoice[]> {
   if (voicesCache && Date.now() - voicesCache.at < VOICES_TTL) return voicesCache.voices;
   const response = await call('/v2/voices?voice_type=default&page_size=100', { method: 'GET' }, 'voice list');
   const body = (await response.json()) as { voices?: any[] };
-  const voices: StockVoice[] = (body.voices || [])
+  const voices: TtsVoice[] = (body.voices || [])
     .filter((v) => v?.voice_id && v?.name)
     .map((v) => ({
       id: String(v.voice_id),
@@ -97,20 +87,8 @@ export async function listStockVoices(): Promise<StockVoice[]> {
   return voices;
 }
 
-/** A stock voice by id, or undefined (refetches once in case the list changed). */
-export async function findStockVoice(voiceId: string): Promise<StockVoice | undefined> {
-  const found = (await listStockVoices()).find((v) => v.id === voiceId);
-  if (found || !voicesCache) return found;
-  clearVoicesCache();
-  return (await listStockVoices()).find((v) => v.id === voiceId);
-}
-
 /** Speech for `text` as an MP3. */
-export async function textToSpeech(
-  voiceId: string,
-  text: string,
-  { speed = 1, ownVoice = false }: { speed?: number; ownVoice?: boolean } = {}
-): Promise<Buffer> {
+async function textToSpeech({ voiceId, text, speed, ownVoice = false }: SpeakRequest): Promise<SpeechAudio> {
   const response = await call(
     `/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`,
     {
@@ -124,7 +102,7 @@ export async function textToSpeech(
           // An own voice should sound as much like them as possible
           similarity_boost: ownVoice ? 0.9 : 0.75,
           use_speaker_boost: true,
-          speed: Math.min(TTS_SPEED.max, Math.max(TTS_SPEED.min, speed)),
+          speed: Math.min(SPEED.max, Math.max(SPEED.min, speed)),
         },
       }),
     },
@@ -132,14 +110,11 @@ export async function textToSpeech(
   );
   const audio = Buffer.from(await response.arrayBuffer());
   if (audio.length === 0) throw unavailable();
-  return audio;
+  return { audio, mimeType: 'audio/mpeg', ext: 'mp3' };
 }
 
 /** Makes a voice from a recording; returns its ElevenLabs id. */
-export async function cloneVoice(
-  userId: string,
-  sample: { bytes: Buffer; mimeType: string; filename: string }
-): Promise<string> {
+async function cloneVoice(userId: string, sample: OwnVoiceSample): Promise<string> {
   const form = new FormData();
   // Our own label; the user's name for the voice stays in our database
   form.append('name', `shotline-${userId}`);
@@ -154,7 +129,7 @@ export async function cloneVoice(
 }
 
 /** Deletes a voice made by cloneVoice; already gone counts as done. */
-export async function deleteVoice(voiceId: string): Promise<void> {
+async function deleteVoice(voiceId: string): Promise<void> {
   try {
     await call(`/v1/voices/${encodeURIComponent(voiceId)}`, { method: 'DELETE' }, 'voice delete');
   } catch (error) {
@@ -162,3 +137,12 @@ export async function deleteVoice(voiceId: string): Promise<void> {
     throw error;
   }
 }
+
+export const elevenLabsProvider: TtsProvider = {
+  id: 'elevenlabs',
+  languages: null, // the multilingual model reads the language from the text
+  speedRange: SPEED,
+  listVoices: listStockVoices,
+  speak: textToSpeech,
+  ownVoices: { create: cloneVoice, remove: deleteVoice },
+};

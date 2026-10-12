@@ -54,7 +54,7 @@ export interface IUser extends Document {
   planOverrides: IPlanOverride[];
 
   /** Their own voice for text to speech: an ElevenLabs voice made from a sample they recorded. */
-  voiceClone?: { voiceId: string; name: string; createdAt: Date };
+  voiceClone?: { voiceId: string; name: string; provider?: 'elevenlabs' | 'sarvam'; createdAt: Date };
 
   lastLoginAt?: Date;
   createdAt: Date;
@@ -157,7 +157,7 @@ const UserSchema = new Schema<IUser>(
     planOverrides: { type: [PlanOverrideSchema], default: [] },
 
     voiceClone: {
-      type: new Schema({ voiceId: { type: String, required: true }, name: { type: String, required: true }, createdAt: { type: Date, required: true } }, { _id: false }),
+      type: new Schema({ voiceId: { type: String, required: true }, name: { type: String, required: true }, provider: { type: String, enum: ['elevenlabs', 'sarvam'] }, createdAt: { type: Date, required: true } }, { _id: false }),
       default: undefined,
     },
 

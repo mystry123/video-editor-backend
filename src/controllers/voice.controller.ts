@@ -1,11 +1,14 @@
 // controllers/voice.controller.ts
 //
-//   GET    /voice/voices            stock voices, plus the user's own voice
+//   GET    /voice/voices            the provider's voices and options, plus the user's own voice
 //   POST   /voice/speech            text to speech: a new MP3 in their media
+//   POST   /voice/preview           a short sample of a voice (providers without hosted previews)
 //   POST   /voice/own/sample-url    where to upload a sample for their own voice
 //   POST   /voice/own               make their own voice from that sample
 //   DELETE /voice/own               delete their own voice
 //
+// The provider (ElevenLabs or Sarvam) comes from services/tts; what it can
+// do (languages, speed range, previews, own voices) shapes these responses.
 // Speech is metered in characters (ttsCharacters, plan limit maxTtsCharacters)
 // and the MP3 counts toward storage like any upload. An own voice needs
 // voiceCloneAllowed, is one per user, and is made only from a sample recorded
@@ -22,10 +25,10 @@ import { env } from '../config/env';
 import { ApiError } from '../utils/ApiError';
 import { logger } from '../utils/logger';
 import { probeMedia, summarizeProbe } from '../utils/media';
-import { createPresignedUpload, deleteFromS3, readObjectStart, uploadBufferToS3 } from '../services/storage.service';
+import { createPresignedUpload, deleteFromS3, getObjectSize, readObjectStart, uploadBufferToS3 } from '../services/storage.service';
 import { quotaService } from '../services/quota.service';
 import { releaseUsage, reserveUsage, settleUsage } from '../services/usage.service';
-import { cloneVoice, deleteVoice, findStockVoice, listStockVoices, textToSpeech } from '../services/voice.service';
+import { getTtsProvider, getTtsProviderById, type TtsProvider, type TtsProviderId } from '../services/tts';
 import { assertCanStore } from './file.controller';
 
 /** MP3 at 128 kbps is 16 KB a second; speech runs about 15 characters a second. */
@@ -41,10 +44,26 @@ export const SAMPLE_MAX_BYTES = 25 * 1024 * 1024;
 export const SAMPLE_SECONDS = { min: 20, max: 300 } as const;
 const SAMPLE_MAX_AGE_MS = 60 * 60 * 1000;
 
-function ownVoiceView(user: any) {
-  return user?.voiceClone?.voiceId
+/** Which provider made the user's own voice (voices from before providers were pluggable are ElevenLabs) */
+function ownVoiceProvider(user: any): TtsProviderId | null {
+  return user?.voiceClone?.voiceId ? user.voiceClone.provider || 'elevenlabs' : null;
+}
+
+/** Their own voice, if it works with `provider` */
+function ownVoiceView(user: any, provider: TtsProvider) {
+  return ownVoiceProvider(user) === provider.id && provider.ownVoices
     ? { id: user.voiceClone.voiceId, name: user.voiceClone.name, createdAt: user.voiceClone.createdAt }
     : null;
+}
+
+/** A language the provider speaks, or a 400 (undefined for providers that detect it) */
+function resolveLanguage(provider: TtsProvider, language: string | undefined): string | undefined {
+  if (!provider.languages) return undefined;
+  const code = language || provider.languages[0].code;
+  if (!provider.languages.some((l) => l.code === code)) {
+    throw ApiError.withCode(400, 'LANGUAGE_NOT_SUPPORTED', 'Pick one of the listed languages.');
+  }
+  return code;
 }
 
 async function loadUser(req: AuthRequest) {
@@ -54,21 +73,56 @@ async function loadUser(req: AuthRequest) {
 }
 
 /** "Hey everyone, welcome back to…" from a script, for the file's name. */
-export function speechFileName(text: string, voiceName: string): string {
+export function speechFileName(text: string, voiceName: string, ext = 'mp3'): string {
   const words = text.replace(/\s+/g, ' ').trim();
   const snippet = words.length > 40 ? `${words.slice(0, 40).replace(/\s+\S*$/, '')}…` : words;
   const safe = `${snippet} - ${voiceName}`.replace(/[\\/:*?"<>|]/g, '').trim();
-  return `${safe || 'Voiceover'}.mp3`;
+  return `${safe || 'Voiceover'}.${ext}`;
 }
+
+/**
+ * A short sample of a voice in a language. For providers without hosted
+ * previews: made once, kept in the media bucket, and shared by everyone
+ * (not charged to the user).
+ */
+export const previewVoice = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { voiceId, language } = req.body as { voiceId: string; language?: string };
+    const provider = getTtsProvider();
+    if (!provider.previewSpeech) throw ApiError.withCode(400, 'PREVIEW_NOT_NEEDED', 'This voice has its own preview.');
+    const lang = resolveLanguage(provider, language) ?? 'en';
+    if (!(await provider.listVoices()).some((v) => v.id === voiceId)) {
+      throw ApiError.withCode(404, 'VOICE_NOT_FOUND', "That voice isn't available. Pick another one.");
+    }
+    const base = `voice-previews/${provider.id}/${voiceId}-${lang}`;
+    for (const ext of ['mp3', 'wav']) {
+      if ((await getObjectSize(`${base}.${ext}`)) !== null) {
+        res.json({ url: `${env.cdnUrl}/${base}.${ext}` });
+        return;
+      }
+    }
+    const speech = await provider.previewSpeech(voiceId, lang);
+    res.json({ url: await uploadBufferToS3(speech.audio, `${base}.${speech.ext}`, speech.mimeType) });
+  } catch (error) {
+    next(error);
+  }
+};
 
 export const listVoices = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
     const user = await loadUser(req);
     const quota = getEffectiveQuota(user);
+    const provider = getTtsProvider();
     res.json({
-      voices: await listStockVoices(),
-      ownVoice: ownVoiceView(user),
-      ownVoiceAllowed: !!quota.voiceCloneAllowed,
+      voices: await provider.listVoices(),
+      // null: the provider works out the language from the script
+      languages: provider.languages,
+      speed: provider.speedRange,
+      // 'hosted': voices carry previewUrl; 'generated': ask POST /voice/preview
+      previews: provider.previewSpeech ? 'generated' : 'hosted',
+      ownVoice: ownVoiceView(user, provider),
+      ownVoiceSupported: !!provider.ownVoices,
+      ownVoiceAllowed: !!quota.voiceCloneAllowed && !!provider.ownVoices,
     });
   } catch (error) {
     next(error);
@@ -79,27 +133,32 @@ export const createSpeech = async (req: AuthRequest, res: Response, next: NextFu
   const jobId = uuidv4();
   let reserved = false;
   try {
-    const { text, voiceId, speed } = req.body as { text: string; voiceId: string; speed?: number };
+    const { text, voiceId, speed, language } = req.body as { text: string; voiceId: string; speed?: number; language?: string };
     const user = await loadUser(req);
     const quota = getEffectiveQuota(user);
+    const provider = getTtsProvider();
+    const lang = resolveLanguage(provider, language);
 
-    // Only stock voices and their own voice: never another user's
-    const own = ownVoiceView(user);
+    // Only the provider's voices and their own voice: never another user's
+    const own = ownVoiceView(user, provider);
     const isOwn = own?.id === voiceId;
-    const voiceName = isOwn ? own!.name : (await findStockVoice(voiceId))?.name;
+    const voiceName = isOwn ? own!.name : (await provider.listVoices()).find((v) => v.id === voiceId)?.name;
     if (!voiceName) throw ApiError.withCode(404, 'VOICE_NOT_FOUND', "That voice isn't available. Pick another one.");
+    const { min, max } = provider.speedRange;
+    const pace = Math.min(max, Math.max(min, speed ?? 1));
 
     const characters = text.length;
     assertCanStore(user, characters * BYTES_PER_CHARACTER, 'audio/mpeg');
     await reserveUsage(user._id, 'ttsCharacters', jobId, characters, quota.maxTtsCharacters);
     reserved = true;
 
-    const audio = await textToSpeech(voiceId, text, { speed, ownVoice: isOwn });
-    assertCanStore(user, audio.length, 'audio/mpeg');
+    const speech = await provider.speak({ voiceId, text, speed: pace, language: lang, ownVoice: isOwn });
+    const audio = speech.audio;
+    assertCanStore(user, audio.length, speech.mimeType);
 
-    const key = `users/${user._id}/uploads/${uuidv4()}.mp3`;
-    const cdnUrl = await uploadBufferToS3(audio, key, 'audio/mpeg');
-    let duration = audio.length / 16_000;
+    const key = `users/${user._id}/uploads/${uuidv4()}.${speech.ext}`;
+    const cdnUrl = await uploadBufferToS3(audio, key, speech.mimeType);
+    let duration = speech.ext === 'mp3' ? audio.length / 16_000 : audio.length / 88_200;
     try {
       duration = summarizeProbe(await probeMedia(cdnUrl)).duration || duration;
     } catch (error) {
@@ -108,9 +167,9 @@ export const createSpeech = async (req: AuthRequest, res: Response, next: NextFu
 
     const file = await File.create({
       userId: user._id,
-      name: speechFileName(text, voiceName),
-      originalName: speechFileName(text, voiceName),
-      mimeType: 'audio/mpeg',
+      name: speechFileName(text, voiceName, speech.ext),
+      originalName: speechFileName(text, voiceName, speech.ext),
+      mimeType: speech.mimeType,
       size: audio.length,
       storageKey: key,
       cdnUrl,
@@ -122,7 +181,7 @@ export const createSpeech = async (req: AuthRequest, res: Response, next: NextFu
     await settleUsage(user._id, 'ttsCharacters', jobId, characters);
 
     res.status(201).json({
-      file: { fileId: String(file._id), name: file.name, url: cdnUrl, mimeType: 'audio/mpeg', size: audio.length, duration },
+      file: { fileId: String(file._id), name: file.name, url: cdnUrl, mimeType: speech.mimeType, size: audio.length, duration },
       characters,
     });
   } catch (error) {
@@ -135,13 +194,18 @@ export const createSpeech = async (req: AuthRequest, res: Response, next: NextFu
   }
 };
 
-function assertOwnVoiceAllowed(user: any) {
+function assertOwnVoiceAllowed(user: any): TtsProvider {
+  const provider = getTtsProvider();
+  if (!provider.ownVoices) {
+    throw ApiError.withCode(400, 'VOICE_CLONE_NOT_SUPPORTED', "Using your own voice isn't available right now.");
+  }
   if (!getEffectiveQuota(user).voiceCloneAllowed) {
     throw ApiError.withCode(403, 'VOICE_CLONE_NOT_ALLOWED', 'Using your own voice is available on paid plans.');
   }
-  if (ownVoiceView(user)) {
+  if (ownVoiceProvider(user)) {
     throw ApiError.withCode(409, 'VOICE_EXISTS', 'You already have your own voice. Delete it to make a new one.');
   }
+  return provider;
 }
 
 export const createSampleUpload = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
@@ -178,7 +242,7 @@ export const createOwnVoice = async (req: AuthRequest, res: Response, next: Next
   try {
     const { sampleId, name } = req.body as { sampleId: string; name: string; consent: true };
     const user = await loadUser(req);
-    assertOwnVoiceAllowed(user);
+    const provider = assertOwnVoiceAllowed(user);
 
     sample = await File.findOne({ _id: sampleId, userId: user._id, source: 'voice_sample' });
     if (!sample || Date.now() - new Date(sample.createdAt).getTime() > SAMPLE_MAX_AGE_MS) {
@@ -202,7 +266,7 @@ export const createOwnVoice = async (req: AuthRequest, res: Response, next: Next
       throw ApiError.withCode(400, 'VOICE_SAMPLE_TOO_LARGE', 'The recording is too long. Keep it under 5 minutes.');
     }
 
-    const voiceId = await cloneVoice(String(user._id), {
+    const voiceId = await provider.ownVoices!.create(String(user._id), {
       bytes,
       mimeType: sample.mimeType,
       filename: sample.storageKey.split('/').pop()!,
@@ -210,10 +274,10 @@ export const createOwnVoice = async (req: AuthRequest, res: Response, next: Next
     // One voice per user, even if two requests got this far at once
     const saved = await User.updateOne(
       { _id: user._id, 'voiceClone.voiceId': { $exists: false } },
-      { $set: { voiceClone: { voiceId, name, createdAt: new Date() } } }
+      { $set: { voiceClone: { voiceId, name, provider: provider.id, createdAt: new Date() } } }
     );
     if (saved.modifiedCount === 0) {
-      await deleteVoice(voiceId).catch((e) => logger.error('Failed to delete duplicate voice', { voiceId, error: (e as Error).message }));
+      await provider.ownVoices!.remove(voiceId).catch((e) => logger.error('Failed to delete duplicate voice', { voiceId, error: (e as Error).message }));
       throw ApiError.withCode(409, 'VOICE_EXISTS', 'You already have your own voice. Delete it to make a new one.');
     }
     logger.info('Own voice created', { userId: String(user._id), voiceId });
@@ -234,11 +298,13 @@ export const createOwnVoice = async (req: AuthRequest, res: Response, next: Next
 export const deleteOwnVoice = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
     const user = await loadUser(req);
-    const own = ownVoiceView(user);
-    if (own) {
-      await deleteVoice(own.id);
-      await User.updateOne({ _id: user._id, 'voiceClone.voiceId': own.id }, { $unset: { voiceClone: '' } });
-      logger.info('Own voice deleted', { userId: String(user._id), voiceId: own.id });
+    // With the provider that made it, even if another one is in use now
+    const madeWith = ownVoiceProvider(user);
+    if (madeWith) {
+      const voiceId = user.voiceClone!.voiceId;
+      await getTtsProviderById(madeWith).ownVoices?.remove(voiceId);
+      await User.updateOne({ _id: user._id, 'voiceClone.voiceId': voiceId }, { $unset: { voiceClone: '' } });
+      logger.info('Own voice deleted', { userId: String(user._id), voiceId, provider: madeWith });
     }
     res.json({ success: true });
   } catch (error) {

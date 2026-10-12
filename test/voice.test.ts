@@ -5,7 +5,9 @@ import { File } from '../src/models/File';
 import { User } from '../src/models/User';
 import { UsageCounter } from '../src/models/Usage';
 import { currentPeriod } from '../src/services/usage.service';
-import { clearVoicesCache } from '../src/services/voice.service';
+import { clearVoicesCache } from '../src/services/tts/elevenlabs';
+import { setTtsProvider, type TtsProvider } from '../src/services/tts';
+import { encodeTestWav } from './unit/wavFixture';
 import { speechFileName } from '../src/controllers/voice.controller';
 
 const storage = vi.hoisted(() => ({
@@ -24,6 +26,7 @@ vi.mock('../src/services/storage.service', async (importOriginal) => {
       return `https://cdn.test/${key}`;
     }),
     readObjectStart: vi.fn(async () => storage.sample),
+    getObjectSize: vi.fn(async (key: string) => (storage.uploaded.includes(key) ? 1000 : null)),
     deleteFromS3: vi.fn(async (key: string) => {
       storage.deleted.push(key);
     }),
@@ -47,8 +50,17 @@ const STOCK = [
 /** Fake ElevenLabs: records calls; `fail` makes a path return that status. */
 const eleven = { calls: [] as Array<{ method: string; path: string; body?: any }>, fail: {} as Record<string, number> };
 
+const sarvam = { calls: [] as any[] };
+
 function fakeFetch(input: string | URL, init: RequestInit = {}) {
   const url = new URL(String(input));
+  if (url.hostname === 'api.sarvam.ai') {
+    const body = JSON.parse(String(init.body));
+    sarvam.calls.push({ ...body, key: (init.headers as any)?.['api-subscription-key'] });
+    if (body.text.includes('FAIL')) return Promise.resolve(Response.json({ error: { message: 'bad', code: 'invalid_request_error' } }, { status: 400 }));
+    // a second of a 440 Hz tone per request, as base64 WAV
+    return Promise.resolve(Response.json({ request_id: 'r1', audios: [encodeTestWav(1, 44100).toString('base64')] }));
+  }
   const method = init.method || 'GET';
   eleven.calls.push({ method, path: url.pathname, body: init.body });
   const failStatus = Object.entries(eleven.fail).find(([p]) => url.pathname.startsWith(p))?.[1];
@@ -69,7 +81,11 @@ beforeEach(() => {
   storage.deleted = [];
   probe.seconds = 4;
   clearVoicesCache();
+  setTtsProvider(null);
+  (env as any).ttsProvider = 'elevenlabs';
   (env as any).elevenLabsApiKey = 'test-key';
+  (env as any).sarvamApiKey = 'sarvam-key';
+  sarvam.calls = [];
   vi.stubGlobal('fetch', vi.fn(fakeFetch));
 });
 
@@ -221,6 +237,95 @@ describe('own voice', () => {
     const theirs = await sampleFor(other.auth);
     expect((await api().post('/api/v1/voice/own').set(pro.auth).send({ sampleId: theirs, name: 'Me', consent: true })).status).toBe(400);
     expect(eleven.calls.some((c) => c.path === '/v1/voices/add')).toBe(false);
+  });
+});
+
+describe('voices: the response describes the provider', () => {
+  it('ElevenLabs: no language list, its speed range, hosted previews, own voices', async () => {
+    const pro = await createUser({ role: 'pro' });
+    const res = await api().get('/api/v1/voice/voices').set(pro.auth);
+    expect(res.body).toMatchObject({ languages: null, speed: { min: 0.7, max: 1.2 }, previews: 'hosted', ownVoiceSupported: true, ownVoiceAllowed: true });
+  });
+});
+
+describe('Sarvam (TTS_PROVIDER=sarvam)', () => {
+  beforeEach(() => {
+    (env as any).ttsProvider = 'sarvam';
+  });
+
+  it('lists Indian voices and languages, generated previews, no own voices', async () => {
+    const pro = await createUser({ role: 'pro' });
+    const res = await api().get('/api/v1/voice/voices').set(pro.auth);
+    expect(res.status).toBe(200);
+    expect(res.body.voices.length).toBeGreaterThan(30);
+    expect(res.body.voices[0]).toMatchObject({ id: 'shubh', name: 'Shubh' });
+    expect(res.body.languages.map((l: any) => l.code)).toEqual(expect.arrayContaining(['hi-IN', 'en-IN', 'ta-IN']));
+    expect(res.body).toMatchObject({ speed: { min: 0.5, max: 2 }, previews: 'generated', ownVoiceSupported: false, ownVoiceAllowed: false });
+    expect(eleven.calls.length).toBe(0);
+  });
+
+  it('speaks long scripts in parts and stores one MP3', async () => {
+    const user = await createUser({ role: 'pro' });
+    const sentence = 'यह एक लंबा वाक्य है जो बार बार दोहराया जाता है। ';
+    const text = sentence.repeat(Math.ceil(4900 / sentence.length)).slice(0, 4900);
+    const res = await api().post('/api/v1/voice/speech').set(user.auth).send({ text, voiceId: 'priya', language: 'hi-IN', speed: 1.5 });
+    expect(res.status).toBe(201);
+    expect(sarvam.calls.length).toBe(3);
+    for (const call of sarvam.calls) {
+      expect(call).toMatchObject({ language_code: 'hi-IN', speaker: 'priya', model: 'bulbul:v3', pace: 1.5, output_audio_codec: 'wav', key: 'sarvam-key' });
+      expect(call.text.length).toBeLessThanOrEqual(2400);
+    }
+    expect(sarvam.calls.map((c) => c.text).join(' ').replace(/\s+/g, '')).toBe(text.replace(/\s+/g, ''));
+    expect(res.body.file).toMatchObject({ mimeType: 'audio/mpeg' });
+    expect(res.body.file.name).toMatch(/- Priya\.mp3$/);
+    expect(storage.uploaded[0]).toMatch(/\.mp3$/);
+  });
+
+  it('needs a supported language; refused scripts are a 422 and refunded', async () => {
+    const user = await createUser();
+    expect((await api().post('/api/v1/voice/speech').set(user.auth).send({ text: 'Hi', voiceId: 'priya', language: 'fr-FR' })).status).toBe(400);
+    expect((await api().post('/api/v1/voice/speech').set(user.auth).send({ text: 'Hi', voiceId: 'nobody', language: 'hi-IN' })).status).toBe(404);
+    const refused = await api().post('/api/v1/voice/speech').set(user.auth).send({ text: 'FAIL this', voiceId: 'priya', language: 'hi-IN' });
+    expect(refused.status).toBe(422);
+    expect(await ttsUsed(user.user._id)).toBe(0);
+    // No language: the first one (English, India)
+    const ok = await api().post('/api/v1/voice/speech').set(user.auth).send({ text: 'Hello', voiceId: 'priya' });
+    expect(ok.status).toBe(201);
+    expect(sarvam.calls.at(-1)).toMatchObject({ language_code: 'en-IN' });
+  });
+
+  it('makes a preview once per voice and language, then reuses it', async () => {
+    const user = await createUser();
+    const first = await api().post('/api/v1/voice/preview').set(user.auth).send({ voiceId: 'kabir', language: 'ta-IN' });
+    expect(first.status).toBe(200);
+    expect(first.body.url).toMatch(/voice-previews\/sarvam\/kabir-ta-IN\.mp3$/);
+    expect(sarvam.calls[0].text).toContain('Kabir');
+    const again = await api().post('/api/v1/voice/preview').set(user.auth).send({ voiceId: 'kabir', language: 'ta-IN' });
+    expect(again.body.url).toBe(first.body.url);
+    expect(sarvam.calls.length).toBe(1);
+    expect(await ttsUsed(user.user._id)).toBe(0); // previews aren't charged
+  });
+
+  it("own voice isn't offered, but one made with ElevenLabs can still be deleted", async () => {
+    const pro = await createUser({ role: 'pro' });
+    expect((await api().post('/api/v1/voice/own/sample-url').set(pro.auth).send({ mimeType: 'audio/wav', size: 1000 })).status).toBe(400);
+    await User.updateOne({ _id: pro.user._id }, { $set: { voiceClone: { voiceId: 'oldClone', name: 'Me', createdAt: new Date() } } });
+    expect((await api().get('/api/v1/voice/voices').set(pro.auth)).body.ownVoice).toBeNull();
+    expect((await api().delete('/api/v1/voice/own').set(pro.auth)).status).toBe(200);
+    expect(eleven.calls.some((c) => c.method === 'DELETE' && c.path === '/v1/voices/oldClone')).toBe(true);
+  });
+});
+
+describe('a provider can be injected', () => {
+  it('uses whatever setTtsProvider gives it', async () => {
+    const speak = vi.fn(async () => ({ audio: Buffer.from('ID3fake'), mimeType: 'audio/mpeg' as const, ext: 'mp3' as const }));
+    const fake: TtsProvider = { id: 'sarvam', languages: null, speedRange: { min: 1, max: 1 }, listVoices: async () => [{ id: 'v1', name: 'Fake' }], speak };
+    setTtsProvider(fake);
+    const user = await createUser();
+    const res = await api().post('/api/v1/voice/speech').set(user.auth).send({ text: 'Hello', voiceId: 'v1', speed: 2 });
+    expect(res.status).toBe(201);
+    expect(speak).toHaveBeenCalledWith(expect.objectContaining({ voiceId: 'v1', text: 'Hello', speed: 1 }));
+    expect(eleven.calls.length + sarvam.calls.length).toBe(0);
   });
 });
 
