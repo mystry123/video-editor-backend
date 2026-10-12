@@ -36,7 +36,7 @@ import { getFileImportQueue } from '../queues';
  * Throws a clear quota error if storing `size` more bytes (a video, if
  * `mimeType` is video) would break the user's plan. Returns the bytes left.
  */
-function assertCanStore(user: any, size: number, mimeType: string | undefined): number {
+export function assertCanStore(user: any, size: number, mimeType: string | undefined): number {
   const quota = getEffectiveQuota(user);
   const used = user.quotaUsage?.storageUsed || 0;
   const remaining = quota.maxStorage === -1 ? Infinity : Math.max(0, quota.maxStorage - used);

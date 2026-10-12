@@ -47,7 +47,8 @@ export interface IFile extends Document {
   status: 'processing' | 'ready' | 'failed' | 'deleted';
   metadata?: IFileMetadata;
   // New fields for import functionality
-  source: 'upload' | 'url' | 'google_drive';
+  /** 'tts': made by text to speech; 'voice_sample': a recording kept only until a voice is made from it. */
+  source: 'upload' | 'url' | 'google_drive' | 'tts' | 'voice_sample';
   sourceUrl?: string;
   sourceId?: string;
   importProgress?: number;
@@ -87,7 +88,7 @@ const FileSchema = new Schema<IFile>(
     // New fields for import functionality
     source: {
       type: String,
-      enum: ['upload', 'url', 'google_drive'],
+      enum: ['upload', 'url', 'google_drive', 'tts', 'voice_sample'],
       default: 'upload',
     },
     sourceUrl: { type: String },

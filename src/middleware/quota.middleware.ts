@@ -4,6 +4,7 @@ import { Types } from 'mongoose';
 import { getEffectiveQuota, getUserQuota, isUnlimited, UserQuota, type PlanOverride } from '../config/quotas';
 import { Template } from '../models/Template';
 import { File as FileModel } from '../models/File';
+import { getMonthlyTotal } from '../services/usage.service';
 
 // ============================================================================
 // Types & Interfaces
@@ -795,6 +796,8 @@ export interface UsageSnapshot {
   templates: number;
   activeCaptionProjects: number;
   customPresets: number;
+  /** Text-to-speech characters this month */
+  ttsCharacters: number;
   periodStart: Date;
   periodEnd: Date;
 }
@@ -816,6 +819,7 @@ export async function getUsageSnapshot(userId: string): Promise<UsageSnapshot> {
     templates,
     activeCaptionProjects,
     customPresets,
+    ttsCharacters,
   ] = await Promise.all([
     usageFetchers.getRenderMinutesUsed(userId, periodStart),
     usageFetchers.getTranscriptionMinutesUsed(userId, periodStart),
@@ -825,6 +829,7 @@ export async function getUsageSnapshot(userId: string): Promise<UsageSnapshot> {
     usageFetchers.getTemplateCount(userId),
     usageFetchers.getActiveCaptionProjects(userId),
     usageFetchers.getCustomPresetsCount(userId),
+    getMonthlyTotal(userId, 'ttsCharacters'),
   ]);
 
   return {
@@ -836,6 +841,7 @@ export async function getUsageSnapshot(userId: string): Promise<UsageSnapshot> {
     templates,
     activeCaptionProjects,
     customPresets,
+    ttsCharacters,
     periodStart,
     periodEnd,
   };

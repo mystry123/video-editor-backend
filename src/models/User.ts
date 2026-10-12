@@ -53,6 +53,9 @@ export interface IUser extends Document {
   /** Per-user limit overrides set by an admin; see config/quotas getEffectiveQuota. */
   planOverrides: IPlanOverride[];
 
+  /** Their own voice for text to speech: an ElevenLabs voice made from a sample they recorded. */
+  voiceClone?: { voiceId: string; name: string; createdAt: Date };
+
   lastLoginAt?: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -152,6 +155,11 @@ const UserSchema = new Schema<IUser>(
     refreshTokens: { type: [String], select: false, default: [] },
     
     planOverrides: { type: [PlanOverrideSchema], default: [] },
+
+    voiceClone: {
+      type: new Schema({ voiceId: { type: String, required: true }, name: { type: String, required: true }, createdAt: { type: Date, required: true } }, { _id: false }),
+      default: undefined,
+    },
 
     lastLoginAt: { type: Date },
   },

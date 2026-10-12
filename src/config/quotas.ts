@@ -27,6 +27,10 @@ export interface UserQuota {
   watermarkFree: boolean;            // No watermark on exports
   /** What happens when a render is above maxResolution. */
   overResolution: OverResolutionPolicy;
+  /** Text-to-speech characters per month (-1 = unlimited). */
+  maxTtsCharacters: number;
+  /** Can make a copy of their own voice for text to speech. */
+  voiceCloneAllowed: boolean;
 }
 
 export type OverResolutionPolicy = 'downscale' | 'block';
@@ -57,6 +61,8 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     priorityRendering: false,
     watermarkFree: false,
     overResolution: 'downscale',
+    maxTtsCharacters: 1000,
+    voiceCloneAllowed: false,
   },
   pro: {
     // Existing
@@ -82,6 +88,8 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     priorityRendering: false,
     watermarkFree: true,
     overResolution: 'downscale',
+    maxTtsCharacters: 20000,
+    voiceCloneAllowed: true,
   },
   team: {
     // Existing
@@ -107,6 +115,8 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     priorityRendering: true,
     watermarkFree: true,
     overResolution: 'downscale',
+    maxTtsCharacters: 100000,
+    voiceCloneAllowed: true,
   },
   admin: {
     // Existing
@@ -132,6 +142,8 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     priorityRendering: true,
     watermarkFree: true,
     overResolution: 'downscale',
+    maxTtsCharacters: -1,
+    voiceCloneAllowed: true,
   },
 };
 
