@@ -152,8 +152,9 @@ async function sweepReframes(counts: Record<string, number>) {
 
 async function sweepFiles(counts: Record<string, number>) {
   // Upload URL requested but the browser never finished: nothing was charged,
-  // so remove the record and any partial object.
-  const abandoned = await File.find({ status: 'processing', source: 'upload', createdAt: { $lt: ago(ABANDONED_AFTER_MS) } })
+  // so remove the record and any partial object. Voice samples never become
+  // ready: one still here was never used to make a voice.
+  const abandoned = await File.find({ status: 'processing', source: { $in: ['upload', 'voice_sample'] }, createdAt: { $lt: ago(ABANDONED_AFTER_MS) } })
     .select('_id storageKey')
     .limit(BATCH)
     .lean();
