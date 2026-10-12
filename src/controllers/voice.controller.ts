@@ -2,6 +2,8 @@
 //
 //   GET    /voice/voices            the provider's voices and options, plus the user's own voice
 //   GET    /voice/voices/search     the provider's wider voice library (ElevenLabs), by text/language/gender
+//   PUT    /voice/favorites         star a voice { voice: { id, name, ... } }
+//   DELETE /voice/favorites/:id     unstar it
 //   POST   /voice/speech            text to speech: a new MP3 in their media
 //   POST   /voice/preview           a short sample of a voice (providers without hosted previews)
 //   POST   /voice/own/sample-url    where to upload a sample for their own voice
@@ -56,6 +58,19 @@ function ownVoiceView(user: any, provider: TtsProvider) {
   return ownVoiceProvider(user) === provider.id && provider.ownVoices
     ? { id: user.voiceClone.voiceId, name: user.voiceClone.name, createdAt: user.voiceClone.createdAt }
     : null;
+}
+
+export const MAX_FAVORITE_VOICES = 50;
+
+/** The user's starred voices for a provider, newest first */
+function favoritesFor(user: any, provider: TtsProviderId) {
+  return (user.favoriteVoices || [])
+    .filter((f: any) => f.provider === provider)
+    .sort((a: any, b: any) => new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime())
+    .map((f: any) => {
+      const { provider: _p, addedAt: _a, voiceId, ...details } = typeof f.toObject === 'function' ? f.toObject() : f;
+      return { id: voiceId, ...details };
+    });
 }
 
 /** A language the provider speaks, or a 400 (undefined for providers that detect it) */
@@ -126,6 +141,7 @@ export const listVoices = async (req: AuthRequest, res: Response, next: NextFunc
       ownVoiceSupported: !!provider.ownVoices,
       // GET /voice/voices/search works: a voice library beyond `voices`
       librarySearch: !!provider.searchVoices,
+      favorites: favoritesFor(user, provider.id),
       ownVoiceAllowed: !!quota.voiceCloneAllowed && !!provider.ownVoices,
     });
   } catch (error) {
@@ -160,7 +176,8 @@ export const createSpeech = async (req: AuthRequest, res: Response, next: NextFu
       if (await User.exists({ 'voiceClone.voiceId': voiceId, _id: { $ne: user._id } })) {
         throw ApiError.withCode(404, 'VOICE_NOT_FOUND', "That voice isn't available. Pick another one.");
       }
-      voiceName = (libraryName || '').replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').trim().slice(0, 40) || 'Voice';
+      const favorite = (user.favoriteVoices || []).find((f) => f.provider === provider.id && f.voiceId === voiceId);
+      voiceName = (libraryName || favorite?.name || '').replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').trim().slice(0, 40) || 'Voice';
     }
     if (!voiceName) throw ApiError.withCode(404, 'VOICE_NOT_FOUND', "That voice isn't available. Pick another one.");
     const { min, max } = provider.speedRange;
@@ -369,6 +386,39 @@ export const searchVoices = async (req: AuthRequest, res: Response, next: NextFu
         page: page ? Number(page) : 0,
       })
     );
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const addFavoriteVoice = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { voice } = req.body as { voice: { id: string; name: string; gender?: string; accent?: string; description?: string; useCase?: string; previewUrl?: string } };
+    const user = await loadUser(req);
+    const provider = getTtsProvider();
+    // Their own voice has its own place; other users' own voices can't be starred
+    if (await User.exists({ 'voiceClone.voiceId': voice.id })) {
+      throw ApiError.withCode(400, 'VOICE_NOT_FAVORITABLE', "That voice can't be added to favourites.");
+    }
+    const others = (user.favoriteVoices || []).filter((f) => !(f.provider === provider.id && f.voiceId === voice.id));
+    if (others.filter((f) => f.provider === provider.id).length >= MAX_FAVORITE_VOICES) {
+      throw ApiError.withCode(400, 'TOO_MANY_FAVORITES', `You can keep up to ${MAX_FAVORITE_VOICES} favourite voices. Remove one first.`);
+    }
+    const { id, ...details } = voice;
+    user.favoriteVoices = [...others, { ...details, voiceId: id, provider: provider.id, addedAt: new Date() }];
+    await user.save();
+    res.json({ favorites: favoritesFor(user, provider.id) });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const removeFavoriteVoice = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const provider = getTtsProvider();
+    await User.updateOne({ _id: req.userId }, { $pull: { favoriteVoices: { provider: provider.id, voiceId: req.params.id } } });
+    const user = await loadUser(req);
+    res.json({ favorites: favoritesFor(user, provider.id) });
   } catch (error) {
     next(error);
   }

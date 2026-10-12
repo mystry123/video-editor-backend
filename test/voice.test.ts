@@ -297,6 +297,41 @@ describe('voice library', () => {
   });
 });
 
+describe('favourite voices', () => {
+  it('stars and unstars voices (library ones keep their details), per provider', async () => {
+    const user = await createUser();
+    const star = (voice: Record<string, unknown>) => api().put('/api/v1/voice/favorites').set(user.auth).send({ voice });
+    expect((await star({ id: 'stockVoice2', name: 'Adam', gender: 'male' })).status).toBe(200);
+    const lib = await star({ id: 'lib1', name: 'Rahul', description: 'Hinglish', previewUrl: 'https://storage.googleapis.com/eleven/rahul.mp3' });
+    expect(lib.body.favorites.map((v: any) => v.id)).toEqual(['lib1', 'stockVoice2']);
+    // Starring again doesn't duplicate
+    expect((await star({ id: 'lib1', name: 'Rahul' })).body.favorites.length).toBe(2);
+
+    const list = await api().get('/api/v1/voice/voices').set(user.auth);
+    expect(list.body.favorites[0]).toEqual({ id: 'lib1', name: 'Rahul' });
+
+    // A starred library voice names the file even without voiceName
+    const speech = await api().post('/api/v1/voice/speech').set(user.auth).send({ text: 'Hello', voiceId: 'lib1' });
+    expect(speech.body.file.name).toBe('Hello - Rahul.mp3');
+
+    const removed = await api().delete('/api/v1/voice/favorites/lib1').set(user.auth);
+    expect(removed.body.favorites.map((v: any) => v.id)).toEqual(['stockVoice2']);
+
+    // Other providers have their own list
+    (env as any).ttsProvider = 'sarvam';
+    expect((await api().get('/api/v1/voice/voices').set(user.auth)).body.favorites).toEqual([]);
+  });
+
+  it("refuses look-alike preview hosts and other users' own voices", async () => {
+    const user = await createUser();
+    const evil = await api().put('/api/v1/voice/favorites').set(user.auth).send({ voice: { id: 'x1', name: 'X', previewUrl: 'https://evilgoogleapis.com/a.mp3' } });
+    expect(evil.status).toBe(400);
+    const owner = await createUser({ role: 'pro' });
+    await User.updateOne({ _id: owner.user._id }, { $set: { voiceClone: { voiceId: 'someonesVoice', name: 'Me', createdAt: new Date() } } });
+    expect((await api().put('/api/v1/voice/favorites').set(user.auth).send({ voice: { id: 'someonesVoice', name: 'Me' } })).status).toBe(400);
+  });
+});
+
 describe('voices: the response describes the provider', () => {
   it('ElevenLabs: no language list, its speed range, hosted previews, own voices', async () => {
     const pro = await createUser({ role: 'pro' });

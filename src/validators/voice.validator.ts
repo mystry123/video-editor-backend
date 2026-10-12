@@ -73,3 +73,32 @@ export const createDubSchema = z.object({
 export const getDubSchema = z.object({
   params: z.object({ id: z.string().regex(/^[a-f0-9]{24}$/, 'Dub not found') }),
 });
+
+const optionalText = (max: number) => z.string().trim().max(max).optional();
+
+export const addFavoriteVoiceSchema = z.object({
+  body: z.object({
+    voice: z.object({
+      id: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_]+$/, 'Pick a voice'),
+      name: z.string().trim().min(1).max(60),
+      gender: optionalText(30),
+      accent: optionalText(40),
+      description: optionalText(120),
+      useCase: optionalText(40),
+      // Preview samples: ElevenLabs' (on Google storage) or our own bucket
+      previewUrl: z
+        .string()
+        .url()
+        .max(500)
+        .refine((u) => {
+          const { protocol, hostname } = new URL(u);
+          return protocol === 'https:' && (hostname === 'storage.googleapis.com' || hostname.endsWith('.elevenlabs.io') || hostname.endsWith('.amazonaws.com'));
+        }, 'Unknown preview host')
+        .optional(),
+    }),
+  }),
+});
+
+export const removeFavoriteVoiceSchema = z.object({
+  params: z.object({ id: z.string().min(1).max(64).regex(/^[A-Za-z0-9_]+$/) }),
+});

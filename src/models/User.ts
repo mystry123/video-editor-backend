@@ -14,6 +14,19 @@ export interface IOAuthAccount {
   expiresAt?: Date;
 }
 
+export interface IFavoriteVoice {
+  provider: 'elevenlabs' | 'sarvam';
+  /** (not `id`: Mongoose reserves it) */
+  voiceId: string;
+  name: string;
+  gender?: string;
+  accent?: string;
+  description?: string;
+  useCase?: string;
+  previewUrl?: string;
+  addedAt: Date;
+}
+
 export interface IUser extends Document {
   _id: Types.ObjectId;
   email: string;
@@ -55,6 +68,9 @@ export interface IUser extends Document {
 
   /** Their own voice for text to speech: an ElevenLabs voice made from a sample they recorded. */
   voiceClone?: { voiceId: string; name: string; provider?: 'elevenlabs' | 'sarvam'; createdAt: Date };
+
+  /** Starred text-to-speech voices (a copy of each voice's details: library voices aren't listed anywhere else) */
+  favoriteVoices?: IFavoriteVoice[];
 
   lastLoginAt?: Date;
   createdAt: Date;
@@ -155,6 +171,26 @@ const UserSchema = new Schema<IUser>(
     refreshTokens: { type: [String], select: false, default: [] },
     
     planOverrides: { type: [PlanOverrideSchema], default: [] },
+
+    favoriteVoices: {
+      type: [
+        new Schema(
+          {
+            provider: { type: String, enum: ['elevenlabs', 'sarvam'], required: true },
+            voiceId: { type: String, required: true },
+            name: { type: String, required: true },
+            gender: String,
+            accent: String,
+            description: String,
+            useCase: String,
+            previewUrl: String,
+            addedAt: { type: Date, required: true },
+          },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
 
     voiceClone: {
       type: new Schema({ voiceId: { type: String, required: true }, name: { type: String, required: true }, provider: { type: String, enum: ['elevenlabs', 'sarvam'] }, createdAt: { type: Date, required: true } }, { _id: false }),
