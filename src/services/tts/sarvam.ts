@@ -42,11 +42,8 @@ const SPEAKERS = [
   'tarun', 'sunny', 'mani', 'gokul', 'vijay', 'shruti', 'suhani', 'mohit', 'kavitha', 'rehan', 'soham', 'rupali',
 ];
 
-const VOICES: TtsVoice[] = SPEAKERS.map((id) => ({
-  id,
-  name: id.charAt(0).toUpperCase() + id.slice(1),
-  accent: 'Indian',
-}));
+// Sarvam doesn't publish genders or styles for these; names only
+const VOICES: TtsVoice[] = SPEAKERS.map((id) => ({ id, name: id.charAt(0).toUpperCase() + id.slice(1) }));
 
 // "Hi, I'm {name}. This is how your videos will sound with my voice."
 const PREVIEW_LINES: Record<string, string> = {
