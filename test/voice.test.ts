@@ -68,7 +68,12 @@ function fakeFetch(input: string | URL, init: RequestInit = {}) {
     return Promise.resolve(new Response(JSON.stringify({ detail: { status: 'missing_permissions', message: 'nope' } }), { status: failStatus }));
   }
   if (url.pathname === '/v2/voices') return Promise.resolve(Response.json({ voices: STOCK }));
-  if (url.pathname.startsWith('/v1/text-to-speech/')) return Promise.resolve(new Response(Buffer.alloc(64_000, 1), { status: 200 }));
+  if (url.pathname.startsWith('/v1/text-to-speech/')) {
+    // "Hi there": H i _ t h e r e, a tenth of a second each
+    const characters = [...'Hi there'];
+    const alignment = { characters, character_start_times_seconds: characters.map((_, i) => i / 10), character_end_times_seconds: characters.map((_, i) => (i + 1) / 10) };
+    return Promise.resolve(Response.json({ audio_base64: Buffer.alloc(64_000, 1).toString('base64'), alignment }));
+  }
   if (url.pathname === '/v1/voices/add') return Promise.resolve(Response.json({ voice_id: `cloned${eleven.calls.length}` }));
   if (url.pathname.startsWith('/v1/voices/') && method === 'DELETE') return Promise.resolve(Response.json({ status: 'ok' }));
   return Promise.resolve(new Response('not found', { status: 404 }));
@@ -138,7 +143,7 @@ describe('text to speech', () => {
     expect(await ttsUsed(user.user._id)).toBe(text.length);
 
     const call = eleven.calls.find((c) => c.path.startsWith('/v1/text-to-speech/'))!;
-    expect(call.path).toBe('/v1/text-to-speech/stockVoice1');
+    expect(call.path).toBe('/v1/text-to-speech/stockVoice1/with-timestamps');
     expect(JSON.parse(call.body)).toMatchObject({ text, model_id: 'eleven_multilingual_v2', voice_settings: { speed: 1.1 } });
   });
 
@@ -237,6 +242,25 @@ describe('own voice', () => {
     const theirs = await sampleFor(other.auth);
     expect((await api().post('/api/v1/voice/own').set(pro.auth).send({ sampleId: theirs, name: 'Me', consent: true })).status).toBe(400);
     expect(eleven.calls.some((c) => c.path === '/v1/voices/add')).toBe(false);
+  });
+});
+
+describe('captions for generated speech', () => {
+  it("saves the word timings as the file's transcript, so captions are free and instant", async () => {
+    const user = await createUser();
+    const res = await api().post('/api/v1/voice/speech').set(user.auth).send({ text: 'Hi there', voiceId: 'stockVoice1' });
+    expect(res.status).toBe(201);
+    expect(res.body.transcript.words).toEqual([
+      { text: 'Hi', start: 0, end: 0.2, type: 'word' },
+      { text: ' ', start: 0.2, end: 0.3, type: 'spacing' },
+      { text: 'there', start: 0.3, end: 0.8, type: 'word' },
+    ]);
+    // Generate Captions on the clip gets it straight away, without transcribing or charging
+    const captions = await api().post('/api/v1/transcriptions').set(user.auth).send({ fileId: res.body.file.fileId });
+    expect(captions.status).toBe(200);
+    expect(captions.body).toMatchObject({ status: 'completed', transcriptionModel: 'elevenlabs-tts' });
+    expect(captions.body.words.filter((w: any) => w.type === 'word').map((w: any) => w.text)).toEqual(['Hi', 'there']);
+    expect((await UsageCounter.findOne({ userId: user.user._id, kind: 'transcriptionMinutes' }).lean())?.total ?? 0).toBe(0);
   });
 });
 

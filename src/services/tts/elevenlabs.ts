@@ -10,6 +10,7 @@ import { env } from '../../config/env';
 import { ApiError } from '../../utils/ApiError';
 import { logger } from '../../utils/logger';
 import { voiceUnavailable } from './errors';
+import { wordsFromAlignment } from './alignment';
 import type { OwnVoiceSample, SpeakRequest, SpeechAudio, TtsProvider, TtsVoice } from './types';
 
 const API = 'https://api.elevenlabs.io';
@@ -40,7 +41,8 @@ async function failure(response: Response, what: string): Promise<ApiError> {
   return unavailable();
 }
 
-async function call(path: string, init: RequestInit, what: string): Promise<Response> {
+/** An ElevenLabs API request; errors become VOICE_UNAVAILABLE (logged) or a clear user error. */
+export async function elevenLabsCall(path: string, init: RequestInit, what: string): Promise<Response> {
   if (!env.elevenLabsApiKey) throw unavailable();
   let response: Response;
   try {
@@ -68,7 +70,7 @@ export function clearVoicesCache(): void {
 /** ElevenLabs' stock voices, best known first. */
 async function listStockVoices(): Promise<TtsVoice[]> {
   if (voicesCache && Date.now() - voicesCache.at < VOICES_TTL) return voicesCache.voices;
-  const response = await call('/v2/voices?voice_type=default&page_size=100', { method: 'GET' }, 'voice list');
+  const response = await elevenLabsCall('/v2/voices?voice_type=default&page_size=100', { method: 'GET' }, 'voice list');
   const body = (await response.json()) as { voices?: any[] };
   const voices: TtsVoice[] = (body.voices || [])
     .filter((v) => v?.voice_id && v?.name)
@@ -80,20 +82,20 @@ async function listStockVoices(): Promise<TtsVoice[]> {
       accent: v.labels?.accent,
       age: v.labels?.age,
       description: v.labels?.description || v.description || undefined,
-      useCase: v.labels?.use_case || v.labels?.['use case'],
+      useCase: (v.labels?.use_case || v.labels?.['use case'])?.replace(/_/g, ' '),
       previewUrl: v.preview_url || undefined,
     }));
   voicesCache = { at: Date.now(), voices };
   return voices;
 }
 
-/** Speech for `text` as an MP3. */
+/** Speech for `text` as an MP3, with when each word is spoken (same price as without). */
 async function textToSpeech({ voiceId, text, speed, ownVoice = false }: SpeakRequest): Promise<SpeechAudio> {
-  const response = await call(
-    `/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`,
+  const response = await elevenLabsCall(
+    `/v1/text-to-speech/${encodeURIComponent(voiceId)}/with-timestamps?output_format=mp3_44100_128`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         text,
         model_id: TTS_MODEL,
@@ -108,9 +110,10 @@ async function textToSpeech({ voiceId, text, speed, ownVoice = false }: SpeakReq
     },
     'text to speech'
   );
-  const audio = Buffer.from(await response.arrayBuffer());
+  const body = (await response.json()) as { audio_base64?: string; alignment?: any };
+  const audio = Buffer.from(body.audio_base64 || '', 'base64');
   if (audio.length === 0) throw unavailable();
-  return { audio, mimeType: 'audio/mpeg', ext: 'mp3' };
+  return { audio, mimeType: 'audio/mpeg', ext: 'mp3', words: wordsFromAlignment(body.alignment) };
 }
 
 /** Makes a voice from a recording; returns its ElevenLabs id. */
@@ -122,7 +125,7 @@ async function cloneVoice(userId: string, sample: OwnVoiceSample): Promise<strin
   form.append('labels', JSON.stringify({ app: 'shotline', user: userId }));
   form.append('remove_background_noise', 'true');
   form.append('files', new Blob([new Uint8Array(sample.bytes)], { type: sample.mimeType }), sample.filename);
-  const response = await call('/v1/voices/add', { method: 'POST', body: form }, 'voice clone');
+  const response = await elevenLabsCall('/v1/voices/add', { method: 'POST', body: form }, 'voice clone');
   const body = (await response.json()) as { voice_id?: string };
   if (!body.voice_id) throw unavailable();
   return body.voice_id;
@@ -131,7 +134,7 @@ async function cloneVoice(userId: string, sample: OwnVoiceSample): Promise<strin
 /** Deletes a voice made by cloneVoice; already gone counts as done. */
 async function deleteVoice(voiceId: string): Promise<void> {
   try {
-    await call(`/v1/voices/${encodeURIComponent(voiceId)}`, { method: 'DELETE' }, 'voice delete');
+    await elevenLabsCall(`/v1/voices/${encodeURIComponent(voiceId)}`, { method: 'DELETE' }, 'voice delete');
   } catch (error) {
     if (error instanceof ApiError && error.statusCode === 404) return;
     throw error;

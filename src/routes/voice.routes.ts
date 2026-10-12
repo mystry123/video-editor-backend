@@ -3,7 +3,8 @@ import { requireAuth } from '../middleware/auth.middleware';
 import { uploadLimiter, voiceLimiter } from '../middleware/rateLimit.middleware';
 import { validate } from '../middleware/validate.middleware';
 import * as voiceController from '../controllers/voice.controller';
-import { createOwnVoiceSchema, createSampleUploadSchema, createSpeechSchema, previewVoiceSchema } from '../validators/voice.validator';
+import * as audioToolsController from '../controllers/audioTools.controller';
+import { cleanUpAudioSchema, createOwnVoiceSchema, createSampleUploadSchema, createSpeechSchema, previewVoiceSchema, soundEffectSchema } from '../validators/voice.validator';
 
 const router: ExpressRouter = Router();
 
@@ -15,5 +16,9 @@ router.post('/preview', voiceLimiter, validate(previewVoiceSchema), voiceControl
 router.post('/own/sample-url', uploadLimiter, validate(createSampleUploadSchema), voiceController.createSampleUpload);
 router.post('/own', voiceLimiter, validate(createOwnVoiceSchema), voiceController.createOwnVoice);
 router.delete('/own', voiceController.deleteOwnVoice);
+
+// Audio tools
+router.post('/cleanup', voiceLimiter, validate(cleanUpAudioSchema), audioToolsController.cleanUpAudio);
+router.post('/sound-effect', voiceLimiter, validate(soundEffectSchema), audioToolsController.createSoundEffect);
 
 export default router;

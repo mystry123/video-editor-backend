@@ -64,6 +64,8 @@ export const QUOTA_FIELDS: QuotaFieldDef[] = [
   { key: 'maxCustomFonts', label: 'Custom font limit', description: 'Number of uploaded fonts.', type: 'count', group: 'features' },
   { key: 'maxTtsCharacters', label: 'Text-to-speech characters', description: 'Characters turned into speech per month (about 1,000 per minute of audio).', type: 'count', group: 'features' },
   { key: 'voiceCloneAllowed', label: 'Own voice', description: 'Can make a copy of their own voice for text to speech.', type: 'boolean', group: 'features' },
+  { key: 'maxAudioCleanupMinutes', label: 'Audio clean-up minutes', description: 'Minutes of audio with background noise removed per month.', type: 'minutes', group: 'features' },
+  { key: 'maxSoundEffects', label: 'Sound effects', description: 'Sound effects generated per month.', type: 'count', group: 'features' },
 ];
 
 const FIELD_BY_KEY = new Map(QUOTA_FIELDS.map((f) => [f.key as string, f]));

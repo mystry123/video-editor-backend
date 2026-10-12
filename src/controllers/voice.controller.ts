@@ -19,6 +19,7 @@ import { Response, NextFunction } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { AuthRequest } from '../types';
 import { File } from '../models/File';
+import { Transcription } from '../models/Transcription';
 import { User } from '../models/User';
 import { getEffectiveQuota } from '../config/quotas';
 import { env } from '../config/env';
@@ -180,9 +181,34 @@ export const createSpeech = async (req: AuthRequest, res: Response, next: NextFu
     await quotaService.addStorageUsage(String(user._id), audio.length, String(file._id));
     await settleUsage(user._id, 'ttsCharacters', jobId, characters);
 
+    // The provider said when each word is spoken: that's the file's transcript,
+    // so Generate Captions on this clip is instant and free
+    let transcript: { words: unknown[]; language?: string } | null = null;
+    if (speech.words?.some((w) => w.type === 'word')) {
+      const words = speech.words;
+      try {
+        await Transcription.create({
+          userId: user._id,
+          fileId: file._id,
+          text,
+          words,
+          language: lang,
+          transcriptionModel: `${provider.id}-tts`,
+          status: 'completed',
+          duration,
+          processedAt: new Date(),
+        });
+        transcript = { words, language: lang };
+      } catch (e) {
+        logger.warn('Could not save speech word timings', { fileId: String(file._id), error: (e as Error).message });
+      }
+    }
+
     res.status(201).json({
       file: { fileId: String(file._id), name: file.name, url: cdnUrl, mimeType: speech.mimeType, size: audio.length, duration },
       characters,
+      // Word timings for captions (null: transcribe the clip instead)
+      transcript,
     });
   } catch (error) {
     if (reserved) {

@@ -31,6 +31,10 @@ export interface UserQuota {
   maxTtsCharacters: number;
   /** Can make a copy of their own voice for text to speech. */
   voiceCloneAllowed: boolean;
+  /** Minutes of audio cleaned up (background noise removed) per month (-1 = unlimited). */
+  maxAudioCleanupMinutes: number;
+  /** Sound effects generated per month (-1 = unlimited). */
+  maxSoundEffects: number;
 }
 
 export type OverResolutionPolicy = 'downscale' | 'block';
@@ -63,6 +67,8 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     overResolution: 'downscale',
     maxTtsCharacters: 1000,
     voiceCloneAllowed: false,
+    maxAudioCleanupMinutes: 2,
+    maxSoundEffects: 5,
   },
   pro: {
     // Existing
@@ -90,6 +96,8 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     overResolution: 'downscale',
     maxTtsCharacters: 20000,
     voiceCloneAllowed: true,
+    maxAudioCleanupMinutes: 30,
+    maxSoundEffects: 100,
   },
   team: {
     // Existing
@@ -117,6 +125,8 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     overResolution: 'downscale',
     maxTtsCharacters: 100000,
     voiceCloneAllowed: true,
+    maxAudioCleanupMinutes: 120,
+    maxSoundEffects: 500,
   },
   admin: {
     // Existing
@@ -144,6 +154,8 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     overResolution: 'downscale',
     maxTtsCharacters: -1,
     voiceCloneAllowed: true,
+    maxAudioCleanupMinutes: -1,
+    maxSoundEffects: -1,
   },
 };
 

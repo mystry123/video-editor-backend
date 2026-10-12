@@ -138,7 +138,7 @@ export class UntrustedMediaUrlError extends Error {
   }
 }
 
-function assertMediaUrl(url: string): void {
+export function assertMediaUrl(url: string): void {
   let parsed: URL;
   try {
     parsed = new URL(url);

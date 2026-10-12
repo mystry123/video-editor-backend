@@ -7,7 +7,10 @@
 // a speed range, hosted or generated previews, and whether users can make
 // their own voice.
 
+import type { TimedWord } from './alignment';
+
 export type TtsProviderId = 'elevenlabs' | 'sarvam';
+export type { TimedWord };
 
 export interface TtsVoice {
   id: string;
@@ -31,6 +34,8 @@ export interface SpeechAudio {
   audio: Buffer;
   mimeType: 'audio/mpeg' | 'audio/wav';
   ext: 'mp3' | 'wav';
+  /** When the provider says when each word is spoken: captions without transcribing */
+  words?: TimedWord[];
 }
 
 export interface SpeakRequest {

@@ -38,3 +38,17 @@ export const previewVoiceSchema = z.object({
     language: LANGUAGE.optional(),
   }),
 });
+
+export const cleanUpAudioSchema = z.object({
+  body: z.object({
+    fileId: z.string().regex(/^[a-f0-9]{24}$/, 'Pick a video or audio clip'),
+  }),
+});
+
+export const soundEffectSchema = z.object({
+  body: z.object({
+    prompt: z.string().trim().min(2, 'Describe the sound').max(300, 'Keep the description under 300 characters'),
+    // seconds; left out, the model picks a length
+    duration: z.number().min(0.5).max(22).optional(),
+  }),
+});

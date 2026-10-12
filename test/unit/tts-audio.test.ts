@@ -52,3 +52,20 @@ describe('splitScript', () => {
     expect(splitScript('x'.repeat(25), 10)).toEqual(['x'.repeat(10), 'x'.repeat(10), 'x'.repeat(5)]);
   });
 });
+
+import { wordsFromAlignment } from '../../src/services/tts/alignment';
+
+describe('wordsFromAlignment', () => {
+  it('groups characters into words and spaces, keeping punctuation on the word', () => {
+    const characters = [...' Hey, you!  ok '];
+    const t = characters.map((_, i) => i);
+    expect(wordsFromAlignment({ characters, character_start_times_seconds: t, character_end_times_seconds: t.map((x) => x + 1) })).toEqual([
+      { text: 'Hey,', start: 1, end: 5, type: 'word' },
+      { text: ' ', start: 5, end: 6, type: 'spacing' },
+      { text: 'you!', start: 6, end: 10, type: 'word' },
+      { text: ' ', start: 10, end: 12, type: 'spacing' },
+      { text: 'ok', start: 12, end: 14, type: 'word' },
+    ]);
+    expect(wordsFromAlignment(undefined)).toEqual([]);
+  });
+});

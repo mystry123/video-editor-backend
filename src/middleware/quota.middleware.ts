@@ -798,6 +798,9 @@ export interface UsageSnapshot {
   customPresets: number;
   /** Text-to-speech characters this month */
   ttsCharacters: number;
+  /** Audio clean-up this month, in minutes */
+  audioCleanupMinutes: number;
+  soundEffects: number;
   periodStart: Date;
   periodEnd: Date;
 }
@@ -820,6 +823,8 @@ export async function getUsageSnapshot(userId: string): Promise<UsageSnapshot> {
     activeCaptionProjects,
     customPresets,
     ttsCharacters,
+    audioCleanupSeconds,
+    soundEffects,
   ] = await Promise.all([
     usageFetchers.getRenderMinutesUsed(userId, periodStart),
     usageFetchers.getTranscriptionMinutesUsed(userId, periodStart),
@@ -830,6 +835,8 @@ export async function getUsageSnapshot(userId: string): Promise<UsageSnapshot> {
     usageFetchers.getActiveCaptionProjects(userId),
     usageFetchers.getCustomPresetsCount(userId),
     getMonthlyTotal(userId, 'ttsCharacters'),
+    getMonthlyTotal(userId, 'audioCleanupMinutes'),
+    getMonthlyTotal(userId, 'soundEffects'),
   ]);
 
   return {
@@ -842,6 +849,8 @@ export async function getUsageSnapshot(userId: string): Promise<UsageSnapshot> {
     activeCaptionProjects,
     customPresets,
     ttsCharacters,
+    audioCleanupMinutes: audioCleanupSeconds / 60,
+    soundEffects,
     periodStart,
     periodEnd,
   };
