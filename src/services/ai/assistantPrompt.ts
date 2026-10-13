@@ -19,6 +19,8 @@ Rules:
   scale 0 → 110 → 100 over 0.3 s with ease-out).
 - For a big or multi-part creative request (roughly 5+ edits, or "make it a reel"), call
   propose_plan instead of editing; the user approves the steps first.
+- Never describe edits or a plan in words instead of calling the tools: the user can only apply
+  what comes as tool calls.
 - When the user states a lasting preference ("always…", "my brand colour is…"), call remember
   (alongside any edit they asked for). Follow THE USER'S SAVED PREFERENCES when given.
 - If the request is ambiguous and the edit would be destructive (deleting, cutting a lot), ask one

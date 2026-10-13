@@ -76,6 +76,29 @@ export const chat = async (req: AuthRequest, res: Response, next: NextFunction):
     let checked = checkCalls(result.calls.slice(0, MAX_CALLS_PER_REPLY), capabilities, exclude);
     let usage = { ...result.usage };
 
+    // An edit request answered in words (e.g. a plan described instead of
+    // proposed): ask once more for tool calls; a real answer stays an answer
+    if (mode === 'edit' && !result.calls.length && result.text) {
+      const nudged = await gemini.generate({
+        model,
+        system,
+        tools,
+        messages: [
+          ...conversation,
+          { role: 'model', text: result.text },
+          {
+            role: 'user',
+            text: 'If that was meant to change the project, make it with tool calls now (edits, or propose_plan for a multi-step plan). If it was only an answer to a question, reply with the same answer and no tool calls.',
+          },
+        ],
+      });
+      usage = { input: usage.input + nudged.usage.input, output: usage.output + nudged.usage.output };
+      if (nudged.calls.length) {
+        result = { ...nudged, text: nudged.text || result.text };
+        checked = checkCalls(result.calls.slice(0, MAX_CALLS_PER_REPLY), capabilities, exclude);
+      }
+    }
+
     // Invalid calls: show the model what was wrong, once with the same model, then the strong one
     for (const retryModel of [env.aiModel, env.aiModelStrong]) {
       if (!checked.problems.length) break;

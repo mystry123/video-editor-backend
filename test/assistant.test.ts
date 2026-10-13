@@ -125,6 +125,21 @@ describe('assistant', () => {
     expect(step.body.calls).toEqual([{ name: 'trim_clip', args: { id: 'c1', remove_from_start: 1 } }]);
   });
 
+  it('nudges an edit request answered in words into tool calls, but keeps real answers', async () => {
+    const user = await createUser();
+    replies.push(reply('Here is a plan: 1. trim 2. add captions'));
+    replies.push(reply('Plan ready.', [{ name: 'propose_plan', args: { title: 'Reel', steps: ['Trim the intro', 'Add captions'] } }]));
+    const planned = await api().post('/api/v1/ai/chat').set(user.auth).send(body('make it a reel'));
+    expect(fake.generate).toHaveBeenCalledTimes(2);
+    expect(requests[1].messages.at(-1)!.text).toMatch(/make it with tool calls now/);
+    expect(planned.body.calls.map((c: any) => c.name)).toEqual(['propose_plan']);
+
+    replies.push(reply('It is 10 seconds long.'));
+    replies.push(reply('It is 10 seconds long.'));
+    const answer = await api().post('/api/v1/ai/chat').set(user.auth).send(body('how long is it?'));
+    expect(answer.body).toMatchObject({ reply: 'It is 10 seconds long.', calls: [] });
+  });
+
   it('validates the request', async () => {
     const user = await createUser();
     expect((await api().post('/api/v1/ai/chat').set(user.auth).send({ ...body('x'), messages: [{ role: 'model', text: 'x' }] })).status).toBe(400);
