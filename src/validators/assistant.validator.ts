@@ -12,6 +12,7 @@ export const chatSchema = z.object({
       .refine((m) => m[m.length - 1].role === 'user', 'The last message must be from the user'),
     // The project summary (kept small by the editor)
     context: z.string().max(60_000),
+    planStep: z.boolean().optional(),
     capabilities: z
       .object({
         animations: z.object({ in: list(200), out: list(200), loop: list(200) }).optional(),
@@ -22,3 +23,6 @@ export const chatSchema = z.object({
       .optional(),
   }),
 });
+
+export const addMemorySchema = z.object({ body: z.object({ note: z.string().trim().min(3).max(300) }) });
+export const deleteMemorySchema = z.object({ params: z.object({ id: z.string().uuid() }) });

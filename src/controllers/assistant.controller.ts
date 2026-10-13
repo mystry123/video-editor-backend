@@ -1,7 +1,10 @@
 // controllers/assistant.controller.ts
 //
-//   POST /ai/chat { mode, messages, context, capabilities }
+//   POST   /ai/chat { mode, messages, context, capabilities, planStep? }
 //     → { reply, calls, problems, model }
+//   GET    /ai/memory            the user's saved preferences
+//   POST   /ai/memory { note }   remember one
+//   DELETE /ai/memory/:id        forget one
 //
 // One assistant turn. `context` is the editor's project summary (the model
 // sees clips by short ids c1, c2…); `capabilities` lists what the editor has
@@ -22,14 +25,26 @@ import { logger } from '../utils/logger';
 import { releaseUsage, reserveUsage, settleUsage } from '../services/usage.service';
 import { getGeminiClient, type GeminiMessage } from '../services/ai/gemini';
 import { checkCalls, MAX_CALLS_PER_REPLY, toolDeclarations, type AssistantCapabilities, type CheckedCall } from '../services/ai/editorTools';
-import { ASK_MODE_NOTE, ASSISTANT_SYSTEM } from '../services/ai/assistantPrompt';
+import { ASK_MODE_NOTE, ASSISTANT_SYSTEM, PLAN_STEP_NOTE } from '../services/ai/assistantPrompt';
 
 interface ChatBody {
   mode: 'ask' | 'edit';
   messages: GeminiMessage[];
   context: string;
   capabilities?: AssistantCapabilities;
+  /** Carrying out a step of an approved plan: edit, don't plan again */
+  planStep?: boolean;
 }
+
+export const MAX_MEMORY_NOTES = 30;
+
+/** The user's saved preferences, for the model's instructions */
+function memoryBlock(user: any): string {
+  const notes = (user.assistantMemory || []).map((m: any) => m.note).filter(Boolean);
+  return notes.length ? `\n\nTHE USER'S SAVED PREFERENCES (follow them unless this request says otherwise):\n- ${notes.join('\n- ')}` : '';
+}
+
+const memoryView = (user: any) => (user.assistantMemory || []).map((m: any) => ({ id: m.id, note: m.note, createdAt: m.createdAt }));
 
 /** The last user message carries the current project summary */
 function withContext(messages: GeminiMessage[], context: string): GeminiMessage[] {
@@ -43,20 +58,22 @@ export const chat = async (req: AuthRequest, res: Response, next: NextFunction):
   const jobId = uuidv4();
   let reserved = false;
   try {
-    const { mode, messages, context, capabilities = {} } = req.body as ChatBody;
+    const { mode, messages, context, capabilities = {}, planStep = false } = req.body as ChatBody;
     const user = await User.findById(req.userId);
     if (!user) throw ApiError.notFound('User not found');
     await reserveUsage(user._id, 'aiMessages', jobId, 1, getEffectiveQuota(user).maxAiMessages);
     reserved = true;
 
     const gemini = getGeminiClient();
-    const system = mode === 'ask' ? `${ASSISTANT_SYSTEM}\n\n${ASK_MODE_NOTE}` : ASSISTANT_SYSTEM;
-    const tools = mode === 'edit' ? toolDeclarations(capabilities) : undefined;
+    const base = mode === 'ask' ? `${ASSISTANT_SYSTEM}\n\n${ASK_MODE_NOTE}` : ASSISTANT_SYSTEM;
+    const system = `${base}${planStep ? `\n\n${PLAN_STEP_NOTE}` : ''}${memoryBlock(user)}`;
+    const exclude = planStep ? ['propose_plan'] : [];
+    const tools = mode === 'edit' ? toolDeclarations(capabilities, exclude) : undefined;
     let conversation = withContext(messages, context);
 
     let model = env.aiModel;
     let result = await gemini.generate({ model, system, messages: conversation, tools });
-    let checked = checkCalls(result.calls.slice(0, MAX_CALLS_PER_REPLY), capabilities);
+    let checked = checkCalls(result.calls.slice(0, MAX_CALLS_PER_REPLY), capabilities, exclude);
     let usage = { ...result.usage };
 
     // Invalid calls: show the model what was wrong, once with the same model, then the strong one
@@ -73,7 +90,7 @@ export const chat = async (req: AuthRequest, res: Response, next: NextFunction):
       ];
       model = retryModel;
       result = await gemini.generate({ model, system, messages: conversation, tools });
-      checked = checkCalls(result.calls.slice(0, MAX_CALLS_PER_REPLY), capabilities);
+      checked = checkCalls(result.calls.slice(0, MAX_CALLS_PER_REPLY), capabilities, exclude);
       usage = { input: usage.input + result.usage.input, output: usage.output + result.usage.output };
     }
 
@@ -94,6 +111,45 @@ export const chat = async (req: AuthRequest, res: Response, next: NextFunction):
     if (reserved) {
       await releaseUsage('aiMessages', jobId, 'assistant_failed').catch(() => undefined);
     }
+    next(error);
+  }
+};
+
+export const getMemory = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const user = await User.findById(req.userId).select('assistantMemory').lean();
+    if (!user) throw ApiError.notFound('User not found');
+    res.json({ memory: memoryView(user) });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const addMemory = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const note = String((req.body as { note: string }).note).replace(/\s+/g, ' ').trim();
+    const user = await User.findById(req.userId);
+    if (!user) throw ApiError.notFound('User not found');
+    const list = user.assistantMemory || [];
+    if (!list.some((m) => m.note.toLowerCase() === note.toLowerCase())) {
+      if (list.length >= MAX_MEMORY_NOTES) {
+        throw ApiError.withCode(400, 'MEMORY_FULL', `The assistant can remember up to ${MAX_MEMORY_NOTES} things. Delete one first.`);
+      }
+      user.assistantMemory = [...list, { id: uuidv4(), note, createdAt: new Date() }];
+      await user.save();
+    }
+    res.status(201).json({ memory: memoryView(user) });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const deleteMemory = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    await User.updateOne({ _id: req.userId }, { $pull: { assistantMemory: { id: req.params.id } } });
+    const user = await User.findById(req.userId).select('assistantMemory').lean();
+    res.json({ memory: memoryView(user) });
+  } catch (error) {
     next(error);
   }
 };

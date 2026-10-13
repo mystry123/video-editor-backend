@@ -69,6 +69,9 @@ export interface IUser extends Document {
   /** Their own voice for text to speech: an ElevenLabs voice made from a sample they recorded. */
   voiceClone?: { voiceId: string; name: string; provider?: 'elevenlabs' | 'sarvam'; createdAt: Date };
 
+  /** What the editing assistant remembers about this user's preferences (fonts, colours, style) */
+  assistantMemory?: Array<{ id: string; note: string; createdAt: Date }>;
+
   /** Starred text-to-speech voices (a copy of each voice's details: library voices aren't listed anywhere else) */
   favoriteVoices?: IFavoriteVoice[];
 
@@ -171,6 +174,11 @@ const UserSchema = new Schema<IUser>(
     refreshTokens: { type: [String], select: false, default: [] },
     
     planOverrides: { type: [PlanOverrideSchema], default: [] },
+
+    assistantMemory: {
+      type: [new Schema({ id: { type: String, required: true }, note: { type: String, required: true, maxlength: 300 }, createdAt: { type: Date, required: true } }, { _id: false })],
+      default: undefined,
+    },
 
     favoriteVoices: {
       type: [

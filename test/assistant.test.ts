@@ -94,6 +94,37 @@ describe('assistant', () => {
     expect(await used(other.user._id)).toBe(0);
   });
 
+  it('remembers preferences, and puts them in every request\'s instructions', async () => {
+    const user = await createUser();
+    const added = await api().post('/api/v1/ai/memory').set(user.auth).send({ note: 'Titles use Poppins Bold, white' });
+    expect(added.status).toBe(201);
+    expect(added.body.memory.map((m: any) => m.note)).toEqual(['Titles use Poppins Bold, white']);
+    // Same note again: not duplicated
+    expect((await api().post('/api/v1/ai/memory').set(user.auth).send({ note: 'titles use poppins bold, white' })).body.memory.length).toBe(1);
+    replies.push(reply('ok'));
+    await api().post('/api/v1/ai/chat').set(user.auth).send(body('add a title'));
+    expect(requests[0].system).toContain("SAVED PREFERENCES");
+    expect(requests[0].system).toContain('Titles use Poppins Bold, white');
+    const id = added.body.memory[0].id;
+    const after = await api().delete(`/api/v1/ai/memory/${id}`).set(user.auth);
+    expect(after.body.memory).toEqual([]);
+  });
+
+  it('offers propose_plan normally, but not while carrying out a plan step', async () => {
+    const user = await createUser();
+    replies.push(reply('Plan.', [{ name: 'propose_plan', args: { title: 'Reel', steps: ['Trim the intro', 'Add captions'] } }]));
+    const planned = await api().post('/api/v1/ai/chat').set(user.auth).send(body('make it a reel'));
+    expect(requests[0].tools!.some((t) => t.name === 'propose_plan')).toBe(true);
+    expect(planned.body.calls[0]).toMatchObject({ name: 'propose_plan', args: { steps: ['Trim the intro', 'Add captions'] } });
+
+    replies.push(reply('', [{ name: 'propose_plan', args: { title: 'x', steps: ['a step', 'b step'] } }]));
+    replies.push(reply('Trimmed.', [{ name: 'trim_clip', args: { id: 'c1', remove_from_start: 1 } }]));
+    const step = await api().post('/api/v1/ai/chat').set(user.auth).send(body('Step 1 of 2: Trim the intro', { planStep: true }));
+    expect(requests[1].tools!.some((t) => t.name === 'propose_plan')).toBe(false);
+    expect(requests[1].system).toContain('one step of a plan');
+    expect(step.body.calls).toEqual([{ name: 'trim_clip', args: { id: 'c1', remove_from_start: 1 } }]);
+  });
+
   it('validates the request', async () => {
     const user = await createUser();
     expect((await api().post('/api/v1/ai/chat').set(user.auth).send({ ...body('x'), messages: [{ role: 'model', text: 'x' }] })).status).toBe(400);

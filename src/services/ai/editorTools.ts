@@ -239,6 +239,25 @@ export const EDITOR_TOOLS: Record<string, ToolDef> = {
         size: num(5, 100).optional(),
       }),
   },
+  propose_plan: {
+    description:
+      'For a big or multi-part request (e.g. "turn this into a 30s reel", "make it look like a podcast clip"), propose a short plan instead of edits. Each step is a concrete goal you will carry out with the other tools when the user runs it. Use for roughly 5+ edits or vague creative goals; otherwise edit directly.',
+    parameters: () =>
+      S.obj(
+        {
+          title: S.str('What the plan achieves, a few words'),
+          steps: S.arr('2–8 steps in order, each one concrete goal', S.str('A step, e.g. "Trim the intro to start at the first sentence"')),
+        },
+        ['title', 'steps']
+      ),
+    args: () => z.object({ title: z.string().min(1).max(120), steps: z.array(z.string().min(3).max(300)).min(2).max(8) }),
+  },
+  remember: {
+    description:
+      'Save a lasting preference the user states about how they want their videos (fonts, brand colours, caption style, tone, defaults), so future edits follow it. Only for preferences, not one-off edits.',
+    parameters: () => S.obj({ note: S.str('The preference, short and specific, e.g. "Titles use Poppins Bold, white"') }, ['note']),
+    args: () => z.object({ note: z.string().min(3).max(300) }),
+  },
   add_captions: {
     description: 'Add word-timed captions for a video or audio clip (transcribes it).',
     parameters: () => S.obj({ id: S.str('Video or audio clip id') }, ['id']),
@@ -297,8 +316,11 @@ function allTools(caps: AssistantCapabilities): Record<string, ToolDef> {
 }
 
 /** The tools as Gemini function declarations. */
-export function toolDeclarations(caps: AssistantCapabilities): GeminiTool[] {
-  return Object.entries(allTools(caps)).map(([name, def]) => ({ name, description: def.description, parameters: def.parameters(caps) }));
+/** The tools as Gemini function declarations (minus `exclude`). */
+export function toolDeclarations(caps: AssistantCapabilities, exclude: string[] = []): GeminiTool[] {
+  return Object.entries(allTools(caps))
+    .filter(([name]) => !exclude.includes(name))
+    .map(([name, def]) => ({ name, description: def.description, parameters: def.parameters(caps) }));
 }
 
 export interface CheckedCall {
@@ -309,9 +331,10 @@ export interface CheckedCall {
 /** Splits the model's calls into valid ones (args parsed) and problems to report back. */
 export function checkCalls(
   calls: Array<{ name: string; args: Record<string, unknown> }>,
-  caps: AssistantCapabilities
+  caps: AssistantCapabilities,
+  exclude: string[] = []
 ): { valid: CheckedCall[]; problems: string[] } {
-  const tools = allTools(caps);
+  const tools = Object.fromEntries(Object.entries(allTools(caps)).filter(([name]) => !exclude.includes(name)));
   const valid: CheckedCall[] = [];
   const problems: string[] = [];
   for (const call of calls) {
