@@ -5,8 +5,9 @@ import { uploadLimiter } from '../middleware/rateLimit.middleware';
 import { validate } from '../middleware/validate.middleware';
 import { checkStorageQuota, checkVideoUploadQuota, attachUsageSummary } from '../middleware/quota.middleware';
 import * as fileController from '../controllers/file.controller';
-import { getUploadUrlSchema, importFromUrlSchema, importFromGoogleDriveSchema, importGiphySchema, signUploadPartsSchema } from '../validators/file.validator';
+import { getUploadUrlSchema, importFromUrlSchema, importFromGoogleDriveSchema, importGiphySchema, importStockSchema, signUploadPartsSchema } from '../validators/file.validator';
 import { importGiphy } from '../controllers/giphy.controller';
+import { importStock } from '../controllers/stock.controller';
 
 const router: ExpressRouter = Router();
 
@@ -49,6 +50,7 @@ router.delete('/:id', fileController.deleteFile);
 router.post('/import/url', uploadLimiter, validate(importFromUrlSchema), fileController.importFromUrl);
 router.post('/import/google-drive', uploadLimiter, validate(importFromGoogleDriveSchema), fileController.importFromGoogleDrive);
 router.post('/import/giphy', uploadLimiter, validate(importGiphySchema), importGiphy);
+router.post('/import/stock', uploadLimiter, validate(importStockSchema), importStock);
 router.get('/import/:id/status', fileController.getImportStatus);
 
 export default router;

@@ -39,6 +39,8 @@ export interface UserQuota {
   maxDubbingMinutes: number;
   /** Messages to the editing assistant per month (-1 = unlimited). */
   maxAiMessages: number;
+  /** Generated images per month */
+  maxAiImages: number;
 }
 
 export type OverResolutionPolicy = 'downscale' | 'block';
@@ -75,6 +77,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxSoundEffects: 5,
     maxDubbingMinutes: 1,
     maxAiMessages: 20,
+    maxAiImages: 10,
   },
   pro: {
     // Existing
@@ -106,6 +109,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxSoundEffects: 100,
     maxDubbingMinutes: 10,
     maxAiMessages: 500,
+    maxAiImages: 100,
   },
   team: {
     // Existing
@@ -137,6 +141,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxSoundEffects: 500,
     maxDubbingMinutes: 60,
     maxAiMessages: 2000,
+    maxAiImages: 500,
   },
   admin: {
     // Existing
@@ -168,6 +173,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxSoundEffects: -1,
     maxDubbingMinutes: -1,
     maxAiMessages: -1,
+    maxAiImages: -1,
   },
 };
 

@@ -38,6 +38,8 @@ const S = {
   obj: (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'OBJECT', properties, required }),
 };
 
+const POSITIONS = ['center', 'top', 'bottom', 'left', 'right', 'top-left', 'top-right', 'bottom-left', 'bottom-right'] as const;
+
 interface ToolDef {
   description: string;
   parameters: (caps: AssistantCapabilities) => Record<string, unknown>;
@@ -236,6 +238,60 @@ export const EDITOR_TOOLS: Record<string, ToolDef> = {
         at: seconds,
         duration: num(0.2, 60).optional(),
         position: z.enum(['center', 'top', 'bottom', 'left', 'right', 'top-left', 'top-right', 'bottom-left', 'bottom-right']).optional(),
+        size: num(5, 100).optional(),
+      }),
+  },
+  add_stock: {
+    description:
+      'Add a free stock photo or video (Pixabay) found by a search query: real-world footage or photos of people, places, things, b-roll. The user sees the match and can pick another before applying.',
+    parameters: () =>
+      S.obj(
+        {
+          query: S.str('What to search, a few plain words (e.g. "busy city street night", "waves on beach", "coffee cup closeup")'),
+          kind: S.enum('photo or video', ['photo', 'video']),
+          at: S.num('Start, seconds'),
+          duration: S.num('How long it shows, seconds (default: photo 4, video its own length up to 8)'),
+          placement: S.enum('fullscreen = fills the frame (b-roll or background, placed under text and stickers); overlay = a smaller picture on top', ['fullscreen', 'overlay']),
+          position: S.enum('Overlay only: where (default centre)', [...POSITIONS]),
+          size: S.num('Overlay only: width, % of the frame width (default 40)'),
+        },
+        ['query', 'kind', 'at', 'placement']
+      ),
+    args: () =>
+      z.object({
+        query: z.string().min(1).max(100),
+        kind: z.enum(['photo', 'video']),
+        at: seconds,
+        duration: num(0.2, 120).optional(),
+        placement: z.enum(['fullscreen', 'overlay']),
+        position: z.enum(POSITIONS).optional(),
+        size: num(5, 100).optional(),
+      }),
+  },
+  generate_image: {
+    description:
+      'Generate an image with AI from a description and add it: for something specific, imaginary or stylised (illustrations, scenes that would not exist as stock, a thumbnail-style background), or when the user asks to generate or create an image. It is made when the user applies, and counts toward their monthly generated images; prefer add_stock for ordinary real-world photos.',
+    parameters: () =>
+      S.obj(
+        {
+          prompt: S.str('A detailed description of the image: subject, setting, style, lighting, colours. No text in the image unless asked.'),
+          aspect: S.enum('Shape (default: the project shape for fullscreen, 1:1 for overlay)', ['16:9', '9:16', '1:1', '4:3', '3:4']),
+          at: S.num('Start, seconds'),
+          duration: S.num('How long it shows, seconds (default 4)'),
+          placement: S.enum('fullscreen = fills the frame, under text and stickers; overlay = a smaller picture on top', ['fullscreen', 'overlay']),
+          position: S.enum('Overlay only: where (default centre)', [...POSITIONS]),
+          size: S.num('Overlay only: width, % of the frame width (default 40)'),
+        },
+        ['prompt', 'at', 'placement']
+      ),
+    args: () =>
+      z.object({
+        prompt: z.string().min(3).max(1000),
+        aspect: z.enum(['16:9', '9:16', '1:1', '4:3', '3:4']).optional(),
+        at: seconds,
+        duration: num(0.2, 120).optional(),
+        placement: z.enum(['fullscreen', 'overlay']),
+        position: z.enum(POSITIONS).optional(),
         size: num(5, 100).optional(),
       }),
   },

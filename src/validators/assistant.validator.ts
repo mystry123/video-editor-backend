@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { IMAGE_ASPECTS } from '../services/ai/imageGen';
 
 const list = (max: number) => z.array(z.string().min(1).max(60)).max(max).optional();
 
@@ -26,3 +27,7 @@ export const chatSchema = z.object({
 
 export const addMemorySchema = z.object({ body: z.object({ note: z.string().trim().min(3).max(300) }) });
 export const deleteMemorySchema = z.object({ params: z.object({ id: z.string().uuid() }) });
+
+export const generateImageSchema = z.object({
+  body: z.object({ prompt: z.string().trim().min(3).max(1000), aspect: z.enum(IMAGE_ASPECTS).optional() }),
+});
