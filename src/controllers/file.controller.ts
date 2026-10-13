@@ -441,6 +441,7 @@ export const listFiles = async (
     if (type && String(type).toLowerCase() !== "all") {
       // Fonts are often uploaded without a font type: match the extension
       if (String(type).toLowerCase() === 'font') query.storageKey = { $regex: '\\.(ttf|otf|woff2?)$' };
+      else if (String(type).toLowerCase() === 'lottie') query.mimeType = 'application/json';
       else query.mimeType = { $regex: `^${String(type).toLowerCase()}/` };
     }
 

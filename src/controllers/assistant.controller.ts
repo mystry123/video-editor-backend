@@ -62,6 +62,7 @@ const TOOL_WORDS: Record<string, string> = {
   add_sound_effect: 'a sound effect',
   add_gif: 'a sticker or GIF',
   add_stock: 'stock media',
+  add_lottie: 'a Lottie animation',
   generate_image: 'an AI image',
   propose_plan: 'a plan',
   remember: 'remembering it',
