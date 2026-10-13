@@ -84,8 +84,9 @@ export function plainReply(text: string): string {
 /** When the model sends tool calls with no words: say what came */
 function fallbackReply(calls: CheckedCall[]): string {
   const edits = calls.filter((c) => c.name !== 'propose_plan');
-  if (calls.some((c) => c.name === 'propose_plan')) return edits.length ? 'Here is a plan, plus some changes, for you to review.' : 'Here is a plan for you to review.';
-  if (edits.length) return `Here ${edits.length === 1 ? 'is 1 change' : `are ${edits.length} changes`} for you to review.`;
+  if (calls.some((c) => c.name === 'propose_plan')) return edits.length ? "Here's a plan, plus a few changes to start." : "Here's a plan. Untick any step you don't want, then run it.";
+  if (edits.length === 1) return "Here's the change. Check it, then apply.";
+  if (edits.length) return `Here are ${edits.length} changes. Untick any you don't want, then apply.`;
   return "I couldn't work out an edit for that. Can you say it another way?";
 }
 
