@@ -140,6 +140,14 @@ describe('assistant', () => {
     expect(answer.body).toMatchObject({ reply: 'It is 10 seconds long.', calls: [] });
   });
 
+  it('treats null options as not given', async () => {
+    const user = await createUser();
+    replies.push(reply('ok', [{ name: 'update_clip', args: { id: 'c1', font_size: 90, background_color: null, color: null } as any }]));
+    const res = await api().post('/api/v1/ai/chat').set(user.auth).send(body('bigger title'));
+    expect(fake.generate).toHaveBeenCalledTimes(1);
+    expect(res.body.calls).toEqual([{ name: 'update_clip', args: { id: 'c1', font_size: 90 } }]);
+  });
+
   it('validates the request', async () => {
     const user = await createUser();
     expect((await api().post('/api/v1/ai/chat').set(user.auth).send({ ...body('x'), messages: [{ role: 'model', text: 'x' }] })).status).toBe(400);

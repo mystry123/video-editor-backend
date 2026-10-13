@@ -328,6 +328,15 @@ export interface CheckedCall {
   args: Record<string, unknown>;
 }
 
+/** Models often send null for options they don't want to set: same as leaving them out */
+function dropNulls(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(dropNulls);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== null && v !== undefined).map(([k, v]) => [k, dropNulls(v)]));
+  }
+  return value;
+}
+
 /** Splits the model's calls into valid ones (args parsed) and problems to report back. */
 export function checkCalls(
   calls: Array<{ name: string; args: Record<string, unknown> }>,
@@ -343,7 +352,7 @@ export function checkCalls(
       problems.push(`${call.name}: there is no such tool`);
       continue;
     }
-    const parsed = def.args(caps).safeParse(call.args ?? {});
+    const parsed = def.args(caps).safeParse(dropNulls(call.args ?? {}));
     if (!parsed.success) {
       problems.push(`${call.name}: ${parsed.error.issues.map((i) => `${i.path.join('.') || 'args'} ${i.message}`).join('; ')}`);
       continue;
