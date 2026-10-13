@@ -29,3 +29,12 @@ export const signUploadPartsSchema = z.object({
     partNumbers: z.array(z.number().int().min(1).max(10_000)).min(1).max(100),
   }),
 });
+
+export const importGiphySchema = z.object({
+  body: z.object({
+    url: z.string().url().max(500),
+    title: z.string().max(200).optional(),
+    width: z.number().int().min(0).max(10000).optional(),
+    height: z.number().int().min(0).max(10000).optional(),
+  }),
+});

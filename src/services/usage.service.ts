@@ -21,6 +21,7 @@ const KINDS: Record<UsageKind, { limitField: string; legacyField: string; perUni
   ttsCharacters: { limitField: 'maxTtsCharacters', legacyField: 'ttsCharactersUsed', perUnit: 1, code: 'TTS_CHARACTERS_EXCEEDED', label: 'text-to-speech characters' },
   audioCleanupMinutes: { limitField: 'maxAudioCleanupMinutes', legacyField: 'audioCleanupMinutesUsed', perUnit: 60, code: 'AUDIO_CLEANUP_MINUTES_EXCEEDED', label: 'audio clean-up minutes' },
   soundEffects: { limitField: 'maxSoundEffects', legacyField: 'soundEffectsUsed', perUnit: 1, code: 'SOUND_EFFECTS_EXCEEDED', label: 'sound effects' },
+  aiMessages: { limitField: 'maxAiMessages', legacyField: 'aiMessagesUsed', perUnit: 1, code: 'AI_MESSAGES_EXCEEDED', label: 'assistant messages' },
   dubbingMinutes: { limitField: 'maxDubbingMinutes', legacyField: 'dubbingMinutesUsed', perUnit: 60, code: 'DUBBING_MINUTES_EXCEEDED', label: 'dubbing minutes' },
 };
 

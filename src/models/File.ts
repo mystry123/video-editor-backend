@@ -48,7 +48,7 @@ export interface IFile extends Document {
   metadata?: IFileMetadata;
   // New fields for import functionality
   /** 'tts': made by text to speech; 'voice_sample': a recording kept only until a voice is made from it. */
-  source: 'upload' | 'url' | 'google_drive' | 'tts' | 'voice_sample' | 'audio_cleanup' | 'sound_effect' | 'dubbing';
+  source: 'upload' | 'url' | 'google_drive' | 'tts' | 'voice_sample' | 'audio_cleanup' | 'sound_effect' | 'dubbing' | 'giphy';
   /** A dub in progress or done: the provider's job, the language, and the file it dubs */
   dub?: { id: string; language: string; sourceFileId: string; expectedSeconds?: number };
   sourceUrl?: string;
@@ -90,7 +90,7 @@ const FileSchema = new Schema<IFile>(
     // New fields for import functionality
     source: {
       type: String,
-      enum: ['upload', 'url', 'google_drive', 'tts', 'voice_sample', 'audio_cleanup', 'sound_effect', 'dubbing'],
+      enum: ['upload', 'url', 'google_drive', 'tts', 'voice_sample', 'audio_cleanup', 'sound_effect', 'dubbing', 'giphy'],
       default: 'upload',
     },
     sourceUrl: { type: String },
