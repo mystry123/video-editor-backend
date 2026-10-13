@@ -71,6 +71,8 @@ export interface IUser extends Document {
 
   /** What the editing assistant remembers about this user's preferences (fonts, colours, style) */
   assistantMemory?: Array<{ id: string; note: string; createdAt: Date }>;
+  /** Cue's detailed style preferences (brand, fonts, captions, format, tone…); see services/ai/preferences.ts */
+  assistantPreferences?: Record<string, unknown>;
 
   /** Starred text-to-speech voices (a copy of each voice's details: library voices aren't listed anywhere else) */
   favoriteVoices?: IFavoriteVoice[];
@@ -179,6 +181,8 @@ const UserSchema = new Schema<IUser>(
       type: [new Schema({ id: { type: String, required: true }, note: { type: String, required: true, maxlength: 300 }, createdAt: { type: Date, required: true } }, { _id: false })],
       default: undefined,
     },
+    // Checked by preferencesSchema before saving
+    assistantPreferences: { type: Schema.Types.Mixed, default: undefined },
 
     favoriteVoices: {
       type: [

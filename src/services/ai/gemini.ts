@@ -32,6 +32,8 @@ export interface GeminiRequest {
 }
 
 export interface GeminiResult {
+  /** The model that answered (another one if the asked one was over its limit) */
+  model?: string;
   text: string;
   calls: Array<{ name: string; args: Record<string, unknown> }>;
   usage: { input: number; output: number };
@@ -57,8 +59,29 @@ export function temperatureFor(model: string, asked?: number): number {
 const unavailable = () =>
   ApiError.withCode(503, 'ASSISTANT_UNAVAILABLE', "The assistant isn't available right now. Try again in a minute.");
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+class RateLimited extends Error {}
+
 const vertexClient: GeminiClient = {
-  async generate({ model, system, messages, tools, temperature }) {
+  /** Over the rate limit: one short retry, then the fallback model */
+  async generate(request) {
+    const fallback = env.aiModelFallback && env.aiModelFallback !== request.model ? env.aiModelFallback : null;
+    for (const [attempt, model] of [request.model, request.model, ...(fallback ? [fallback] : [])].entries()) {
+      try {
+        return { ...(await callVertex({ ...request, model })), model };
+      } catch (error) {
+        if (!(error instanceof RateLimited)) throw error;
+        logger.warn('Vertex rate limited', { model, attempt });
+        if (attempt === 0) await sleep(1500);
+      }
+    }
+    throw ApiError.withCode(503, 'ASSISTANT_BUSY', 'Cue is busy right now. Try again in a minute.');
+  },
+};
+
+async function callVertex({ model, system, messages, tools, temperature }: GeminiRequest): Promise<GeminiResult> {
+  {
     let token: string | null | undefined;
     try {
       token = await auth.getAccessToken();
@@ -87,6 +110,7 @@ const vertexClient: GeminiClient = {
       logger.error('Vertex unreachable', { error: (error as Error).message });
       throw unavailable();
     }
+    if (response.status === 429) throw new RateLimited();
     if (!response.ok) {
       logger.error('Vertex request failed', { status: response.status, body: (await response.text()).slice(0, 500), model });
       throw unavailable();
@@ -99,8 +123,8 @@ const vertexClient: GeminiClient = {
       calls: parts.filter((p) => p.functionCall).map((p) => ({ name: String(p.functionCall.name), args: p.functionCall.args ?? {} })),
       usage: { input: Number(body.usageMetadata?.promptTokenCount) || 0, output: Number(body.usageMetadata?.candidatesTokenCount) || 0 },
     };
-  },
-};
+  }
+}
 
 let override: GeminiClient | null = null;
 

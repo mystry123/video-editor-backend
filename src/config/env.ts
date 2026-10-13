@@ -101,6 +101,8 @@ export const env = {
   aiModel: process.env.AI_MODEL || 'gemini-3.6-flash',
   /** For requests the fast model gets wrong */
   aiModelStrong: process.env.AI_MODEL_STRONG || 'gemini-2.5-pro',
+  /** Used when a model is over its rate limit (429), after one short retry */
+  aiModelFallback: process.env.AI_MODEL_FALLBACK || 'gemini-2.5-flash',
   /** Image generation (Gemini image model on Vertex) */
   imageModel: process.env.IMAGE_MODEL || 'gemini-3.1-flash-image',
   /** Stock photos and videos (Pixabay); empty turns stock search off */

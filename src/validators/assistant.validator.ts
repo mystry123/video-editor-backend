@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { IMAGE_ASPECTS } from '../services/ai/imageGen';
+import { preferencesSchema } from '../services/ai/preferences';
 
 const list = (max: number) => z.array(z.string().min(1).max(60)).max(max).optional();
 
@@ -30,4 +31,29 @@ export const deleteMemorySchema = z.object({ params: z.object({ id: z.string().u
 
 export const generateImageSchema = z.object({
   body: z.object({ prompt: z.string().trim().min(3).max(1000), aspect: z.enum(IMAGE_ASPECTS).optional() }),
+});
+
+export const updatePreferencesSchema = z.object({
+  body: z.object({
+    // Empty strings clear a field
+    preferences: z.preprocess(
+      (v) => (v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter(([, x]) => x !== '' && x !== null)) : v),
+      preferencesSchema
+    ),
+  }),
+});
+
+const sessionMessages = z
+  .array(z.object({ role: z.enum(['user', 'model']), text: z.string().max(8000), note: z.string().max(2000).optional(), at: z.string().datetime().optional() }))
+  .max(200);
+const objectId = z.string().regex(/^[0-9a-f]{24}$/);
+
+export const listSessionsSchema = z.object({ query: z.object({ projectId: z.string().min(1).max(64) }) });
+export const createSessionSchema = z.object({
+  body: z.object({ projectId: z.string().min(1).max(64), title: z.string().max(80).optional(), messages: sessionMessages.optional() }),
+});
+export const sessionIdSchema = z.object({ params: z.object({ id: objectId }) });
+export const updateSessionSchema = z.object({
+  params: z.object({ id: objectId }),
+  body: z.object({ title: z.string().max(80).optional(), messages: sessionMessages.optional() }),
 });

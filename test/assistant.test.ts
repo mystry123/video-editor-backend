@@ -184,3 +184,27 @@ describe('isQuestion', () => {
     for (const r of ['make the title yellow', 'add captions', 'trim the first 2 seconds', 'turn this into a reel']) expect(isQuestion(r)).toBe(false);
   });
 });
+
+describe('Vertex rate limits', () => {
+  it('retries once, then answers with the fallback model', async () => {
+    const { setGeminiClient: set, getGeminiClient } = await import('../src/services/ai/gemini');
+    set(null);
+    const asked: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const model = String(url).match(/models\/([^:]+):/)![1];
+      asked.push(model);
+      if (model === 'gemini-3.6-flash') return new Response('{"error":{"code":429}}', { status: 429 });
+      return Response.json({ candidates: [{ content: { parts: [{ text: 'ok' }] } }], usageMetadata: {} });
+    }));
+    const auth = await import('google-auth-library');
+    vi.spyOn(auth.GoogleAuth.prototype, 'getAccessToken').mockResolvedValue('token' as any);
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    const pending = getGeminiClient().generate({ model: 'gemini-3.6-flash', system: 's', messages: [{ role: 'user', text: 'hi' }] });
+    await vi.runAllTimersAsync();
+    const out = await pending;
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    expect(asked).toEqual(['gemini-3.6-flash', 'gemini-3.6-flash', 'gemini-2.5-flash']);
+    expect(out).toMatchObject({ model: 'gemini-2.5-flash', text: 'ok' });
+  });
+});

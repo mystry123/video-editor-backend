@@ -26,6 +26,7 @@ import { releaseUsage, reserveUsage, settleUsage } from '../services/usage.servi
 import { getGeminiClient, type GeminiMessage } from '../services/ai/gemini';
 import { checkCalls, MAX_CALLS_PER_REPLY, toolDeclarations, type AssistantCapabilities, type CheckedCall } from '../services/ai/editorTools';
 import { ASK_MODE_NOTE, ASSISTANT_SYSTEM, PLAN_STEP_NOTE } from '../services/ai/assistantPrompt';
+import { cleanPreferences, describePreferences, type Preferences } from '../services/ai/preferences';
 
 interface ChatBody {
   /** auto (default): answers questions, proposes edits for requests. ask/edit: older editors */
@@ -89,8 +90,8 @@ function fallbackReply(calls: CheckedCall[]): string {
 
 /** The user's saved preferences, for the model's instructions */
 function memoryBlock(user: any): string {
-  const notes = (user.assistantMemory || []).map((m: any) => m.note).filter(Boolean);
-  return notes.length ? `\n\nTHE USER'S SAVED PREFERENCES (follow them unless this request says otherwise):\n- ${notes.join('\n- ')}` : '';
+  const lines = [...describePreferences(user.assistantPreferences), ...(user.assistantMemory || []).map((m: any) => m.note).filter(Boolean)];
+  return lines.length ? `\n\nTHE USER'S SAVED PREFERENCES (follow them unless this request says otherwise):\n- ${lines.join('\n- ')}` : '';
 }
 
 const memoryView = (user: any) => (user.assistantMemory || []).map((m: any) => ({ id: m.id, note: m.note, createdAt: m.createdAt }));
@@ -169,18 +170,39 @@ export const chat = async (req: AuthRequest, res: Response, next: NextFunction):
     }
 
     await settleUsage(user._id, 'aiMessages', jobId, 1);
-    logger.info('Assistant turn', { userId: String(user._id), mode, model, calls: checked.valid.length, problems: checked.problems.length, tokens: usage });
+    logger.info('Assistant turn', { userId: String(user._id), mode, model: result.model ?? model, calls: checked.valid.length, problems: checked.problems.length, tokens: usage });
     const calls: CheckedCall[] = canEdit ? checked.valid : [];
     res.json({
       reply: plainReply(result.text) || fallbackReply(calls),
       calls,
       problems: checked.problems,
-      model,
+      model: result.model ?? model,
     });
   } catch (error) {
     if (reserved) {
       await releaseUsage('aiMessages', jobId, 'assistant_failed').catch(() => undefined);
     }
+    next(error);
+  }
+};
+
+export const getPreferences = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const user = await User.findById(req.userId).select('assistantPreferences assistantMemory').lean();
+    if (!user) throw ApiError.notFound('User not found');
+    res.json({ preferences: user.assistantPreferences ?? {}, memory: memoryView(user) });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/** Replaces the detailed preferences (empty fields are removed) */
+export const updatePreferences = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const preferences = cleanPreferences(req.body.preferences as Preferences);
+    await User.updateOne({ _id: req.userId }, Object.keys(preferences).length ? { $set: { assistantPreferences: preferences } } : { $unset: { assistantPreferences: 1 } });
+    res.json({ preferences });
+  } catch (error) {
     next(error);
   }
 };
