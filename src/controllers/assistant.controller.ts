@@ -170,13 +170,13 @@ export const chat = async (req: AuthRequest, res: Response, next: NextFunction):
     }
 
     await settleUsage(user._id, 'aiMessages', jobId, 1);
-    logger.info('Assistant turn', { userId: String(user._id), mode, model, calls: checked.valid.length, problems: checked.problems.length, tokens: usage });
+    logger.info('Assistant turn', { userId: String(user._id), mode, model: result.model ?? model, calls: checked.valid.length, problems: checked.problems.length, tokens: usage });
     const calls: CheckedCall[] = canEdit ? checked.valid : [];
     res.json({
       reply: plainReply(result.text) || fallbackReply(calls),
       calls,
       problems: checked.problems,
-      model,
+      model: result.model ?? model,
     });
   } catch (error) {
     if (reserved) {
