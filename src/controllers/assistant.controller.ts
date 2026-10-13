@@ -38,6 +38,14 @@ interface ChatBody {
 
 export const MAX_MEMORY_NOTES = 30;
 
+/** When the model sends tool calls with no words: say what came */
+function fallbackReply(calls: CheckedCall[]): string {
+  const edits = calls.filter((c) => c.name !== 'propose_plan');
+  if (calls.some((c) => c.name === 'propose_plan')) return edits.length ? 'Here is a plan, plus some changes, for you to review.' : 'Here is a plan for you to review.';
+  if (edits.length) return `Here ${edits.length === 1 ? 'is 1 change' : `are ${edits.length} changes`} for you to review.`;
+  return "I couldn't work out an edit for that. Can you say it another way?";
+}
+
 /** The user's saved preferences, for the model's instructions */
 function memoryBlock(user: any): string {
   const notes = (user.assistantMemory || []).map((m: any) => m.note).filter(Boolean);
@@ -121,11 +129,7 @@ export const chat = async (req: AuthRequest, res: Response, next: NextFunction):
     logger.info('Assistant turn', { userId: String(user._id), mode, model, calls: checked.valid.length, problems: checked.problems.length, tokens: usage });
     const calls: CheckedCall[] = mode === 'edit' ? checked.valid : [];
     res.json({
-      reply:
-        result.text ||
-        (calls.length
-          ? `Here ${calls.length === 1 ? 'is 1 change' : `are ${calls.length} changes`} for you to review.`
-          : "I couldn't work out an edit for that. Can you say it another way?"),
+      reply: result.text || fallbackReply(calls),
       calls,
       problems: checked.problems,
       model,
