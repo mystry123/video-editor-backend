@@ -58,3 +58,18 @@ export const updateSessionSchema = z.object({
   params: z.object({ id: objectId }),
   body: z.object({ title: z.string().max(80).optional(), messages: sessionMessages.optional() }),
 });
+
+export const startDirectorSchema = z.object({
+  body: z.object({
+    projectId: z.string().min(1).max(100),
+    request: z.string().trim().min(3).max(4000),
+    messages: z.array(z.object({ role: z.enum(['user', 'model']), text: z.string().max(8000) })).max(30).optional(),
+    context: z.string().max(60_000),
+    project: z.object({
+      project: z.record(z.string(), z.any()),
+      elements: z.array(z.record(z.string(), z.any())).max(2000),
+    }),
+  }),
+});
+
+export const directorRunSchema = z.object({ params: z.object({ id: z.string().regex(/^[a-f0-9]{24}$/) }) });

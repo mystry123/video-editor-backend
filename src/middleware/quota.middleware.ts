@@ -804,6 +804,7 @@ export interface UsageSnapshot {
   dubbingMinutes: number;
   aiMessages: number;
   aiImages: number;
+  directorRuns: number;
   periodStart: Date;
   periodEnd: Date;
 }
@@ -831,6 +832,7 @@ export async function getUsageSnapshot(userId: string): Promise<UsageSnapshot> {
     dubbingSeconds,
     aiMessages,
     aiImages,
+    directorRuns,
   ] = await Promise.all([
     usageFetchers.getRenderMinutesUsed(userId, periodStart),
     usageFetchers.getTranscriptionMinutesUsed(userId, periodStart),
@@ -846,6 +848,7 @@ export async function getUsageSnapshot(userId: string): Promise<UsageSnapshot> {
     getMonthlyTotal(userId, 'dubbingMinutes'),
     getMonthlyTotal(userId, 'aiMessages'),
     getMonthlyTotal(userId, 'aiImages'),
+    getMonthlyTotal(userId, 'directorRuns'),
   ]);
 
   return {
@@ -863,6 +866,7 @@ export async function getUsageSnapshot(userId: string): Promise<UsageSnapshot> {
     dubbingMinutes: dubbingSeconds / 60,
     aiMessages,
     aiImages,
+    directorRuns,
     periodStart,
     periodEnd,
   };

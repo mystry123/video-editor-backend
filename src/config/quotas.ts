@@ -41,6 +41,8 @@ export interface UserQuota {
   maxAiMessages: number;
   /** Generated images per month */
   maxAiImages: number;
+  /** Cue Director runs per month (-1 = unlimited) */
+  maxDirectorRuns: number;
 }
 
 export type OverResolutionPolicy = 'downscale' | 'block';
@@ -78,6 +80,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxDubbingMinutes: 1,
     maxAiMessages: 20,
     maxAiImages: 10,
+    maxDirectorRuns: 3,
   },
   pro: {
     // Existing
@@ -110,6 +113,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxDubbingMinutes: 10,
     maxAiMessages: 500,
     maxAiImages: 100,
+    maxDirectorRuns: 50,
   },
   team: {
     // Existing
@@ -142,6 +146,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxDubbingMinutes: 60,
     maxAiMessages: 2000,
     maxAiImages: 500,
+    maxDirectorRuns: 200,
   },
   admin: {
     // Existing
@@ -174,6 +179,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxDubbingMinutes: -1,
     maxAiMessages: -1,
     maxAiImages: -1,
+    maxDirectorRuns: -1,
   },
 };
 
