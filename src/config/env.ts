@@ -98,9 +98,13 @@ export const env = {
   // workload identity on servers)
   vertexProject: process.env.VERTEX_PROJECT || 'shotline-511017',
   vertexLocation: process.env.VERTEX_LOCATION || 'global',
-  aiModel: process.env.AI_MODEL || 'gemini-2.5-flash',
+  aiModel: process.env.AI_MODEL || 'gemini-3.6-flash',
   /** For requests the fast model gets wrong */
   aiModelStrong: process.env.AI_MODEL_STRONG || 'gemini-2.5-pro',
+  /** Image generation (Gemini image model on Vertex) */
+  imageModel: process.env.IMAGE_MODEL || 'gemini-3.1-flash-image',
+  /** Stock photos and videos (Pixabay); empty turns stock search off */
+  pixabayApiKey: process.env.PIXABAY_API_KEY || '',
   
   // Email (optional - for password reset)
   smtpHost: process.env.SMTP_HOST || '',

@@ -22,6 +22,7 @@ const KINDS: Record<UsageKind, { limitField: string; legacyField: string; perUni
   audioCleanupMinutes: { limitField: 'maxAudioCleanupMinutes', legacyField: 'audioCleanupMinutesUsed', perUnit: 60, code: 'AUDIO_CLEANUP_MINUTES_EXCEEDED', label: 'audio clean-up minutes' },
   soundEffects: { limitField: 'maxSoundEffects', legacyField: 'soundEffectsUsed', perUnit: 1, code: 'SOUND_EFFECTS_EXCEEDED', label: 'sound effects' },
   aiMessages: { limitField: 'maxAiMessages', legacyField: 'aiMessagesUsed', perUnit: 1, code: 'AI_MESSAGES_EXCEEDED', label: 'assistant messages' },
+  aiImages: { limitField: 'maxAiImages', legacyField: 'aiImagesUsed', perUnit: 1, code: 'AI_IMAGES_EXCEEDED', label: 'generated images' },
   dubbingMinutes: { limitField: 'maxDubbingMinutes', legacyField: 'dubbingMinutesUsed', perUnit: 60, code: 'DUBBING_MINUTES_EXCEEDED', label: 'dubbing minutes' },
 };
 

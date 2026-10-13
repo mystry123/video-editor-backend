@@ -28,7 +28,8 @@ import { checkCalls, MAX_CALLS_PER_REPLY, toolDeclarations, type AssistantCapabi
 import { ASK_MODE_NOTE, ASSISTANT_SYSTEM, PLAN_STEP_NOTE } from '../services/ai/assistantPrompt';
 
 interface ChatBody {
-  mode: 'ask' | 'edit';
+  /** auto (default): answers questions, proposes edits for requests. ask/edit: older editors */
+  mode?: 'ask' | 'edit' | 'auto';
   messages: GeminiMessage[];
   context: string;
   capabilities?: AssistantCapabilities;
@@ -37,6 +38,46 @@ interface ChatBody {
 }
 
 export const MAX_MEMORY_NOTES = 30;
+
+/** "How do I…", "what is…", "…?" : a question to answer, not an edit to make */
+export function isQuestion(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  return /\?\s*$/.test(t) || /^(how|what|why|where|when|which|who|is|are|can|could|does|do|did|should|will|would|explain|tell me|show me how|help me understand)\b/.test(t);
+}
+
+const TOOL_WORDS: Record<string, string> = {
+  add_text: 'adding text',
+  update_clip: 'changing the clip',
+  trim_clip: 'trimming',
+  split_clip: 'splitting',
+  delete_clips: 'deleting',
+  duplicate_clip: 'duplicating',
+  set_layer: 'layer order',
+  set_keyframes: 'keyframes',
+  set_project: 'project settings',
+  set_animation: 'animations',
+  set_transition: 'transitions',
+  add_voiceover: 'a voiceover',
+  add_sound_effect: 'a sound effect',
+  add_gif: 'a sticker or GIF',
+  add_stock: 'stock media',
+  generate_image: 'an AI image',
+  propose_plan: 'a plan',
+  remember: 'remembering it',
+  add_captions: 'captions',
+  clean_audio: 'cleaning up the audio',
+  dub_clip: 'dubbing',
+};
+
+const TOOL_NAMES = new RegExp(`\\b(${Object.keys(TOOL_WORDS).join('|')})\\b(\\(\\))?`, 'g');
+
+/** Users never see internal names: tool names become words, code marks go */
+export function plainReply(text: string): string {
+  return text
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(TOOL_NAMES, (_whole, name: string) => TOOL_WORDS[name])
+    .trim();
+}
 
 /** When the model sends tool calls with no words: say what came */
 function fallbackReply(calls: CheckedCall[]): string {
@@ -66,7 +107,7 @@ export const chat = async (req: AuthRequest, res: Response, next: NextFunction):
   const jobId = uuidv4();
   let reserved = false;
   try {
-    const { mode, messages, context, capabilities = {}, planStep = false } = req.body as ChatBody;
+    const { mode = 'auto', messages, context, capabilities = {}, planStep = false } = req.body as ChatBody;
     const user = await User.findById(req.userId);
     if (!user) throw ApiError.notFound('User not found');
     await reserveUsage(user._id, 'aiMessages', jobId, 1, getEffectiveQuota(user).maxAiMessages);
@@ -76,7 +117,8 @@ export const chat = async (req: AuthRequest, res: Response, next: NextFunction):
     const base = mode === 'ask' ? `${ASSISTANT_SYSTEM}\n\n${ASK_MODE_NOTE}` : ASSISTANT_SYSTEM;
     const system = `${base}${planStep ? `\n\n${PLAN_STEP_NOTE}` : ''}${memoryBlock(user)}`;
     const exclude = planStep ? ['propose_plan'] : [];
-    const tools = mode === 'edit' ? toolDeclarations(capabilities, exclude) : undefined;
+    const canEdit = mode !== 'ask';
+    const tools = canEdit ? toolDeclarations(capabilities, exclude) : undefined;
     let conversation = withContext(messages, context);
 
     let model = env.aiModel;
@@ -86,7 +128,8 @@ export const chat = async (req: AuthRequest, res: Response, next: NextFunction):
 
     // An edit request answered in words (e.g. a plan described instead of
     // proposed): ask once more for tool calls; a real answer stays an answer
-    if (mode === 'edit' && !result.calls.length && result.text) {
+    // (Skipped for questions, so answers stay quick.)
+    if (canEdit && !result.calls.length && result.text && !isQuestion(messages[messages.length - 1].text)) {
       const nudged = await gemini.generate({
         model,
         system,
@@ -127,9 +170,9 @@ export const chat = async (req: AuthRequest, res: Response, next: NextFunction):
 
     await settleUsage(user._id, 'aiMessages', jobId, 1);
     logger.info('Assistant turn', { userId: String(user._id), mode, model, calls: checked.valid.length, problems: checked.problems.length, tokens: usage });
-    const calls: CheckedCall[] = mode === 'edit' ? checked.valid : [];
+    const calls: CheckedCall[] = canEdit ? checked.valid : [];
     res.json({
-      reply: result.text || fallbackReply(calls),
+      reply: plainReply(result.text) || fallbackReply(calls),
       calls,
       problems: checked.problems,
       model,

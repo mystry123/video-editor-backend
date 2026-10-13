@@ -148,9 +148,39 @@ describe('assistant', () => {
     expect(res.body.calls).toEqual([{ name: 'update_clip', args: { id: 'c1', font_size: 90 } }]);
   });
 
+  it('auto mode (the default) answers questions without the edit nudge, and edits on requests', async () => {
+    const user = await createUser();
+    replies.push(reply('Select the clip, open **Animations** in the right panel, then pick **Pop**.'));
+    const { mode: _m, ...noMode } = body('how do I make the title pop in?') as any;
+    const answer = await api().post('/api/v1/ai/chat').set(user.auth).send(noMode);
+    expect(answer.status).toBe(200);
+    expect(fake.generate).toHaveBeenCalledTimes(1);
+    expect(requests[0].tools?.length).toBeGreaterThan(0);
+    expect(answer.body.calls).toEqual([]);
+
+    replies.push(reply('Making the title yellow.', [{ name: 'update_clip', args: { id: 'c1', color: '#FFFF00' } }]));
+    const edit = await api().post('/api/v1/ai/chat').set(user.auth).send({ ...body('make the title yellow'), mode: 'auto' });
+    expect(edit.body.calls).toEqual([{ name: 'update_clip', args: { id: 'c1', color: '#FFFF00' } }]);
+  });
+
+  it('never shows tool names to the user', async () => {
+    const user = await createUser();
+    replies.push(reply('You can use `set_animation` or set_keyframes() for that; the file my_clip.mp4 stays.'));
+    const res = await api().post('/api/v1/ai/chat').set(user.auth).send(body('how do I animate it?'));
+    expect(res.body.reply).toBe('You can use animations or keyframes for that; the file my_clip.mp4 stays.');
+  });
+
   it('validates the request', async () => {
     const user = await createUser();
     expect((await api().post('/api/v1/ai/chat').set(user.auth).send({ ...body('x'), messages: [{ role: 'model', text: 'x' }] })).status).toBe(400);
     expect((await api().post('/api/v1/ai/chat').set(user.auth).send({ ...body('x'), mode: 'yolo' })).status).toBe(400);
+  });
+});
+
+describe('isQuestion', () => {
+  it('tells questions from requests', async () => {
+    const { isQuestion } = await import('../src/controllers/assistant.controller');
+    for (const q of ['how do I add a transition?', 'What is in my project', 'can you explain keyframes', 'Is the music too loud?']) expect(isQuestion(q)).toBe(true);
+    for (const r of ['make the title yellow', 'add captions', 'trim the first 2 seconds', 'turn this into a reel']) expect(isQuestion(r)).toBe(false);
   });
 });

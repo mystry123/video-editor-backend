@@ -45,11 +45,20 @@ export interface GeminiClient {
 // Cloud Resource Manager API, and keyless AWS sign-in triggers the lookup)
 const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'], projectId: env.vertexProject });
 
+/**
+ * Gemini 3 and later are tuned for temperature 1 (lower makes them loop or
+ * degrade, per Google); older models do best low for tool use.
+ */
+export function temperatureFor(model: string, asked?: number): number {
+  if (/^gemini-([3-9]|\d\d)/.test(model)) return 1;
+  return asked ?? 0.2;
+}
+
 const unavailable = () =>
   ApiError.withCode(503, 'ASSISTANT_UNAVAILABLE', "The assistant isn't available right now. Try again in a minute.");
 
 const vertexClient: GeminiClient = {
-  async generate({ model, system, messages, tools, temperature = 0.2 }) {
+  async generate({ model, system, messages, tools, temperature }) {
     let token: string | null | undefined;
     try {
       token = await auth.getAccessToken();
@@ -70,7 +79,7 @@ const vertexClient: GeminiClient = {
           ...(tools?.length
             ? { tools: [{ functionDeclarations: tools }], toolConfig: { functionCallingConfig: { mode: 'AUTO' } } }
             : {}),
-          generationConfig: { temperature },
+          generationConfig: { temperature: temperatureFor(model, temperature) },
         }),
         signal: AbortSignal.timeout(90_000),
       });
@@ -85,7 +94,8 @@ const vertexClient: GeminiClient = {
     const body = (await response.json()) as any;
     const parts: any[] = body.candidates?.[0]?.content?.parts ?? [];
     return {
-      text: parts.map((p) => p.text || '').join('').trim(),
+      // Thought summaries (if any) aren't part of the reply
+      text: parts.filter((p) => !p.thought).map((p) => p.text || '').join('').trim(),
       calls: parts.filter((p) => p.functionCall).map((p) => ({ name: String(p.functionCall.name), args: p.functionCall.args ?? {} })),
       usage: { input: Number(body.usageMetadata?.promptTokenCount) || 0, output: Number(body.usageMetadata?.candidatesTokenCount) || 0 },
     };

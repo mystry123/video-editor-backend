@@ -11,6 +11,7 @@ import reframeRoutes from './reframe.routes';
 import adminRoutes from './admin.routes';
 import voiceRoutes from './voice.routes';
 import assistantRoutes from './assistant.routes';
+import stockRoutes from './stock.routes';
 const router: ExpressRouter = Router();
 
 router.use('/auth', authRoutes);
@@ -27,5 +28,6 @@ router.use('/reframe', reframeRoutes);
 router.use('/admin', adminRoutes);
 router.use('/voice', voiceRoutes);
 router.use('/ai', assistantRoutes);
+router.use('/stock', stockRoutes);
 
 export default router;

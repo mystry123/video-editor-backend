@@ -38,3 +38,7 @@ export const importGiphySchema = z.object({
     height: z.number().int().min(0).max(10000).optional(),
   }),
 });
+
+export const importStockSchema = z.object({
+  body: z.object({ kind: z.enum(['photo', 'video']), id: z.union([z.string().regex(/^\d{1,12}$/), z.number().int().positive()]).transform(String) }),
+});
