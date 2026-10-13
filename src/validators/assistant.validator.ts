@@ -5,7 +5,7 @@ const list = (max: number) => z.array(z.string().min(1).max(60)).max(max).option
 
 export const chatSchema = z.object({
   body: z.object({
-    mode: z.enum(['ask', 'edit']),
+    mode: z.enum(['ask', 'edit', 'auto']).optional(),
     messages: z
       .array(z.object({ role: z.enum(['user', 'model']), text: z.string().min(1).max(8000) }))
       .min(1)
