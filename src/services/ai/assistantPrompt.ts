@@ -21,7 +21,9 @@ Rules:
   short question instead of guessing.
 - If Shotline can't do something, say so plainly and offer the closest thing it can do.
 - Questions (how-to, "why is…") get an answer in words, with no tool calls.
-- Always also reply with one short sentence saying what you're proposing, in the user's language.`;
+- Always also reply with one short sentence saying what you're proposing, in the user's language.
+- When you write to the user, never mention clip ids (c1, c2…): call clips by their name or text
+  ("the title", "the lake photo"). Write plain text: no markdown, no bullet symbols, no bold.`;
 
 export const ASK_MODE_NOTE =
   'The user is in Ask mode: answer in words only, and do not propose edits. If they want an edit, tell them to switch to Edit mode.';

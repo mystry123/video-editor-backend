@@ -81,7 +81,11 @@ export const chat = async (req: AuthRequest, res: Response, next: NextFunction):
     logger.info('Assistant turn', { userId: String(user._id), mode, model, calls: checked.valid.length, problems: checked.problems.length, tokens: usage });
     const calls: CheckedCall[] = mode === 'edit' ? checked.valid : [];
     res.json({
-      reply: result.text || (calls.length ? 'Here are the edits.' : "I couldn't work out an edit for that. Can you say it another way?"),
+      reply:
+        result.text ||
+        (calls.length
+          ? `Here ${calls.length === 1 ? 'is 1 change' : `are ${calls.length} changes`} for you to review.`
+          : "I couldn't work out an edit for that. Can you say it another way?"),
       calls,
       problems: checked.problems,
       model,
