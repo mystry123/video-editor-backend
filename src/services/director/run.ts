@@ -31,10 +31,11 @@ import { saveAudio } from '../../controllers/audioTools.controller';
 import { copyStockToMedia } from '../../controllers/stock.controller';
 import { searchStock, stockEnabled } from '../stock.service';
 import { footageAnalysis } from './footage';
-import { attachAnalyses, cutProblems, sourcesOf, type ProjectJson, type Segment } from './sources';
+import { attachAnalyses, cutProblems, sourcesOf, type Cutaway, type ProjectJson, type Segment, type Source } from './sources';
 import { cutStory, designMotion, designSound, designType, scoutAssets, writeBrief, type AssetPart, type Brief, type MotionPart, type SoundPart, type TypePart } from './crew';
 import { compileEdit, frameFor, type AudioAsset, type CompiledEdit, type VisualAsset } from './compile';
 import { editProblems } from './checks';
+import { GOOD_ENOUGH, renderStoryboard, reviewDraft, type Review, type StoryboardFrame } from './review';
 
 export interface DirectorInput {
   projectId: string;
@@ -50,6 +51,10 @@ export interface DirectorInput {
 const MAX_SOURCES = 6;
 const MAX_SFX = 6;
 const MAX_VISUALS = 3;
+/** Review rounds before the draft goes to the user anyway */
+const MAX_REVIEWS = 2;
+/** No new review round starts after this long (a round takes about a minute) */
+const REVIEW_BUDGET_MS = 8 * 60 * 1000;
 
 class Stopped extends Error {}
 
@@ -129,14 +134,15 @@ async function carryOut(runId: string, input: DirectorInput): Promise<void> {
 
     // --- Cutting ---
     let segments: Segment[] = [];
+    let cutaways: Cutaway[] = [];
     if (watched.length) {
       await progress(runId, 'cutting', 'Story editor is choosing the moments');
       let cut = await cutStory({ brief, sources: watched });
       for (let attempt = 0; attempt < 2; attempt++) {
-        const problems = cutProblems(cut.segments, watched, brief.targetSeconds);
+        const problems = cutProblems(cut.segments, watched, brief.targetSeconds, cut.cutaways);
         if (!problems.length) break;
         await progress(runId, 'cutting', `Fixing the cut: ${problems[0]}`);
-        cut = await cutStory({ brief, sources: watched, problems, previous: cut.segments });
+        cut = await cutStory({ brief, sources: watched, problems, previous: cut.segments, previousCutaways: cut.cutaways });
       }
       // Whatever still doesn't fit its source is clamped or dropped
       const byRef = new Map(watched.map((s) => [s.ref, s]));
@@ -144,14 +150,14 @@ async function carryOut(runId: string, input: DirectorInput): Promise<void> {
         .filter((s) => byRef.has(s.source))
         .map((s) => ({ ...s, from: Math.max(0, s.from), to: Math.min(byRef.get(s.source)!.duration || s.to, s.to) }))
         .filter((s) => s.to - s.from >= 0.3);
+      cutaways = keepValidCutaways(cut.cutaways, segments, watched);
       const length = segments.reduce((t, s) => t + s.to - s.from, 0);
-      await progress(runId, 'cutting', `Cut: ${segments.length} moments, ${length.toFixed(1)}s`);
+      await progress(runId, 'cutting', `Cut: ${segments.length} moments${cutaways.length ? ` + ${cutaways.length} cutaways` : ''}, ${length.toFixed(1)}s`);
     }
 
     // --- Crafting (in parallel) ---
     await progress(runId, 'crafting', 'Titles, captions, motion, sound and B-roll are being designed');
     const frame = frameFor(brief.aspect, input.project);
-    const onCut = { brief, segments, sources: watched, frame };
     const settle = async <T>(label: string, job: Promise<T>): Promise<T | undefined> => {
       try {
         return await job;
@@ -160,24 +166,81 @@ async function carryOut(runId: string, input: DirectorInput): Promise<void> {
         return undefined;
       }
     };
-    const [type, motion, sound, assets] = await Promise.all([
-      settle<TypePart>('type', designType(onCut)),
-      segments.length ? settle<MotionPart>('motion', designMotion(onCut)) : Promise.resolve(undefined),
-      settle<SoundPart>('sound', designSound(onCut)),
-      brief.assets && !/^none\b/i.test(brief.assets.trim()) ? settle<AssetPart>('assets', scoutAssets(onCut)) : Promise.resolve(undefined),
-    ]);
-    await progress(runId, 'crafting', [type && `${type.titles.length} titles${type.captions.use ? ' + captions' : ''}`, motion && `${motion.pieces.filter((p) => p.move !== 'none').length} moves`, sound && `${sound.sfx.length} sound effects`, assets?.assets.length ? `${assets.assets.length} B-roll` : ''].filter(Boolean).join(', ') || 'Designed', { parts: { type, motion, sound, assets } });
+    const wantsAssets = !!brief.assets && !/^none\b/i.test(brief.assets.trim());
+    let parts: { type?: TypePart; motion?: MotionPart; sound?: SoundPart; assets?: AssetPart } = {};
+    /** Runs the specialists named (all when none are), each with its review notes */
+    const craft = async (only: Set<string> | null, notes: Review['notes'] = {}) => {
+      const onCut = (key: string) => ({ brief, segments, cutaways, sources: watched, frame, notes: notes[key as keyof Review['notes']] });
+      const want = (key: string) => !only || only.has(key);
+      const [type, motion, sound, assets] = await Promise.all([
+        want('type') ? settle<TypePart>('type', designType(onCut('type'))) : Promise.resolve(parts.type),
+        want('motion') && segments.length ? settle<MotionPart>('motion', designMotion(onCut('motion'))) : Promise.resolve(parts.motion),
+        want('sound') ? settle<SoundPart>('sound', designSound(onCut('sound'))) : Promise.resolve(parts.sound),
+        want('assets') && (wantsAssets || notes.assets) ? settle<AssetPart>('assets', scoutAssets(onCut('assets'))) : Promise.resolve(parts.assets),
+      ]);
+      // A specialist that failed this time keeps its last answer
+      parts = { type: type ?? parts.type, motion: motion ?? parts.motion, sound: sound ?? parts.sound, assets: assets ?? parts.assets };
+    };
+    await craft(null);
+    await progress(runId, 'crafting', craftSummary(parts), { parts });
 
     // --- Assembling ---
+    let sfx: Array<{ at: number; asset: AudioAsset }> = [];
+    let visuals: VisualAsset[] = [];
+    const assemble = async () => {
+      const total = segments.reduce((t, s) => t + s.to - s.from, 0);
+      sfx = await soundEffects(user, (parts.sound?.sfx ?? []).filter((s) => s.at >= 0 && s.at < total).slice(0, MAX_SFX));
+      visuals = await pictures(user, parts.assets?.assets ?? []);
+      return compileEdit({ original: input.project, brief, sources: watched, segments, cutaways, ...parts, sfx, visuals, words });
+    };
     await progress(runId, 'assembling', 'Making sound effects and putting the edit together');
-    const total = segments.reduce((t, s) => t + s.to - s.from, 0);
-    const sfx = await soundEffects(user, (sound?.sfx ?? []).filter((s) => s.at >= 0 && s.at < total).slice(0, MAX_SFX));
-    const visuals = await pictures(user, assets?.assets ?? []);
-    let edit: CompiledEdit = compileEdit({ original: input.project, brief, sources: watched, segments, type, motion, sound, sfx, visuals, words });
-    const problems = editProblems(edit);
-    if (problems.length) logger.warn('Director edit has problems', { runId, problems });
+    let edit: CompiledEdit = await assemble();
+    let problems = editProblems(edit);
 
-    const result = { ...edit, summary: summaryOf(brief, edit), problems };
+    // --- Reviewing: the director looks at real frames; revisions until it's good enough ---
+    const reviews: Array<Review & { round: number; frames: Array<Omit<StoryboardFrame, 'bytes'>> }> = [];
+    let storyboard: Array<Omit<StoryboardFrame, 'bytes'>> = [];
+    for (let round = 1; round <= MAX_REVIEWS; round++) {
+      if (Date.now() - started > REVIEW_BUDGET_MS) break;
+      await progress(runId, 'reviewing', round === 1 ? 'Director is watching the draft' : `Director is checking revision ${round - 1}`);
+      let review: Review;
+      let frames: StoryboardFrame[] = [];
+      try {
+        frames = await renderStoryboard(edit, String(user._id), runId, round);
+        review = await reviewDraft({ brief, request: input.request, edit, frames, problems, round });
+      } catch (error) {
+        logger.warn('Director review failed; the draft goes as it is', { runId, error: (error as Error).message });
+        break;
+      }
+      storyboard = frames.map(({ bytes: _bytes, ...f }) => f);
+      reviews.push({ ...review, round, frames: storyboard });
+      const verdict = `Score ${review.score}/10${review.issues.length ? `: ${review.issues[0].problem}` : ''}`;
+      await progress(runId, 'reviewing', verdict, { reviews });
+      if (review.verdict === 'ship' || review.score >= GOOD_ENOUGH || round === MAX_REVIEWS) break;
+
+      // --- Revising: only the parts with notes (a new cut means everything on it is redone) ---
+      const asked = new Set(Object.keys(review.notes));
+      for (const i of review.issues) asked.add(i.who);
+      const notes = { ...review.notes };
+      for (const i of review.issues) notes[i.who] = [notes[i.who], `${i.problem} → ${i.fix}`].filter(Boolean).join('\n');
+      await progress(runId, 'revising', `Revising: ${[...asked].map((a) => CREW_WORDS[a] ?? a).join(', ')}`);
+      if (asked.has('story') && watched.length) {
+        const recut = await cutStory({ brief, sources: watched, previous: segments, previousCutaways: cutaways, notes: notes.story });
+        const fixed = cutProblems(recut.segments, watched, brief.targetSeconds);
+        if (!fixed.some((p) => /outside|no source|before it starts/.test(p))) {
+          segments = recut.segments;
+          cutaways = keepValidCutaways(recut.cutaways, segments, watched);
+        }
+        await craft(null, notes);
+      } else {
+        await craft(asked, notes);
+      }
+      edit = await assemble();
+      problems = editProblems(edit);
+    }
+
+    const last = reviews[reviews.length - 1];
+    const result = { ...edit, summary: summaryOf(brief, edit), problems, storyboard, review: last ? { score: last.score, strengths: last.strengths, rounds: reviews.length } : null };
     await progress(runId, 'done', `Ready in ${Math.round((Date.now() - started) / 1000)}s`, { result });
     await settleUsage(user._id, 'directorRuns', run.usageJobId);
   } catch (error) {
@@ -189,6 +252,18 @@ async function carryOut(runId: string, input: DirectorInput): Promise<void> {
     });
     await releaseUsage('directorRuns', run.usageJobId, stopped ? 'stopped' : 'failed').catch(() => undefined);
   }
+}
+
+/** Cutaways that fit their piece and source (the rest are dropped) */
+function keepValidCutaways(cutaways: Cutaway[], segments: Segment[], sources: Source[]): Cutaway[] {
+  return cutaways.filter((c) => !cutProblems(segments, sources, undefined, [c]).some((p) => p.startsWith('Cutaway')));
+}
+
+const CREW_WORDS: Record<string, string> = { story: 'the cut', type: 'titles and captions', motion: 'motion', sound: 'sound', assets: 'B-roll' };
+
+function craftSummary(parts: { type?: TypePart; motion?: MotionPart; sound?: SoundPart; assets?: AssetPart }): string {
+  const { type, motion, sound, assets } = parts;
+  return [type && `${type.titles.length} title${type.titles.length === 1 ? '' : 's'}${type.captions.use ? ' + captions' : ''}`, motion && `${motion.pieces.filter((p) => p.move !== 'none').length} moves`, sound && `${sound.sfx.length} sound effects`, assets?.assets.length ? `${assets.assets.length} B-roll` : ''].filter(Boolean).join(', ') || 'Designed';
 }
 
 function friendly(error: unknown): string {

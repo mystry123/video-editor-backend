@@ -162,7 +162,7 @@ async function watchPiece(file: IFile, isVideo: boolean, start: number, seconds:
         .slice(0, 20000)}`
     : '';
   const result = await getGeminiClient().generate({
-    model: env.directorWorkerModel,
+    model: env.footageModel,
     fallback: env.aiModelFallback,
     system: SYSTEM,
     messages: [
@@ -179,7 +179,7 @@ async function watchPiece(file: IFile, isVideo: boolean, start: number, seconds:
   const r = (result.json ?? {}) as Partial<MediaAnalysisResult>;
   const end = start + seconds;
   return {
-    model: result.model ?? env.directorWorkerModel,
+    model: result.model ?? env.footageModel,
     result: {
       summary: String(r.summary || ''),
       kind: String(r.kind || 'other'),

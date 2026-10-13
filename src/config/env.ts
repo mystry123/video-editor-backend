@@ -107,8 +107,10 @@ export const env = {
   imageModel: process.env.IMAGE_MODEL || 'gemini-3.1-flash-image',
   /** Cue Director: the director and reviewer (creative judgement) */
   directorModel: process.env.DIRECTOR_MODEL || 'gemini-3.1-pro-preview',
-  /** Cue Director: specialists and footage analysis (fast, can watch video) */
-  directorWorkerModel: process.env.DIRECTOR_WORKER_MODEL || 'gemini-3.5-flash',
+  /** Cue Director: the specialists (fast) */
+  directorWorkerModel: process.env.DIRECTOR_WORKER_MODEL || 'gemini-3.6-flash',
+  /** Cue Director: watches footage (video input) */
+  footageModel: process.env.DIRECTOR_FOOTAGE_MODEL || 'gemini-3.5-flash',
   /** Stock photos and videos (Pixabay); empty turns stock search off */
   pixabayApiKey: process.env.PIXABAY_API_KEY || '',
   

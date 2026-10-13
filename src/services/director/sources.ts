@@ -26,6 +26,18 @@ export interface Source {
   analysis?: MediaAnalysisResult;
 }
 
+/** Other footage shown over a piece while the piece's own sound plays on (a B-roll cutaway) */
+export interface Cutaway {
+  /** Piece number (1-based) it covers */
+  piece: number;
+  /** Seconds into that piece where the picture cuts away */
+  at: number;
+  length: number;
+  source: string;
+  /** Where in that source the picture comes from */
+  from: number;
+}
+
 export interface Segment {
   source: string;
   from: number;
@@ -100,7 +112,7 @@ export function placeSegments(segments: Segment[]): Array<Segment & { at: number
 }
 
 /** The edited timeline in words: each piece with what is seen and said, in new-timeline times */
-export function cutView(segments: Segment[], sources: Source[]): string {
+export function cutView(segments: Segment[], sources: Source[], cutaways: Cutaway[] = []): string {
   const byRef = new Map(sources.map((s) => [s.ref, s]));
   return placeSegments(segments)
     .map((p, i) => {
@@ -108,17 +120,25 @@ export function cutView(segments: Segment[], sources: Source[]): string {
       const a = src?.analysis;
       const shift = (t: number) => clock(p.at + (t - p.from));
       const seen = a?.shots.filter((x) => x.end > p.from && x.start < p.to).map((x) => cap(x.description, 80)) ?? [];
+      const onScreen = [...new Set(a?.shots.filter((x) => x.end > p.from && x.start < p.to && x.onScreenText).map((x) => cap(String(x.onScreenText), 60)) ?? [])];
       const said =
         a?.speech
           .filter((l) => l.end > p.from + 0.1 && l.start < p.to - 0.1)
           .map((l) => `${shift(Math.max(l.start, p.from))} "${cap(l.text, 120)}"`) ?? [];
-      return `#${i + 1} ${clock(p.at)}–${clock(p.at + p.length)} (${p.length.toFixed(1)}s) from ${p.source} ${clock(p.from)}–${clock(p.to)}${p.beat ? ` · ${p.beat}` : ''}\n    seen: ${seen.join('; ') || '—'}\n    said: ${said.join(' ') || '—'}`;
+      const over = cutaways
+        .filter((c) => c.piece === i + 1)
+        .map((c) => {
+          const shot = byRef.get(c.source)?.analysis?.shots.find((x) => x.end > c.from && x.start <= c.from);
+          return `\n    picture cuts away ${clock(p.at + c.at)}–${clock(p.at + c.at + c.length)} to ${c.source} ${clock(c.from)}${shot ? ` (${cap(shot.description, 70)})` : ''} while the sound plays on`;
+        })
+        .join('');
+      return `#${i + 1} ${clock(p.at)}–${clock(p.at + p.length)} (${p.length.toFixed(1)}s) from ${p.source} ${clock(p.from)}–${clock(p.to)}${p.beat ? ` · ${p.beat}` : ''}\n    seen: ${seen.join('; ') || '—'}\n    said: ${said.join(' ') || '—'}${onScreen.length ? `\n    text already in the picture: ${onScreen.map((t) => `"${t}"`).join('; ')}` : ''}${over}`;
     })
     .join('\n');
 }
 
 /** Problems with a cut a model must fix (outside its source, too short, unknown source) */
-export function cutProblems(segments: Segment[], sources: Source[], targetSeconds?: number): string[] {
+export function cutProblems(segments: Segment[], sources: Source[], targetSeconds?: number, cutaways: Cutaway[] = []): string[] {
   const byRef = new Map(sources.map((s) => [s.ref, s]));
   const problems: string[] = [];
   if (!segments.length) problems.push('The cut has no pieces.');
@@ -128,6 +148,15 @@ export function cutProblems(segments: Segment[], sources: Source[], targetSecond
     if (!(s.to > s.from)) problems.push(`Piece #${i + 1}: it ends (${clock(s.to)}) before it starts (${clock(s.from)}).`);
     else if (s.to - s.from < 0.4) problems.push(`Piece #${i + 1}: ${(s.to - s.from).toFixed(2)}s is too short to read; make it at least 0.4s.`);
     if (s.from < 0 || (src.duration && s.to > src.duration + 0.05)) problems.push(`Piece #${i + 1}: ${clock(s.from)}–${clock(s.to)} is outside ${s.source} (0:00–${clock(src.duration)}).`);
+  });
+  cutaways.forEach((c, i) => {
+    const piece = segments[c.piece - 1];
+    const src = byRef.get(c.source);
+    if (!piece) return problems.push(`Cutaway ${i + 1}: there is no piece #${c.piece}.`);
+    if (!src) return problems.push(`Cutaway ${i + 1}: there is no source ${c.source}.`);
+    if (src.kind !== 'video') problems.push(`Cutaway ${i + 1}: ${c.source} has no picture.`);
+    if (c.at < 0 || c.length < 0.4 || c.at + c.length > piece.to - piece.from + 0.05) problems.push(`Cutaway ${i + 1}: ${c.at.toFixed(1)}s + ${c.length.toFixed(1)}s doesn't fit inside piece #${c.piece} (${(piece.to - piece.from).toFixed(1)}s).`);
+    if (c.from < 0 || (src.duration && c.from + c.length > src.duration + 0.05)) problems.push(`Cutaway ${i + 1}: ${clock(c.from)} + ${c.length.toFixed(1)}s is outside ${c.source}.`);
   });
   const total = segments.reduce((t, s) => t + Math.max(0, s.to - s.from), 0);
   if (targetSeconds && Math.abs(total - targetSeconds) > Math.max(1, targetSeconds * 0.1)) {

@@ -11,6 +11,7 @@ import { compileEdit, wordsFromLines } from '../src/services/director/compile';
 import { editProblems } from '../src/services/director/checks';
 import { cutProblems, cutView, placeSegments, sourcesOf, type Source } from '../src/services/director/sources';
 import type { Brief } from '../src/services/director/crew';
+import { setStillRenderer, storyboardTimes } from '../src/services/director/review';
 
 vi.mock('../src/services/storage.service', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/services/storage.service')>();
@@ -106,6 +107,21 @@ describe('compiling an edit', () => {
     expect(editProblems(e).join(' ')).toMatch(/app buttons/);
   });
 
+  it('cutaways show other footage over a piece while its sound plays on (track 2, muted)', () => {
+    const e = compileEdit({ original, brief, sources: [source()], segments: [{ source: 'S1', from: 3, to: 9 }], cutaways: [{ piece: 1, at: 2, length: 3, source: 'S1', from: 45 }, { piece: 1, at: 5, length: 9, source: 'S1', from: 50 }] });
+    const over = e.elements.filter((x) => (e.groups.cutaways ?? []).includes(x.id));
+    // The second runs past its piece: cut to fit (1 s)
+    expect(over.map((c) => [c.track, c.time, c.trimStart, c.trimDuration, c.muted])).toEqual([[2, 2, 45, 3, true], [2, 5, 50, 1, true]]);
+    expect(e.elements.find((x) => x.track === 1)).toMatchObject({ trimStart: 3, trimDuration: 6, muted: false });
+    expect(editProblems(e)).toEqual([]);
+    expect(cutProblems([{ source: 'S1', from: 3, to: 9 }], [source()], undefined, [{ piece: 2, at: 0, length: 1, source: 'S1', from: 0 }]).join(' ')).toMatch(/no piece #2/);
+  });
+
+  it('the storyboard looks at the opening, each piece, each title and the end', () => {
+    const e = compileEdit({ original, brief, sources: [source()], segments: [{ source: 'S1', from: 3, to: 6 }, { source: 'S1', from: 39, to: 46 }], type: { titles: [{ text: 'LISBON', start: 5, end: 7, role: 'label', position: 'upper', style: 'bold', motion: 'pop' }], captions: { use: false, style: 'clean', position: 'lower' }, notes: '' } });
+    expect(storyboardTimes(e).map((f) => [Number(f.time.toFixed(2)), f.label])).toEqual([[0.4, 'the opening (hook)'], [1.5, 'piece #1'], [5.7, 'title "LISBON"'], [6.5, 'piece #2'], [9.7, 'the ending']]);
+  });
+
   it('spreads a sentence over its time when there are no word timings', () => {
     expect(wordsFromLines([{ start: 0, end: 2, text: 'one two' }])).toEqual([{ text: 'one', start: 0, end: 1 }, { text: 'two', start: 1, end: 2 }]);
   });
@@ -175,6 +191,48 @@ describe('Director runs', () => {
     expect(sfx).toHaveBeenCalledTimes(1);
     const counter = await UsageCounter.findOne({ userId: user._id, kind: 'directorRuns', period: currentPeriod() });
     expect(counter?.total).toBe(1);
+  });
+
+  it('the director reviews real frames and sends notes back until it is good enough', async () => {
+    const { token, body } = await setup();
+    const rendered: number[] = [];
+    setStillRenderer(async (_edit, frame) => {
+      rendered.push(frame);
+      return Buffer.from('jpeg');
+    });
+    let reviews = 0;
+    const base = fake.generate.getMockImplementation()!;
+    fake.generate.mockImplementation(async (req: GeminiRequest) => {
+      if (!req.system.includes('reviewing your crew')) return base(req);
+      requests.push(req);
+      reviews++;
+      const json = reviews === 1
+        ? { score: 5, verdict: 'revise', strengths: ['Good hook'], issues: [{ who: 'type', problem: 'Title too small', fix: 'Make it bigger' }], notes: { type: 'Bigger hook title' } }
+        : { score: 8, verdict: 'ship', strengths: ['Lands'], issues: [], notes: {} };
+      return { text: JSON.stringify(json), json, calls: [], usage: { input: 1, output: 1 }, model: req.model };
+    });
+    try {
+      const res = await api().post('/api/v1/ai/director').set('Authorization', `Bearer ${token}`).send(body);
+      const run = await waitFor(token, res.body.run.id);
+      expect(run.stage).toBe('done');
+      expect(reviews).toBe(2);
+      // The reviewer saw the frames as images
+      const review = requests.find((r) => r.system.includes('reviewing your crew'))!;
+      expect(review.messages[0].media?.length).toBeGreaterThan(2);
+      expect(review.messages[0].media?.[0].mimeType).toBe('image/jpeg');
+      // Only the typographer redid its part, with the notes
+      const typeCalls = requests.filter((r) => r.system.includes('typographer'));
+      expect(typeCalls).toHaveLength(2);
+      expect(typeCalls[1].messages[0].text).toContain('Bigger hook title');
+      expect(requests.filter((r) => r.system.includes('story editor'))).toHaveLength(1);
+      expect(requests.filter((r) => r.system.includes('motion designer'))).toHaveLength(1);
+      expect(run.events.map((e: any) => e.text)).toEqual(expect.arrayContaining(['Score 5/10: Title too small', 'Revising: titles and captions', 'Score 8/10']));
+      expect(run.result.review).toMatchObject({ score: 8, rounds: 2 });
+      expect(run.result.storyboard[0].url).toMatch(/^https:\/\/cdn\.test\/users\/.+\/director\//);
+    } finally {
+      setStillRenderer(null);
+      fake.generate.mockImplementation(base);
+    }
   });
 
   it('a second sound effect of the same kind reuses the first file', async () => {

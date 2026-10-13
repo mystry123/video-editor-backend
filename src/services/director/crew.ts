@@ -11,7 +11,7 @@
 
 import { env } from '../../config/env';
 import { getGeminiClient } from '../ai/gemini';
-import { clock, cutView, sourceDigest, type Segment, type Source } from './sources';
+import { clock, cutView, sourceDigest, type Cutaway, type Segment, type Source } from './sources';
 
 // ---------------------------------------------------------------------------
 // Vocabulary (compile.ts maps each word to real editor settings)
@@ -48,6 +48,7 @@ export interface Brief {
 
 export interface Cut {
   segments: Segment[];
+  cutaways: Cutaway[];
   notes: string;
 }
 
@@ -98,7 +99,8 @@ async function ask<T>(opts: { model: string; system: string; text: string; schem
     messages: [{ role: 'user', text: opts.text }],
     jsonSchema: opts.schema,
     thinking: opts.thinking,
-    timeoutMs: opts.timeoutMs ?? 120_000,
+    // Specialists answer in seconds; a stuck call moves on to the fallback quickly
+    timeoutMs: opts.timeoutMs ?? (opts.model === env.directorModel ? 120_000 : 60_000),
   });
   return result.json as T;
 }
@@ -154,6 +156,16 @@ const CUT_SCHEMA = obj({
     }),
     'The pieces in playing order'
   ),
+  cutaways: arr(
+    obj({
+      piece: { type: 'INTEGER', description: 'Piece number (#1…) whose sound keeps playing' },
+      at: N('Seconds into that piece where the picture cuts away'),
+      length: N('Seconds the other picture shows (fits inside the piece)'),
+      source: S('S1, S2…'),
+      from: S('Where in that source the picture comes from, M:SS.s'),
+    }),
+    'B-roll over speech: the piece\'s voice plays on while the picture shows something else (what is talked about, a scenic shot). Empty if none.'
+  ),
   notes: S('One or two sentences on the choices'),
 });
 
@@ -164,16 +176,19 @@ const time = (v: unknown) => {
   return t.split(':').reduce((a, p) => a * 60 + Number(p), 0);
 };
 
-export async function cutStory(input: { brief: Brief; sources: Source[]; problems?: string[]; notes?: string; previous?: Segment[] }): Promise<Cut> {
+export async function cutStory(input: { brief: Brief; sources: Source[]; problems?: string[]; notes?: string; previous?: Segment[]; previousCutaways?: Cutaway[] }): Promise<Cut> {
   const system = `You are the story editor. You build the cut: which spans of footage play, in what order, to hit the brief's beats and length exactly.
 Use the logged shots, speech and moments; choose the strongest material. Start and end each piece on the edges of what is said (use the "Said" times) so no sentence is cut off, or on shot changes for pieces without speech. Pieces may come from anywhere in any source, in any order (a later line can open the edit as the hook).
+Cutaways: while someone talks, the picture can cut away to other footage (what they talk about, a beautiful shot) and the voice plays on — the classic way to keep a talking edit visual and fast. Use them when the brief asks for voice over B-roll or when a speaking piece runs long on one face.
 The pieces' lengths must add up to the brief's target length (within 10%).
 
 ${CRAFT}`;
   const fix = input.problems?.length ? `\n\nYOUR LAST CUT HAD THESE PROBLEMS — FIX THEM\n- ${input.problems.join('\n- ')}` : '';
-  const prev = input.previous?.length ? `\n\nYOUR LAST CUT\n${input.previous.map((s, i) => `#${i + 1} ${s.source} ${clock(s.from)}–${clock(s.to)} ${s.beat ?? ''}`).join('\n')}` : '';
+  const prev = input.previous?.length
+    ? `\n\nYOUR LAST CUT\n${input.previous.map((s, i) => `#${i + 1} ${s.source} ${clock(s.from)}–${clock(s.to)} ${s.beat ?? ''}`).join('\n')}${(input.previousCutaways ?? []).map((c) => `\ncutaway over #${c.piece} at ${c.at}s for ${c.length}s → ${c.source} ${clock(c.from)}`).join('')}`
+    : '';
   const text = `BRIEF\n${JSON.stringify(input.brief, null, 1)}\n\nFOOTAGE (logged)\n${footage(input.sources)}${prev}${fix}${input.notes ? `\n\nDIRECTOR'S NOTES ON YOUR LAST CUT\n${input.notes}` : ''}`;
-  const raw = await ask<{ segments: Array<Record<string, unknown>>; notes: string }>({ model: env.directorModel, system, text, schema: CUT_SCHEMA, thinking: 'high', timeoutMs: 150_000 });
+  const raw = await ask<{ segments: Array<Record<string, unknown>>; cutaways?: Array<Record<string, unknown>>; notes: string }>({ model: env.directorModel, system, text, schema: CUT_SCHEMA, thinking: 'high', timeoutMs: 150_000 });
   return {
     notes: String(raw.notes || ''),
     segments: (raw.segments ?? []).map((s) => ({
@@ -183,6 +198,13 @@ ${CRAFT}`;
       beat: s.beat ? String(s.beat) : undefined,
       why: s.why ? String(s.why) : undefined,
     })),
+    cutaways: (raw.cutaways ?? []).map((c) => ({
+      piece: Math.round(Number(c.piece)),
+      at: Math.round(Number(c.at) * 100) / 100,
+      length: Math.round(Number(c.length) * 100) / 100,
+      source: String(c.source || '').trim().toUpperCase(),
+      from: Math.round(time(c.from) * 100) / 100,
+    })).filter((c) => Number.isFinite(c.piece) && Number.isFinite(c.at) && Number.isFinite(c.length) && Number.isFinite(c.from)),
   };
 }
 
@@ -193,6 +215,7 @@ ${CRAFT}`;
 interface OnCut {
   brief: Brief;
   segments: Segment[];
+  cutaways?: Cutaway[];
   sources: Source[];
   frame: { width: number; height: number };
   notes?: string;
@@ -200,7 +223,7 @@ interface OnCut {
 
 const cutText = (input: OnCut) => {
   const total = input.segments.reduce((t, s) => t + (s.to - s.from), 0);
-  return `BRIEF\n${JSON.stringify(input.brief, null, 1)}\n\nTHE CUT (new timeline, ${total.toFixed(1)}s, frame ${input.frame.width}×${input.frame.height})\n${cutView(input.segments, input.sources)}${
+  return `BRIEF\n${JSON.stringify(input.brief, null, 1)}\n\nTHE CUT (new timeline, ${total.toFixed(1)}s, frame ${input.frame.width}×${input.frame.height})\n${cutView(input.segments, input.sources, input.cutaways)}${
     input.notes ? `\n\nDIRECTOR'S NOTES ON YOUR LAST PASS\n${input.notes}` : ''
   }\n\nTimes you give are seconds on the NEW timeline (0 = start of the edit).`;
 };
@@ -228,7 +251,7 @@ const TYPE_SCHEMA = obj({
 });
 
 export async function designType(input: OnCut): Promise<TypePart> {
-  const system = `You are the typographer and caption designer. Add the on-screen words that make the edit land: a hook title in the first second when it helps, labels or punchlines that add what the picture can't, a call to action if the brief wants one. Never repeat captions word for word in a title. Never cover faces or important on-screen text (check what is seen). Keep titles clear of captions (different positions).
+  const system = `You are the typographer and caption designer. Add the on-screen words that make the edit land: a hook title in the first second when it helps, labels or punchlines that add what the picture can't, a call to action if the brief wants one. If the footage already shows captions or subtitles of the speech (see "text already in the picture"), do NOT add captions (captions.use = false): two sets of captions look broken. Never repeat captions word for word in a title. Never cover faces or important on-screen text (check what is seen). Keep titles clear of captions (different positions).
 ${CRAFT}`;
   return ask<TypePart>({ model: env.directorWorkerModel, system, text: cutText(input), schema: TYPE_SCHEMA, thinking: 'low' });
 }

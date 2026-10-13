@@ -14,9 +14,9 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { AnalysisLine } from '../../models/MediaAnalysis';
 import type { Brief, MotionPart, SoundPart, TypePart } from './crew';
-import { placeSegments, type ProjectJson, type Segment, type Source } from './sources';
+import { placeSegments, type Cutaway, type ProjectJson, type Segment, type Source } from './sources';
 
-export type Group = 'cut' | 'titles' | 'captions' | 'motion' | 'sound' | 'music' | 'extras' | 'kept';
+export type Group = 'cut' | 'cutaways' | 'titles' | 'captions' | 'motion' | 'sound' | 'music' | 'extras' | 'kept';
 
 export interface CompiledEdit extends ProjectJson {
   /** Element ids (or, for motion, ids of the clips that carry it) per group */
@@ -48,6 +48,7 @@ export interface CompileInput {
   brief: Brief;
   sources: Source[];
   segments: Segment[];
+  cutaways?: Cutaway[];
   type?: TypePart;
   motion?: MotionPart;
   sound?: SoundPart;
@@ -244,6 +245,43 @@ export function compileEdit(input: CompileInput): CompiledEdit {
   }
 
 
+  // --- Cutaways: other footage over a piece while its sound plays on ---
+  for (const c of input.cutaways ?? []) {
+    const p = placed[c.piece - 1];
+    const src = byRef.get(c.source);
+    if (!p || !src || src.kind !== 'video') continue;
+    const at = Math.max(0, Math.min(p.length - 0.4, c.at));
+    const length = Math.min(c.length, p.length - at, (src.duration || Infinity) - c.from);
+    if (!(length >= 0.4) || c.from < 0) continue;
+    const el = {
+      id: id('cutaway'),
+      type: 'video',
+      name: `${src.name.replace(/\.[a-z0-9]+$/i, '')} · cutaway`,
+      source: src.url,
+      fileId: src.fileId,
+      track: 0,
+      time: r3(p.at + at),
+      duration: r3(src.duration || c.from + length),
+      trimStart: r3(c.from),
+      trimDuration: r3(length),
+      speed: 100,
+      volume: 0,
+      muted: true,
+      x: '50%',
+      y: '50%',
+      width: '100%',
+      height: '100%',
+      anchorX: 50,
+      anchorY: 50,
+      fit: 'cover',
+      opacity: 1,
+      visible: true,
+      keyframes: { scale: [{ time: 0, value: 100, easing: 'linear' }, { time: r3(length), value: 108 }] },
+    };
+    elements.push(el);
+    add('cutaways', el.id);
+  }
+
   // --- Captions: the spoken words, moved onto the new timeline ---
   const cap = input.type?.captions;
   if (cap?.use || (cap === undefined && brief.captions.use)) {
@@ -271,7 +309,7 @@ export function compileEdit(input: CompileInput): CompiledEdit {
         time: 0,
         duration: r3(Math.max(...words.map((w) => w.endMs)) / 1000),
         transcription: { words, language: sources[0]?.analysis?.language || 'en' },
-        fontSize: tall ? 5.5 : 4,
+        fontSize: tall ? 6.5 : 4.5,
         fontFamily: 'Inter',
         fontStyle: 'normal',
         lineHeight: 1.2,
@@ -379,12 +417,16 @@ export function compileEdit(input: CompileInput): CompiledEdit {
 
   // Tracks are set here, bottom to top: the cut, pictures, captions, titles, sounds, then kept layers.
   // Each overlay gets its own track (they may overlap in time; only the cut shares one)
-  const order: Group[] = ['cut', 'extras', 'captions', 'titles', 'sound', 'music', 'kept'];
+  const order: Group[] = ['cut', 'cutaways', 'extras', 'captions', 'titles', 'sound', 'music', 'kept'];
   const groupOf = new Map<string, Group>();
   for (const g of order) for (const elementId of groups[g] ?? []) if (!groupOf.has(elementId)) groupOf.set(elementId, g);
-  let nextTrack = 2;
+  // Cutaways never overlap each other (one piece's sound at a time), so they share track 2
+  let nextTrack = groups.cutaways?.length ? 3 : 2;
   const sorted = [...elements].sort((a, b) => order.indexOf(groupOf.get(a.id) ?? 'kept') - order.indexOf(groupOf.get(b.id) ?? 'kept'));
-  for (const el of sorted) el.track = groupOf.get(el.id) === 'cut' ? 1 : nextTrack++;
+  for (const el of sorted) {
+    const g = groupOf.get(el.id);
+    el.track = g === 'cut' ? 1 : g === 'cutaways' ? 2 : nextTrack++;
+  }
 
   const duration = Math.ceil(Math.max(total, ...elements.map((e) => (Number(e.time) || 0) + clipLength(e))) * 100) / 100;
   return {
