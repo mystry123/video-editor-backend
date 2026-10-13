@@ -214,6 +214,31 @@ export const EDITOR_TOOLS: Record<string, ToolDef> = {
       S.obj({ prompt: S.str('Describe the sound'), at: S.num('Start, seconds'), duration: S.num('0.5–22 seconds (omit for automatic)') }, ['prompt', 'at']),
     args: () => z.object({ prompt: z.string().min(2).max(300), at: seconds, duration: num(0.5, 22).optional() }),
   },
+  add_gif: {
+    description:
+      'Add an animated GIF or sticker from GIPHY found by a search query (stickers have transparent backgrounds: emojis, arrows, reactions, decorations). The user sees the match and can pick another before applying.',
+    parameters: () =>
+      S.obj(
+        {
+          query: S.str('What to search on GIPHY, a few words (e.g. "fire emoji", "mind blown", "celebration confetti")'),
+          kind: S.enum('gif = rectangular clip, sticker = transparent cut-out', ['gif', 'sticker']),
+          at: S.num('Start, seconds'),
+          duration: S.num('How long it shows, seconds (default 3)'),
+          position: S.enum('Where (default centre)', ['center', 'top', 'bottom', 'left', 'right', 'top-left', 'top-right', 'bottom-left', 'bottom-right']),
+          size: S.num('Width, % of the frame width (default 35 for stickers, 70 for GIFs)'),
+        },
+        ['query', 'kind', 'at']
+      ),
+    args: () =>
+      z.object({
+        query: z.string().min(1).max(80),
+        kind: z.enum(['gif', 'sticker']),
+        at: seconds,
+        duration: num(0.2, 60).optional(),
+        position: z.enum(['center', 'top', 'bottom', 'left', 'right', 'top-left', 'top-right', 'bottom-left', 'bottom-right']).optional(),
+        size: num(5, 100).optional(),
+      }),
+  },
   add_captions: {
     description: 'Add word-timed captions for a video or audio clip (transcribes it).',
     parameters: () => S.obj({ id: S.str('Video or audio clip id') }, ['id']),
