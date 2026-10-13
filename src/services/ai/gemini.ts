@@ -41,7 +41,9 @@ export interface GeminiClient {
   generate(request: GeminiRequest): Promise<GeminiResult>;
 }
 
-const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+// The project is given so the library never has to look it up (that needs the
+// Cloud Resource Manager API, and keyless AWS sign-in triggers the lookup)
+const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'], projectId: env.vertexProject });
 
 const unavailable = () =>
   ApiError.withCode(503, 'ASSISTANT_UNAVAILABLE', "The assistant isn't available right now. Try again in a minute.");
