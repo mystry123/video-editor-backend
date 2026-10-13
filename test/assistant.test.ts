@@ -193,7 +193,7 @@ describe('Vertex rate limits', () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       const model = String(url).match(/models\/([^:]+):/)![1];
       asked.push(model);
-      if (model === 'gemini-3.6-flash') return new Response('{"error":{"code":429}}', { status: 429 });
+      if (model === 'gemini-3.6-flash' || (model === 'gemini-2.5-flash' && String(url).includes('locations/global'))) return new Response('{"error":{"code":429}}', { status: 429 });
       return Response.json({ candidates: [{ content: { parts: [{ text: 'ok' }] } }], usageMetadata: {} });
     }));
     const auth = await import('google-auth-library');
@@ -203,8 +203,18 @@ describe('Vertex rate limits', () => {
     await vi.runAllTimersAsync();
     const out = await pending;
     vi.useRealTimers();
-    vi.unstubAllGlobals();
-    expect(asked).toEqual(['gemini-3.6-flash', 'gemini-3.6-flash', 'gemini-2.5-flash']);
+    // the model twice, the fallback (also busy), then the fallback in us-central1
+    expect(asked).toEqual(['gemini-3.6-flash', 'gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-2.5-flash']);
     expect(out).toMatchObject({ model: 'gemini-2.5-flash', text: 'ok' });
+    // It now rests: the next request goes straight to the fallback
+    asked.length = 0;
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      asked.push(String(url).match(/models\/([^:]+):/)![1]);
+      return Response.json({ candidates: [{ content: { parts: [{ text: 'ok' }] } }], usageMetadata: {} });
+    }));
+    await getGeminiClient().generate({ model: 'gemini-3.6-flash', system: 's', messages: [{ role: 'user', text: 'hi' }] });
+    vi.unstubAllGlobals();
+    expect(asked).toEqual(['gemini-2.5-flash']);
+    (await import('../src/services/ai/gemini')).resetRateLimits();
   });
 });

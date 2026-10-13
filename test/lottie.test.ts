@@ -127,3 +127,18 @@ describe('assistant add_lottie', () => {
     expect(checkCalls([{ name: 'add_lottie', args: { at: 0 } }], caps).problems.length).toBe(1);
   });
 });
+
+describe('GET /files by kind', () => {
+  it('lists photos without GIFs, and GIFs on their own', async () => {
+    const user = await createUser();
+    const make = (name: string, mimeType: string) =>
+      File.create({ userId: user.user._id, name, originalName: name, mimeType, size: 1, storageKey: `k/${name}-${Math.random()}`, cdnUrl: `https://cdn.test/${name}`, status: 'ready', source: 'upload' });
+    await make('a.jpg', 'image/jpeg');
+    await make('b.png', 'image/png');
+    await make('c.gif', 'image/gif');
+    const names = async (type: string) => ((await api().get(`/api/v1/files?type=${type}`).set(user.auth)).body.data as any[]).map((f) => f.name).sort();
+    expect(await names('photo')).toEqual(['a.jpg', 'b.png']);
+    expect(await names('gif')).toEqual(['c.gif']);
+    expect(await names('image')).toEqual(['a.jpg', 'b.png', 'c.gif']);
+  });
+});

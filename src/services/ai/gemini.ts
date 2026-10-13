@@ -63,24 +63,45 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 class RateLimited extends Error {}
 
+/** Models that stayed over their rate limit: skipped (straight to the fallback) until then */
+const coolingUntil = new Map<string, number>();
+const COOL_DOWN_MS = 5 * 60 * 1000;
+
+/** Tests: forget rate-limit cool-downs */
+export function resetRateLimits(): void {
+  coolingUntil.clear();
+}
+
 const vertexClient: GeminiClient = {
-  /** Over the rate limit: one short retry, then the fallback model */
+  /** Over the rate limit: one short retry, then the fallback model (and the limited one rests for a while) */
   async generate(request) {
     const fallback = env.aiModelFallback && env.aiModelFallback !== request.model ? env.aiModelFallback : null;
-    for (const [attempt, model] of [request.model, request.model, ...(fallback ? [fallback] : [])].entries()) {
+    const resting = fallback && (coolingUntil.get(request.model) ?? 0) > Date.now();
+    // Routes in order: the model (twice), the fallback, then the fallback in another region
+    // (separate capacity from the global endpoint)
+    const alt = env.vertexLocation === 'global' ? 'us-central1' : 'global';
+    const routes: Array<[string, string]> = [
+      ...(resting ? [] : ([[request.model, env.vertexLocation], [request.model, env.vertexLocation]] as Array<[string, string]>)),
+      ...(fallback ? ([[fallback, env.vertexLocation], [fallback, alt]] as Array<[string, string]>) : []),
+    ];
+    for (const [attempt, [model, location]] of routes.entries()) {
       try {
-        return { ...(await callVertex({ ...request, model })), model };
+        return { ...(await callVertex({ ...request, model }, location)), model };
       } catch (error) {
         if (!(error instanceof RateLimited)) throw error;
-        logger.warn('Vertex rate limited', { model, attempt });
-        if (attempt === 0) await sleep(1500);
+        logger.warn('Vertex rate limited', { model, location, attempt });
+        if (attempt === 0 && !resting) await sleep(1500);
+        if (attempt === 1 && model === request.model) coolingUntil.set(model, Date.now() + COOL_DOWN_MS);
       }
     }
     throw ApiError.withCode(503, 'ASSISTANT_BUSY', 'Cue is busy right now. Try again in a minute.');
   },
 };
 
-async function callVertex({ model, system, messages, tools, temperature }: GeminiRequest): Promise<GeminiResult> {
+/** How long one attempt may take before trying the next route */
+const ATTEMPT_MS = 30_000;
+
+async function callVertex({ model, system, messages, tools, temperature }: GeminiRequest, location = env.vertexLocation): Promise<GeminiResult> {
   {
     let token: string | null | undefined;
     try {
@@ -89,8 +110,8 @@ async function callVertex({ model, system, messages, tools, temperature }: Gemin
       logger.error('Vertex credentials unavailable', { error: (error as Error).message });
       throw unavailable();
     }
-    const host = env.vertexLocation === 'global' ? 'aiplatform.googleapis.com' : `${env.vertexLocation}-aiplatform.googleapis.com`;
-    const url = `https://${host}/v1/projects/${env.vertexProject}/locations/${env.vertexLocation}/publishers/google/models/${model}:generateContent`;
+    const host = location === 'global' ? 'aiplatform.googleapis.com' : `${location}-aiplatform.googleapis.com`;
+    const url = `https://${host}/v1/projects/${env.vertexProject}/locations/${location}/publishers/google/models/${model}:generateContent`;
     let response: Response;
     try {
       response = await fetch(url, {
@@ -104,9 +125,11 @@ async function callVertex({ model, system, messages, tools, temperature }: Gemin
             : {}),
           generationConfig: { temperature: temperatureFor(model, temperature) },
         }),
-        signal: AbortSignal.timeout(90_000),
+        signal: AbortSignal.timeout(ATTEMPT_MS),
       });
     } catch (error) {
+      // Too slow (Vertex busy): treated like a rate limit, so the next route is tried
+      if ((error as Error).name === 'TimeoutError') throw new RateLimited();
       logger.error('Vertex unreachable', { error: (error as Error).message });
       throw unavailable();
     }

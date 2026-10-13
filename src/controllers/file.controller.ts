@@ -442,6 +442,9 @@ export const listFiles = async (
       // Fonts are often uploaded without a font type: match the extension
       if (String(type).toLowerCase() === 'font') query.storageKey = { $regex: '\\.(ttf|otf|woff2?)$' };
       else if (String(type).toLowerCase() === 'lottie') query.mimeType = 'application/json';
+      // Images without GIFs, and GIFs on their own (the editor shows them apart)
+      else if (String(type).toLowerCase() === 'photo') query.mimeType = { $regex: '^image/', $ne: 'image/gif' };
+      else if (String(type).toLowerCase() === 'gif') query.mimeType = 'image/gif';
       else query.mimeType = { $regex: `^${String(type).toLowerCase()}/` };
     }
 
