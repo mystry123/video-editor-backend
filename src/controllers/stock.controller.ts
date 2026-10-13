@@ -73,11 +73,24 @@ export const importStock = async (req: AuthRequest, res: Response, next: NextFun
     if (!user) throw ApiError.notFound('User not found');
     const source = await stockSource(kind, String(id));
 
-    const bytes = await downloadCapped(
-      source.url,
-      kind === 'video' ? STOCK_VIDEO_MAX_BYTES : PHOTO_MAX_BYTES,
-      kind === 'video' ? 'That video is too large. Pick a shorter one.' : 'That photo is too large.'
-    );
+    // The first copy that downloads (Pixabay rate-limits some links)
+    let bytes: Buffer | null = null;
+    let lastError: unknown;
+    for (const url of source.urls) {
+      try {
+        bytes = await downloadCapped(
+          url,
+          kind === 'video' ? STOCK_VIDEO_MAX_BYTES : PHOTO_MAX_BYTES,
+          kind === 'video' ? 'That video is too large. Pick a shorter one.' : 'That photo is too large.'
+        );
+        break;
+      } catch (error) {
+        lastError = error;
+        if (error instanceof ApiError && error.code === 'STOCK_TOO_LARGE') break;
+        logger.warn('Stock download failed; trying the next copy', { url, error: (error as Error).message });
+      }
+    }
+    if (!bytes) throw lastError instanceof ApiError ? lastError : ApiError.withCode(502, 'STOCK_FETCH_FAILED', "Couldn't get that file. Try another one.");
     const sniffed = sniffMedia(bytes);
     if (!sniffed || !sniffed.type.startsWith(kind === 'video' ? 'video/' : 'image/')) {
       throw ApiError.withCode(422, 'STOCK_UNREADABLE', "That file couldn't be read. Try another one.");

@@ -25,7 +25,7 @@ const MP4 = Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from('ftypisom')
 // A real PNG header: 1376×768
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]), Buffer.from('IHDR'), Buffer.from([0, 0, 0x05, 0x60, 0, 0, 0x03, 0]), Buffer.alloc(100)]);
 
-const photoHit = { id: 101, tags: 'mountain, lake, sunrise', previewURL: 'https://cdn.pixabay.com/p/s.jpg', webformatURL: 'https://pixabay.com/get/w.jpg', largeImageURL: 'https://pixabay.com/get/l.jpg', imageWidth: 5472, imageHeight: 3648, user: 'TeeFarm', pageURL: 'https://pixabay.com/photos/101' };
+const photoHit = { id: 101, tags: 'mountain, lake, sunrise', previewURL: 'https://cdn.pixabay.com/photo/2018/03/03/06/26/girl-3194977_150.jpg', webformatURL: 'https://pixabay.com/get/w.jpg', largeImageURL: 'https://pixabay.com/get/l.jpg', imageWidth: 5472, imageHeight: 3648, user: 'TeeFarm', pageURL: 'https://pixabay.com/photos/101' };
 const videoHit = { id: 202, tags: 'city, night', duration: 12, user: 'Someone', pageURL: 'https://pixabay.com/videos/202', videos: { large: { url: 'https://cdn.pixabay.com/v/l.mp4', width: 3840, height: 2160, size: 200_000_000, thumbnail: 'https://cdn.pixabay.com/v/l.jpg' }, medium: { url: 'https://cdn.pixabay.com/v/m.mp4', width: 1920, height: 1080, size: 20_000_000, thumbnail: 'https://cdn.pixabay.com/v/m.jpg' }, tiny: { url: 'https://cdn.pixabay.com/v/t.mp4', width: 640, height: 360, size: 1_000_000, thumbnail: 'https://cdn.pixabay.com/v/t.jpg' } } };
 
 const fetched: string[] = [];
@@ -57,6 +57,8 @@ describe('stock search', () => {
     const photos = await api().get('/api/v1/stock/search?kind=photo&q=mountain lake').set(user.auth);
     expect(photos.status).toBe(200);
     expect(photos.body.items[0]).toMatchObject({ id: '101', kind: 'photo', title: 'mountain, lake, sunrise', width: 1280, height: 853 });
+    // Previews come from the CDN (pixabay.com/get links are rate limited)
+    expect(photos.body.items[0].preview).toBe('https://cdn.pixabay.com/photo/2018/03/03/06/26/girl-3194977_640.jpg');
     expect(photos.body.next).toBe(2);
     const videos = await api().get('/api/v1/stock/search?kind=video&q=city').set(user.auth);
     // The 4K copy is over the size cap: the 1080p one is used
@@ -82,7 +84,8 @@ describe('stock import', () => {
     const res = await api().post('/api/v1/files/import/stock').set(user.auth).send({ kind: 'photo', id: '101' });
     expect(res.status).toBe(201);
     expect(res.body.file).toMatchObject({ name: 'mountain, lake, sunrise.jpg', mimeType: 'image/jpeg', width: 1280, height: 853 });
-    expect(fetched).toContain('https://pixabay.com/get/l.jpg');
+    expect(fetched).toContain('https://cdn.pixabay.com/photo/2018/03/03/06/26/girl-3194977_1280.jpg');
+    expect(fetched).not.toContain('https://pixabay.com/get/l.jpg');
     expect(await File.findById(res.body.file.fileId).lean()).toMatchObject({ source: 'stock', sourceId: 'pixabay:photo:101', status: 'ready' });
   });
 
@@ -101,6 +104,23 @@ describe('stock import', () => {
     expect((await api().post('/api/v1/files/import/stock').set(user.auth).send({ kind: 'photo', id: '../etc' })).status).toBe(400);
     vi.stubGlobal('fetch', vi.fn(async (u: string) => (String(u).includes('/api/') ? Response.json({ hits: [photoHit] }) : new Response('<html>'))));
     expect((await api().post('/api/v1/files/import/stock').set(user.auth).send({ kind: 'photo', id: '101' })).status).toBe(422);
+  });
+
+  it('falls back to the next copy when one is rate limited', async () => {
+    const user = await createUser();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (raw: string) => {
+        const url = String(raw);
+        fetched.push(url);
+        if (url.startsWith('https://pixabay.com/api/')) return Response.json({ totalHits: 1, hits: [photoHit] });
+        if (url.endsWith('_1280.jpg')) return new Response('slow down', { status: 429 });
+        return new Response(new Uint8Array(JPEG));
+      })
+    );
+    const res = await api().post('/api/v1/files/import/stock').set(user.auth).send({ kind: 'photo', id: '101' });
+    expect(res.status).toBe(201);
+    expect(fetched.filter((u) => !u.includes('/api/'))).toEqual(['https://cdn.pixabay.com/photo/2018/03/03/06/26/girl-3194977_1280.jpg', 'https://pixabay.com/get/l.jpg']);
   });
 
   it('only fetches Pixabay file links', () => {
