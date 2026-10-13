@@ -93,6 +93,14 @@ export const env = {
   ttsProvider: (process.env.TTS_PROVIDER === 'sarvam' ? 'sarvam' : 'elevenlabs') as 'elevenlabs' | 'sarvam',
   // Sarvam API subscription key (dashboard.sarvam.ai)
   sarvamApiKey: process.env.SARVAM_API_KEY || '',
+
+  // AI assistant: Gemini on Vertex AI (credentials from the environment: gcloud ADC locally,
+  // workload identity on servers)
+  vertexProject: process.env.VERTEX_PROJECT || 'shotline-511017',
+  vertexLocation: process.env.VERTEX_LOCATION || 'global',
+  aiModel: process.env.AI_MODEL || 'gemini-2.5-flash',
+  /** For requests the fast model gets wrong */
+  aiModelStrong: process.env.AI_MODEL_STRONG || 'gemini-2.5-pro',
   
   // Email (optional - for password reset)
   smtpHost: process.env.SMTP_HOST || '',

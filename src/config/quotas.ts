@@ -37,6 +37,8 @@ export interface UserQuota {
   maxSoundEffects: number;
   /** Minutes of audio dubbed into another language per month (-1 = unlimited). */
   maxDubbingMinutes: number;
+  /** Messages to the editing assistant per month (-1 = unlimited). */
+  maxAiMessages: number;
 }
 
 export type OverResolutionPolicy = 'downscale' | 'block';
@@ -72,6 +74,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxAudioCleanupMinutes: 2,
     maxSoundEffects: 5,
     maxDubbingMinutes: 1,
+    maxAiMessages: 20,
   },
   pro: {
     // Existing
@@ -102,6 +105,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxAudioCleanupMinutes: 30,
     maxSoundEffects: 100,
     maxDubbingMinutes: 10,
+    maxAiMessages: 500,
   },
   team: {
     // Existing
@@ -132,6 +136,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxAudioCleanupMinutes: 120,
     maxSoundEffects: 500,
     maxDubbingMinutes: 60,
+    maxAiMessages: 2000,
   },
   admin: {
     // Existing
@@ -162,6 +167,7 @@ export const USER_QUOTAS: Record<string, UserQuota> = {
     maxAudioCleanupMinutes: -1,
     maxSoundEffects: -1,
     maxDubbingMinutes: -1,
+    maxAiMessages: -1,
   },
 };
 
