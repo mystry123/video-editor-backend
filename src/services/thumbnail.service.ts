@@ -2,7 +2,7 @@
 import { isTrustedMediaUrl } from '../utils/media';
 
 import ffmpeg from 'fluent-ffmpeg';
-import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
+import { FFMPEG_PATH } from '../utils/ffmpegPath';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -10,7 +10,7 @@ import { uploadThumbnail } from './storage.service';
 import { logger } from '../utils/logger';
 
 // Set FFmpeg path
-ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+ffmpeg.setFfmpegPath(FFMPEG_PATH);
 
 interface ThumbnailOptions {
   videoUrl: string;

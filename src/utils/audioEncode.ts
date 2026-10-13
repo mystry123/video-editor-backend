@@ -4,10 +4,9 @@
 // is what users' storage is charged for.
 
 import { spawn } from 'node:child_process';
-import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import { assertMediaUrl } from './media';
 
-const FFMPEG = process.env.FFMPEG_PATH || ffmpegInstaller.path;
+import { FFMPEG_PATH as FFMPEG } from './ffmpegPath';
 
 export function wavToMp3(wav: Buffer, { timeoutMs = 60_000 }: { timeoutMs?: number } = {}): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -21,11 +20,11 @@ export function wavToMp3(wav: Buffer, { timeoutMs = 60_000 }: { timeoutMs?: numb
       clearTimeout(timer);
       reject(e);
     });
-    child.on('close', (code) => {
+    child.on('close', (code, signal) => {
       clearTimeout(timer);
       const mp3 = Buffer.concat(out);
       if (code === 0 && mp3.length > 0) resolve(mp3);
-      else reject(new Error(`ffmpeg exited ${code}: ${err.trim().slice(0, 300)}`));
+      else reject(new Error(`ffmpeg (${FFMPEG}) exited ${code ?? signal}: ${err.trim().slice(0, 300)}`));
     });
     child.stdin.on('error', () => undefined); // ffmpeg may exit before reading everything
     child.stdin.end(wav);
@@ -49,11 +48,11 @@ export function extractAudioMp3(url: string, { timeoutMs = 5 * 60_000 }: { timeo
       clearTimeout(timer);
       reject(e);
     });
-    child.on('close', (code) => {
+    child.on('close', (code, signal) => {
       clearTimeout(timer);
       const mp3 = Buffer.concat(out);
       if (code === 0 && mp3.length > 0) resolve(mp3);
-      else reject(new Error(/does not contain any stream|Output file .* does not contain/i.test(err) ? 'NO_AUDIO' : `ffmpeg exited ${code}: ${err.trim().slice(0, 300)}`));
+      else reject(new Error(/does not contain any stream|Output file .* does not contain/i.test(err) ? 'NO_AUDIO' : `ffmpeg (${FFMPEG}) exited ${code ?? signal}: ${err.trim().slice(0, 300)}`));
     });
   });
 }
