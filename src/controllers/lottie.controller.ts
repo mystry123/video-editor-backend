@@ -16,7 +16,7 @@ import { logger } from '../utils/logger';
 import { uploadBufferToS3 } from '../services/storage.service';
 import { quotaService } from '../services/quota.service';
 import { assertCanStore } from './file.controller';
-import { isLottieFilesUrl, LOTTIE_MAX_BYTES, prepareLottie } from '../services/lottie.service';
+import { isLottieFilesUrl, LOTTIE_MAX_BYTES, meaningfulName, prepareLottie } from '../services/lottie.service';
 
 async function download(url: string): Promise<Buffer> {
   let response: globalThis.Response;
@@ -56,6 +56,15 @@ export const importLottie = async (req: AuthRequest, res: Response, next: NextFu
       if (!isLottieFilesUrl(url)) {
         throw ApiError.withCode(400, 'NOT_LOTTIEFILES', 'Paste a LottieFiles asset link (it starts with https://lottie.host/ and ends in .json or .lottie).');
       }
+      // The same link again: the copy already in their media
+      const existing = await File.findOne({ userId: user._id, source: 'lottie', sourceUrl: url, status: 'ready' }).lean();
+      if (existing) {
+        const m: any = existing.metadata ?? {};
+        res.status(200).json({
+          file: { fileId: String(existing._id), name: existing.name, url: existing.cdnUrl, mimeType: 'application/json', size: existing.size, width: m.width || 0, height: m.height || 0, duration: m.duration || 0 },
+        });
+        return;
+      }
       bytes = await download(url);
     } else {
       bytes = Buffer.from(String(data), 'base64');
@@ -65,8 +74,8 @@ export const importLottie = async (req: AuthRequest, res: Response, next: NextFu
 
     const key = `users/${user._id}/uploads/${uuidv4()}.json`;
     const cdnUrl = await uploadBufferToS3(lottie.json, key, 'application/json');
-    const fromUrl = url ? decodeURIComponent(new URL(url).pathname.split('/').pop() || '') : '';
-    const fileName = `${safeName(name || lottie.name || fromUrl) || 'Lottie animation'}.json`;
+    const fromUrl = url ? meaningfulName(decodeURIComponent(new URL(url).pathname.split('/').pop() || '')) : undefined;
+    const fileName = `${safeName((name && meaningfulName(name)) || lottie.name || fromUrl || '') || 'Lottie animation'}.json`;
     const file = await File.create({
       userId: user._id,
       name: fileName,

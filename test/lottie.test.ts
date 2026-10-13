@@ -98,6 +98,26 @@ describe('POST /files/import/lottie', () => {
   });
 });
 
+describe('Lottie names and repeats', () => {
+  it('keeps real names and drops placeholders', async () => {
+    const { meaningfulName } = await import('../src/services/lottie.service');
+    expect(meaningfulName('Confetti burst')).toBe('Confetti burst');
+    expect(meaningfulName('subscribe_button.json')).toBe('subscribe button');
+    for (const junk of ['L', 'Comp 1', 'Pre-comp 2', 'Main Scene', 'Untitled', 'IGmMCqhzpt', '', undefined]) expect(meaningfulName(junk)).toBeUndefined();
+  });
+
+  it('pasting the same link twice reuses the copy', async () => {
+    const user = await createUser();
+    served = Buffer.from(JSON.stringify(anim({ nm: 'L' })));
+    const a = await api().post('/api/v1/files/import/lottie').set(user.auth).send({ url: 'https://lottie.host/abc/IGmMCqhzpt.json' });
+    const b = await api().post('/api/v1/files/import/lottie').set(user.auth).send({ url: 'https://lottie.host/abc/IGmMCqhzpt.json' });
+    expect(a.body.file.name).toBe('Lottie animation.json');
+    expect(b.status).toBe(200);
+    expect(b.body.file.fileId).toBe(a.body.file.fileId);
+    expect(fetched).toHaveLength(1);
+  });
+});
+
 describe('assistant add_lottie', () => {
   it('takes a name from the user\'s files or a LottieFiles link, not both', () => {
     const caps = { lottie: ['Confetti burst', 'Subscribe button'] };

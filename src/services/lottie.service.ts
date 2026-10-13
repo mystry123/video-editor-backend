@@ -93,6 +93,17 @@ export function stripExpressions(node: any): number {
   return removed;
 }
 
+/** A name worth showing: not empty, not a bare letter, not "Comp 1" or a random id */
+export function meaningfulName(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const name = raw.replace(/\.(json|lottie)$/i, '').replace(/[_-]+/g, ' ').trim();
+  if (name.length < 3) return undefined;
+  if (/^(pre\s*)?comp(osition)?\s*\d*$|^(main\s*)?scene\s*\d*$|^untitled|^lottie(\s*animation)?$|^animation\s*\d*$/i.test(name)) return undefined;
+  // lottie.host file ids: ten-ish mixed-case letters/digits, no spaces
+  if (!/\s/.test(name) && /[a-z]/.test(name) && /[A-Z]/.test(name) && /^[A-Za-z0-9]{8,}$/.test(name)) return undefined;
+  return name;
+}
+
 /** Bytes of a .json or .lottie → a checked, safe Lottie JSON file */
 export function prepareLottie(bytes: Buffer): LottieInfo {
   if (bytes.length > LOTTIE_MAX_BYTES) throw ApiError.withCode(400, 'LOTTIE_TOO_LARGE', 'That animation is too large (10 MB at most).');
@@ -118,6 +129,6 @@ export function prepareLottie(bytes: Buffer): LottieInfo {
     height: Math.round(data.h),
     fps: data.fr,
     duration: Math.round(((data.op - data.ip) / data.fr) * 100) / 100,
-    name: typeof data.nm === 'string' && data.nm.trim() ? data.nm.trim() : name,
+    name: meaningfulName(data.nm) ?? meaningfulName(name),
   };
 }
