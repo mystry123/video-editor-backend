@@ -30,8 +30,18 @@ export interface StockItem {
 /** What gets copied for an item */
 export interface StockSource {
   item: StockItem;
-  url: string;
+  /** Where to copy it from, best first (another is tried if one fails) */
+  urls: string[];
   thumbnail?: string;
+}
+
+/**
+ * The same photo at another width on Pixabay's CDN (…_150.jpg → …_1280.jpg).
+ * The CDN serves 640 and 1280 reliably; pixabay.com/get links are rate limited.
+ */
+export function cdnSized(previewUrl: string | undefined, width: 640 | 1280): string | null {
+  if (!previewUrl || !/^https:\/\/cdn\.pixabay\.com\/.+_150\.(jpe?g|png)$/i.test(previewUrl)) return null;
+  return previewUrl.replace(/_150\.(jpe?g|png)$/i, `_${width}.$1`);
 }
 
 export const STOCK_PAGE_SIZE = 24;
@@ -119,17 +129,19 @@ function videoFile(hit: any): { url: string; width: number; height: number; thum
 
 function toSource(kind: StockKind, hit: any): StockSource | null {
   if (kind === 'photo') {
-    const url = hit.largeImageURL || hit.webformatURL;
-    if (!url || !hit.previewURL) return null;
+    const urls = [cdnSized(hit.previewURL, 1280), hit.largeImageURL, cdnSized(hit.previewURL, 640), hit.webformatURL].filter(
+      (u): u is string => !!u && isPixabayFileUrl(u)
+    );
+    if (!urls.length || !hit.previewURL) return null;
     // largeImageURL is at most 1280 px on its longest side
     const scale = Math.min(1, 1280 / Math.max(hit.imageWidth || 1, hit.imageHeight || 1));
     return {
-      url,
+      urls: [...new Set(urls)],
       item: {
         id: String(hit.id),
         kind,
         title: titleOf(hit),
-        preview: hit.webformatURL || hit.previewURL,
+        preview: cdnSized(hit.previewURL, 640) || hit.previewURL,
         width: Math.round((hit.imageWidth || 0) * scale),
         height: Math.round((hit.imageHeight || 0) * scale),
         user: String(hit.user || ''),
@@ -140,7 +152,7 @@ function toSource(kind: StockKind, hit: any): StockSource | null {
   const file = videoFile(hit);
   if (!file) return null;
   return {
-    url: file.url,
+    urls: [file.url],
     thumbnail: file.thumbnail,
     item: {
       id: String(hit.id),
@@ -176,6 +188,7 @@ export async function stockSource(kind: StockKind, id: string): Promise<StockSou
   if (!/^\d{1,12}$/.test(id)) throw ApiError.withCode(400, 'STOCK_NOT_FOUND', "That stock item wasn't found.");
   const body = await pixabay(kind, { id });
   const source = body.hits?.[0] ? toSource(kind, body.hits[0]) : null;
-  if (!source || !isPixabayFileUrl(source.url)) throw ApiError.withCode(404, 'STOCK_NOT_FOUND', "That stock item wasn't found.");
+  if (source) source.urls = source.urls.filter(isPixabayFileUrl);
+  if (!source || !source.urls.length) throw ApiError.withCode(404, 'STOCK_NOT_FOUND', "That stock item wasn't found.");
   return source;
 }
