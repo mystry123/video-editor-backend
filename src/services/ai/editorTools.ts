@@ -18,6 +18,8 @@ export interface AssistantCapabilities {
   transitions?: string[];
   fonts?: string[];
   dubLanguages?: string[];
+  /** Names of the user's Lottie files */
+  lottie?: string[];
 }
 
 const KEYFRAME_PROPERTIES = ['x', 'y', 'scale', 'rotation', 'opacity', 'volume'] as const;
@@ -294,6 +296,33 @@ export const EDITOR_TOOLS: Record<string, ToolDef> = {
         position: z.enum(POSITIONS).optional(),
         size: num(5, 100).optional(),
       }),
+  },
+  add_lottie: {
+    description:
+      "Add a Lottie animation (a crisp animated graphic: icons, lower thirds, confetti, arrows, subscribe buttons) from the user's Lottie files by name, or from a LottieFiles link the user pasted. Lottie files come only from the user; if they have none that fits, say how to add one instead.",
+    parameters: (caps) =>
+      S.obj(
+        {
+          name: caps.lottie?.length ? S.enum("One of the user's Lottie files", caps.lottie) : S.str("The user's Lottie file name"),
+          url: S.str('A LottieFiles asset link the user gave (https://lottie.host/….json or .lottie), instead of name'),
+          at: S.num('Start, seconds'),
+          duration: S.num('How long it shows, seconds (default: the animation length, up to 8)'),
+          position: S.enum('Where (default centre)', [...POSITIONS]),
+          size: S.num('Width, % of the frame width (default 40)'),
+        },
+        ['at']
+      ),
+    args: (caps) =>
+      z
+        .object({
+          name: (caps.lottie?.length ? z.enum(caps.lottie as [string, ...string[]]) : z.string().min(1).max(120)).optional(),
+          url: z.string().url().max(500).optional(),
+          at: seconds,
+          duration: num(0.2, 120).optional(),
+          position: z.enum(POSITIONS).optional(),
+          size: num(5, 100).optional(),
+        })
+        .refine((a) => !!a.name !== !!a.url, 'Give either name (one of the user\'s Lottie files) or url (a LottieFiles link)'),
   },
   propose_plan: {
     description:

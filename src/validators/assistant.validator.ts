@@ -21,6 +21,7 @@ export const chatSchema = z.object({
         transitions: list(100),
         fonts: list(300),
         dubLanguages: list(50),
+        lottie: list(100),
       })
       .optional(),
   }),

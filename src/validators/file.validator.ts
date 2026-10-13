@@ -42,3 +42,14 @@ export const importGiphySchema = z.object({
 export const importStockSchema = z.object({
   body: z.object({ kind: z.enum(['photo', 'video']), id: z.union([z.string().regex(/^\d{1,12}$/), z.number().int().positive()]).transform(String) }),
 });
+
+export const importLottieSchema = z.object({
+  body: z
+    .object({
+      url: z.string().url().max(500).optional(),
+      // A .json or .lottie file, base64 (10 MB at most)
+      data: z.string().max(14_000_000).optional(),
+      name: z.string().max(120).optional(),
+    })
+    .refine((b) => !!b.url !== !!b.data, 'Send a LottieFiles link or a file'),
+});
