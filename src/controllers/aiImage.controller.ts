@@ -24,6 +24,32 @@ import { sniffMedia } from './stock.controller';
 const nameFrom = (prompt: string) =>
   prompt.replace(/[\\/:*?"<>|,.;]/g, ' ').replace(/\s+/g, ' ').trim().split(' ').slice(0, 8).join(' ').slice(0, 60) || 'Generated image';
 
+/** Makes an image and keeps it in the user's media (no metering: callers meter) */
+export async function makeImageFile(user: any, prompt: string, aspect: ImageAspect) {
+  const image = await getImageGenerator()(prompt, aspect);
+  const sniffed = sniffMedia(image.bytes);
+  if (!sniffed?.type.startsWith('image/')) throw ApiError.withCode(502, 'IMAGE_NOT_MADE', "That image couldn't be made. Try again.");
+  assertCanStore(user, image.bytes.length, sniffed.type);
+  const key = `users/${user._id}/uploads/${uuidv4()}.${sniffed.ext}`;
+  const cdnUrl = await uploadBufferToS3(image.bytes, key, sniffed.type);
+  const size = imageSize(image.bytes, sniffed.type);
+  const name = `${nameFrom(prompt)}.${sniffed.ext}`;
+  const file = await File.create({
+    userId: user._id,
+    name,
+    originalName: name,
+    mimeType: sniffed.type,
+    size: image.bytes.length,
+    storageKey: key,
+    cdnUrl,
+    status: 'ready',
+    source: 'ai_image',
+    metadata: size,
+  });
+  await quotaService.addStorageUsage(String(user._id), image.bytes.length, String(file._id));
+  return { fileId: String(file._id), name, url: cdnUrl, mimeType: sniffed.type, size: image.bytes.length, width: size.width, height: size.height };
+}
+
 export const generateImage = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { prompt, aspect = '16:9' } = req.body as { prompt: string; aspect?: ImageAspect };
@@ -35,32 +61,10 @@ export const generateImage = async (req: AuthRequest, res: Response, next: NextF
     const jobId = uuidv4();
     await reserveUsage(user._id, 'aiImages', jobId, 1, getEffectiveQuota(user).maxAiImages);
     try {
-      const image = await getImageGenerator()(prompt, aspect);
-      const sniffed = sniffMedia(image.bytes);
-      if (!sniffed?.type.startsWith('image/')) throw ApiError.withCode(502, 'IMAGE_NOT_MADE', "That image couldn't be made. Try again.");
-      assertCanStore(user, image.bytes.length, sniffed.type);
-      const key = `users/${user._id}/uploads/${uuidv4()}.${sniffed.ext}`;
-      const cdnUrl = await uploadBufferToS3(image.bytes, key, sniffed.type);
-      const size = imageSize(image.bytes, sniffed.type);
-      const name = `${nameFrom(prompt)}.${sniffed.ext}`;
-      const file = await File.create({
-        userId: user._id,
-        name,
-        originalName: name,
-        mimeType: sniffed.type,
-        size: image.bytes.length,
-        storageKey: key,
-        cdnUrl,
-        status: 'ready',
-        source: 'ai_image',
-        metadata: size,
-      });
-      await quotaService.addStorageUsage(String(user._id), image.bytes.length, String(file._id));
+      const file = await makeImageFile(user, prompt, aspect);
       await settleUsage(user._id, 'aiImages', jobId, 1);
-      logger.info('Image generated', { userId: String(user._id), fileId: String(file._id), aspect, bytes: image.bytes.length });
-      res.status(201).json({
-        file: { fileId: String(file._id), name, url: cdnUrl, mimeType: sniffed.type, size: image.bytes.length, width: size.width, height: size.height },
-      });
+      logger.info('Image generated', { userId: String(user._id), fileId: file.fileId, aspect, bytes: file.size });
+      res.status(201).json({ file });
     } catch (error) {
       await releaseUsage('aiImages', jobId, 'image_failed').catch(() => undefined);
       throw error;

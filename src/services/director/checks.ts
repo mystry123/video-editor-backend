@@ -39,7 +39,7 @@ export function editProblems(edit: CompiledEdit): string[] {
     const end = e.time + clipLength(e);
     if (e.time < -0.001) problems.push(`"${e.name}" starts before the edit.`);
     if (end > duration + 0.05) problems.push(`"${e.name}" runs past the end.`);
-    if ((e.type === 'video' || e.type === 'audio') && e.trimDuration !== undefined && e.trimStart + e.trimDuration > Number(e.duration) + 0.05) {
+    if ((e.type === 'video' || e.type === 'audio') && !e.loop && e.trimDuration !== undefined && e.trimStart + e.trimDuration > Number(e.duration) + 0.05) {
       problems.push(`"${e.name}" plays past the end of its file.`);
     }
     if (e.type === 'text' && tall) {

@@ -140,6 +140,23 @@ describe('compiling an edit', () => {
     expect(e.elements.some((x) => x.type === 'caption')).toBe(true);
   });
 
+  it('footage only worth hearing: its clips are heard, not seen, and pictures cover the whole edit', () => {
+    const e = compileEdit({
+      original, brief: { ...brief, picture: 'replace' }, sources: [source()], segments: [{ source: 'S1', from: 3, to: 13 }],
+      visuals: [
+        { kind: 'image', url: 'https://cdn.test/a.png', fileId: 'a', start: 1, end: 3, placement: 'overlay' },
+        { kind: 'video', url: 'https://cdn.test/b.mp4', fileId: 'b', duration: 2, start: 6, end: 8, placement: 'fullscreen' },
+      ],
+    });
+    const clip = e.elements.find((x) => (e.groups.cut ?? []).includes(x.id))!;
+    expect(clip).toMatchObject({ opacityEnabled: true, opacity: 0, muted: false });
+    const pics = e.elements.filter((x) => (e.groups.extras ?? []).includes(x.id)).sort((a, b) => a.time - b.time);
+    // Back to back from 0 to the end, all fullscreen; the short video loops
+    expect(pics.map((p) => [p.time, p.time + (p.type === 'video' ? p.trimDuration : p.duration), p.width])).toEqual([[0, 6, '100%'], [6, 10, '100%']]);
+    expect(pics[1].loop).toBe(true);
+    expect(editProblems(e)).toEqual([]);
+  });
+
   it('a title too wide for the frame breaks into two lines, then shrinks', () => {
     const frame = { width: 1080, height: 1920 };
     expect(fitTitle('LISBON', 8.5, frame, { upper: true, padEm: 0 })).toEqual({ text: 'LISBON', fontSize: 8.5 });

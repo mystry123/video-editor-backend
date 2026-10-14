@@ -29,6 +29,7 @@ import { describePreferences } from '../ai/preferences';
 import { getAudioTools } from '../audio';
 import { saveAudio } from '../../controllers/audioTools.controller';
 import { copyStockToMedia } from '../../controllers/stock.controller';
+import { makeImageFile } from '../../controllers/aiImage.controller';
 import { searchStock, stockEnabled } from '../stock.service';
 import { footageAnalysis } from './footage';
 import { attachAnalyses, cutProblems, snapToSpeech, sourcesOf, type Cutaway, type ProjectJson, type Segment, type Source } from './sources';
@@ -51,7 +52,9 @@ export interface DirectorInput {
 /** At most this many sources are watched and offered (the rest are left out of the edit) */
 const MAX_SOURCES = 6;
 const MAX_SFX = 6;
-const MAX_VISUALS = 3;
+const MAX_VISUALS = 6;
+/** Generated images per run (part of the run, not counted as AI images) */
+const MAX_AI_IMAGES = 4;
 /** Review rounds before the draft goes to the user anyway */
 const MAX_REVIEWS = 2;
 /** No new review round starts after this long (a round takes about a minute) */
@@ -206,7 +209,7 @@ export async function directEdit(ctx: EditContext) {
       return undefined;
     }
   };
-  const wantsAssets = !!brief.assets && !/^none\b/i.test(brief.assets.trim());
+  const wantsAssets = brief.picture === 'replace' || (!!brief.assets && !/^none\b/i.test(brief.assets.trim()));
   let parts: { type?: TypePart; motion?: MotionPart; sound?: SoundPart; assets?: AssetPart } = {};
   /** Runs the specialists named (all when none are), each with its review notes */
   const craft = async (only: Set<string> | null, notes: Review['notes'] = {}) => {
@@ -342,12 +345,20 @@ async function soundEffects(user: any, wanted: Array<{ at: number; kind: string 
   return out;
 }
 
-/** Stock pictures for the asset scout's picks (AI images are left as suggestions for now) */
+/** The asset scout's picks: stock (the fitting one of the top results) or generated images */
 async function pictures(user: any, wanted: AssetPart['assets'], tone: { text: string; tall: boolean }): Promise<VisualAsset[]> {
-  if (!stockEnabled()) return [];
   const out: VisualAsset[] = [];
-  for (const a of wanted.filter((x) => x.kind !== 'ai-image').slice(0, MAX_VISUALS)) {
+  let generated = 0;
+  for (const a of wanted.slice(0, MAX_VISUALS)) {
     try {
+      if (a.kind === 'ai-image') {
+        if (generated >= MAX_AI_IMAGES) continue;
+        generated++;
+        const image = await makeImageFile(user, a.query, tone.tall ? '9:16' : '16:9');
+        out.push({ kind: 'image', url: image.url, fileId: image.fileId, start: a.start, end: a.end, placement: a.placement });
+        continue;
+      }
+      if (!stockEnabled()) continue;
       const kind = a.kind === 'stock-video' ? 'video' : 'photo';
       const found = await searchStock(kind, a.query, 1, tone.tall ? 'vertical' : undefined);
       const candidates = found.items.slice(0, 6);

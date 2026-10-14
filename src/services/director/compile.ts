@@ -483,7 +483,16 @@ export function compileEdit(input: CompileInput): CompiledEdit {
   }
 
   // --- Extras: stock or generated pictures ---
-  for (const v of input.visuals ?? []) {
+  // Replacing the footage's picture: its clips are heard, not seen, and the pictures cover the
+  // whole edit back to back (each runs on to the next; the first from 0, the last to the end)
+  const replace = brief.picture === 'replace' && (input.visuals?.length ?? 0) > 0;
+  let visuals = input.visuals ?? [];
+  if (replace) {
+    visuals = [...visuals].sort((a, b) => a.start - b.start).map((v, i, list) => ({ ...v, placement: 'fullscreen' as const, start: i === 0 ? 0 : v.start, end: i === list.length - 1 ? total : list[i + 1].start }));
+    for (const c of clips) Object.assign(c, { opacityEnabled: true, opacity: 0 });
+    for (const c of elements.filter((e) => (groups.cutaways ?? []).includes(e.id))) Object.assign(c, { opacityEnabled: true, opacity: 0 });
+  } else if (brief.picture === 'replace') notes.push("Pictures: none could be found or made, so the footage's own picture shows.");
+  for (const v of visuals) {
     const start = Math.max(0, Math.min(total - 0.3, v.start));
     const end = Math.max(start + 0.3, Math.min(total, v.end));
     const full = v.placement === 'fullscreen';
@@ -505,7 +514,8 @@ export function compileEdit(input: CompileInput): CompiledEdit {
       enter: { id: uuidv4(), type: full ? 'fade' : 'pop', category: 'enter', duration: 0.25, easing: 'quadratic-out', params: {}, isExit: false, transition: false, reversed: false },
       exit: { id: uuidv4(), type: 'fade', category: 'exit', duration: 0.2, easing: 'quadratic-out', params: {}, isExit: true, endOffset: 0 },
     };
-    if (v.kind === 'video') Object.assign(el, { duration: r3(v.duration || end - start), trimStart: 0, trimDuration: r3(Math.min(end - start, v.duration || end - start)), muted: true, volume: 0, speed: 100 });
+    // A stock video shorter than its span loops to fill it
+    if (v.kind === 'video') Object.assign(el, { duration: r3(v.duration || end - start), trimStart: 0, trimDuration: r3(end - start), loop: (v.duration || 0) < end - start - 0.05, muted: true, volume: 0, speed: 100 });
     else el.duration = r3(end - start);
     elements.push(el);
     add('extras', el.id);

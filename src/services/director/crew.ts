@@ -47,6 +47,8 @@ export interface Brief {
   assets: string;
   /** Leave the project's other layers (titles, stickers…) as they are */
   keepOtherLayers: boolean;
+  /** show: the footage's picture is the edit; replace: only its sound is worth using (voice over black, a placeholder) */
+  picture?: 'show' | 'replace';
 }
 
 export interface Cut {
@@ -132,6 +134,7 @@ const BRIEF_SCHEMA = obj({
   sound: S('Notes for the sound designer: sound effects, music, keep or lower the original sound'),
   assets: S('Notes for the asset scout: B-roll, photos or AI images worth adding, or "none"'),
   keepOtherLayers: { type: 'BOOLEAN', description: 'Keep the project\'s existing titles, stickers and overlays (true) or replace them with the new edit (false)' },
+  picture: E(['show', 'replace'], 'show: the footage\'s picture carries the edit. replace: only its sound is worth using (a voice over black, a placeholder or slides): the asset scout then covers the whole edit with pictures'),
 });
 
 export async function writeBrief(input: { request: string; conversation: string; project: string; sources: Source[]; preferences: string; notes?: string; lessons?: string[] }): Promise<Brief> {
@@ -321,7 +324,11 @@ export async function pickStock(want: { query: string; why: string; tone: string
 }
 
 export async function scoutAssets(input: OnCut): Promise<AssetPart> {
-  const system = `You are the asset scout. Suggest outside pictures only where the footage lacks something the story needs (an establishing shot, an illustration of what is said). The user's own footage is almost always better than stock: prefer none. Never cover a speaker's key line with stock.
+  const replace = input.brief.picture === 'replace';
+  const system = replace
+    ? `You are the asset scout. The footage's picture is not worth showing (the brief says replace it): only its sound is used. Cover the WHOLE edit with pictures, back to back from 0 to the end, a new picture every 2.5–6 seconds, each one illustrating what is said at that moment, all fullscreen, in one consistent look that fits the tone. Use ai-image (a complete description: subject, setting, style, light, mood, colours, composition, vertical when the frame is tall, room for captions in the lower third) for ideas and moods; stock-video or stock-photo for concrete real things.
+${CRAFT}`
+    : `You are the asset scout. Suggest outside pictures only where the footage lacks something the story needs (an establishing shot, an illustration of what is said). The user's own footage is almost always better than stock: prefer none. Never cover a speaker's key line with stock.
 ${CRAFT}`;
   return ask<AssetPart>({ model: env.directorWorkerModel, system, text: cutText(input), schema: ASSET_SCHEMA, thinking: 'low' });
 }
