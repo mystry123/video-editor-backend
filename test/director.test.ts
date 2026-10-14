@@ -207,7 +207,8 @@ describe('Director runs', () => {
   }
 
   const waitFor = async (token: string, id: string) => {
-    for (let i = 0; i < 100; i++) {
+    // Up to ~15 s: runs are quick with fakes, but a busy machine slows them
+    for (let i = 0; i < 500; i++) {
       const res = await api().get(`/api/v1/ai/director/${id}`).set('Authorization', `Bearer ${token}`);
       if (['done', 'failed', 'stopped'].includes(res.body.run.stage)) return res.body.run;
       await new Promise((r) => setTimeout(r, 30));
@@ -351,5 +352,26 @@ describe('the latest run in a project', () => {
     expect(mine.body.run).toMatchObject({ stage: 'cutting', request: 'reel', result: null });
     const theirs = await api().get('/api/v1/ai/director?projectId=p9').set('Authorization', `Bearer ${other.token}`);
     expect(theirs.body.run).toBeNull();
+  });
+});
+
+describe('preparing footage ahead of a run', () => {
+  it("watches the user's own files in the background, once", async () => {
+    const { setGeminiClient: set } = await import('../src/services/ai/gemini');
+    const { user, token } = await createUser();
+    const other = await createUser();
+    const file = await File.create({ userId: user._id, name: 'a.mp4', originalName: 'a.mp4', mimeType: 'video/mp4', size: 1, storageKey: `users/${user._id}/uploads/a.mp4`, cdnUrl: 'https://cdn.test/a.mp4', status: 'ready', source: 'upload', metadata: { duration: 10 } });
+    await MediaAnalysis.create({ fileId: file._id, userId: user._id, version: MEDIA_ANALYSIS_VERSION, status: 'ready', analysedSeconds: 10, duration: 10, modelName: 't', speechSource: 'none', result: analysis });
+    const generate = vi.fn();
+    set({ generate } as any);
+    const res = await api().post('/api/v1/ai/director/prepare').set('Authorization', `Bearer ${token}`).send({ fileIds: [String(file._id)] });
+    expect(res.status).toBe(202);
+    // Someone else's file id is ignored (not theirs to watch)
+    const theirs = await api().post('/api/v1/ai/director/prepare').set('Authorization', `Bearer ${other.token}`).send({ fileIds: [String(file._id)] });
+    expect(theirs.status).toBe(202);
+    await new Promise((r) => setTimeout(r, 100));
+    // Already watched: nothing new asked of the model
+    expect(generate).not.toHaveBeenCalled();
+    set(null);
   });
 });

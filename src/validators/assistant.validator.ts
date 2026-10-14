@@ -72,6 +72,8 @@ export const startDirectorSchema = z.object({
   }),
 });
 
+export const prepareDirectorSchema = z.object({ body: z.object({ fileIds: z.array(z.string().regex(/^[a-f0-9]{24}$/)).max(20) }) });
+
 export const latestDirectorSchema = z.object({ query: z.object({ projectId: z.string().min(1).max(100) }) });
 
 export const directorRunSchema = z.object({ params: z.object({ id: z.string().regex(/^[a-f0-9]{24}$/) }) });

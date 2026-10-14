@@ -11,6 +11,7 @@ import {
   chatSchema,
   directorRunSchema,
   latestDirectorSchema,
+  prepareDirectorSchema,
   startDirectorSchema,
   createSessionSchema,
   deleteMemorySchema,
@@ -32,6 +33,7 @@ router.post('/sessions', validate(createSessionSchema), sessions.createSession);
 router.get('/sessions/:id', validate(sessionIdSchema), sessions.getSession);
 router.put('/sessions/:id', validate(updateSessionSchema), sessions.updateSession);
 router.delete('/sessions/:id', validate(sessionIdSchema), sessions.deleteSession);
+router.post('/director/prepare', voiceLimiter, validate(prepareDirectorSchema), director.prepareDirector);
 router.post('/director', voiceLimiter, validate(startDirectorSchema), director.startDirector);
 router.get('/director', validate(latestDirectorSchema), director.latestDirector);
 router.get('/director/:id', validate(directorRunSchema), director.getDirector);

@@ -4,6 +4,7 @@
 //   GET  /ai/director?projectId= → { run }   the latest run in a project (last 2 hours), or null
 //   GET  /ai/director/:id        → { run }   (the editor polls this)
 //   POST /ai/director/:id/stop   → { run }
+//   POST /ai/director/prepare    { fileIds } → 202   watch the project's footage ahead of a run
 //
 // Cue Director: a creative edit made by a crew of models (see
 // services/director/run.ts). Starting one reserves a `directorRuns` unit;
@@ -14,6 +15,24 @@ import { AuthRequest } from '../types';
 import { ApiError } from '../utils/ApiError';
 import { DirectorRun, type IDirectorRun } from '../models/DirectorRun';
 import { startDirectorRun, stopDirectorRun, type DirectorInput } from '../services/director/run';
+import { footageAnalysis } from '../services/director/footage';
+import { logger } from '../utils/logger';
+
+/** Footage being prepared ahead of a run, at most this many files per request */
+const MAX_PREPARE = 6;
+
+export const prepareDirector = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const fileIds = [...new Set((req.body.fileIds as string[]) ?? [])].slice(0, MAX_PREPARE);
+    // In the background: each file is watched once and kept (footageAnalysis checks ownership)
+    for (const fileId of fileIds) {
+      void footageAnalysis(fileId, String(req.userId)).catch((error) => logger.warn('Footage prepare failed', { fileId, error: (error as Error).message }));
+    }
+    res.status(202).json({ preparing: fileIds.length });
+  } catch (error) {
+    next(error);
+  }
+};
 
 /** What the editor sees of a run */
 export function runView(run: IDirectorRun) {
