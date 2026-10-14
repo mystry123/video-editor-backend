@@ -133,3 +133,30 @@ describe('Director runs a restart left behind', () => {
     expect((await UsageEntry.findOne({ jobId: 'director:stuck' }))?.state).toBe('released');
   });
 });
+
+describe("a user's own taste", () => {
+  it('parts they keep leaving out and their complaints become their rules; their best edits become examples', async () => {
+    const { userTaste, withTaste } = await import('../src/services/director/taste');
+    const { user } = await createUser();
+    const other = await createUser();
+    const mk = (outcome: any, request = 'reel') => DirectorRun.create({ userId: user._id, projectId: 'p', request, stage: 'done', events: [], usageJobId: `t-${Math.random()}`, brief: { platform: 'Reels', aspect: '9:16', targetSeconds: 15, tone: 'calm', hook: 'the sunrise', structure: [{ beat: 'hook', seconds: 2 }] }, outcome });
+    await mk({ applied: new Date(), leftOut: ['sound', 'titles'] });
+    await mk({ applied: new Date(), leftOut: ['sound'] });
+    await mk({ applied: new Date(), leftOut: ['sound'], exported: new Date() }, 'calm travel reel');
+    await mk({ applied: new Date(), leftOut: [] });
+    await mk({ discarded: new Date(), rating: -1, comment: 'Captions too big' });
+    // Someone else's habits never count
+    await DirectorRun.create({ userId: other.user._id, projectId: 'p', request: 'x', stage: 'done', events: [], usageJobId: 'other', outcome: { applied: new Date(), leftOut: ['motion'] } });
+
+    const taste = await userTaste(user._id);
+    expect(taste.lessons.sound?.[0]).toMatch(/usually leaves out sound effects \(3 of their last 4/);
+    expect(taste.lessons.type).toBeUndefined(); // titles: 1 of 4
+    expect(taste.lessons.motion).toBeUndefined();
+    expect(taste.lessons.director?.[0]).toContain('Captions too big');
+    expect(taste.examples).toHaveLength(1);
+    expect(taste.examples[0]).toContain('"calm travel reel"');
+    expect(taste.examples[0]).toContain('they exported it');
+    // Theirs first, then the shared rules
+    expect(withTaste({ sound: ['Shared rule'] }, taste).sound).toEqual([taste.lessons.sound![0], 'Shared rule']);
+  });
+});

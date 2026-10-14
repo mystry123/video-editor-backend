@@ -37,6 +37,7 @@ import { cutStory, designMotion, pickStock, designSound, designType, scoutAssets
 import { compileEdit, frameFor, type AudioAsset, type CompiledEdit, type VisualAsset } from './compile';
 import { editProblems } from './checks';
 import { liveLessons, type Lessons } from './lessons';
+import { userTaste, withTaste } from './taste';
 import { GOOD_ENOUGH, renderStoryboard, reviewDraft, type Review, type StoryboardFrame } from './review';
 
 export interface DirectorInput {
@@ -108,7 +109,8 @@ async function carryOut(runId: string, input: DirectorInput): Promise<void> {
   if (!user) return;
   const started = Date.now();
   try {
-    const { result } = await directEdit({ user, input, key: runId, report: (stage, text, set) => progress(runId, stage, text, set), lessons: await liveLessons() });
+    const taste = await userTaste(user._id);
+    const { result } = await directEdit({ user, input, key: runId, report: (stage, text, set) => progress(runId, stage, text, set), lessons: withTaste(await liveLessons(), taste), examples: taste.examples });
     await progress(runId, 'done', `Ready in ${Math.round((Date.now() - started) / 1000)}s`, { result });
     await settleUsage(user._id, 'directorRuns', run.usageJobId);
   } catch (error) {
@@ -131,6 +133,8 @@ export interface EditContext {
   report: (stage: DirectorStage, text: string, set?: Record<string, unknown>) => Promise<void>;
   /** What the crew learned from past edits, per member */
   lessons?: Lessons;
+  /** This user's best past edits, for the brief */
+  examples?: string[];
 }
 
 /**
@@ -171,7 +175,7 @@ export async function directEdit(ctx: EditContext) {
   await report('briefing', 'Director is writing the brief');
   const preferences = describePreferences((user as any).assistantPreferences).concat(((user as any).assistantMemory || []).map((m: any) => m.note)).filter(Boolean).join('\n');
   const conversation = input.conversation.slice(-8).map((m) => `${m.role === 'user' ? 'User' : 'Cue'}: ${m.text.slice(0, 800)}`).join('\n');
-  const brief: Brief = await writeBrief({ request: input.request, conversation, project: input.context, sources: watched, preferences, lessons: lessons.director });
+  const brief: Brief = await writeBrief({ request: input.request, conversation, project: input.context, sources: watched, preferences, lessons: lessons.director, examples: ctx.examples });
   await report('briefing', `Brief: ${brief.understood} (${brief.aspect}, ${brief.targetSeconds}s, ${brief.tone})`, { brief });
 
   // --- Cutting ---

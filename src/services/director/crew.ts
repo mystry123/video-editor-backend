@@ -137,13 +137,15 @@ const BRIEF_SCHEMA = obj({
   picture: E(['show', 'replace'], 'show: the footage\'s picture carries the edit. replace: only its sound is worth using (a voice over black, a placeholder or slides): the asset scout then covers the whole edit with pictures'),
 });
 
-export async function writeBrief(input: { request: string; conversation: string; project: string; sources: Source[]; preferences: string; notes?: string; lessons?: string[] }): Promise<Brief> {
+export async function writeBrief(input: { request: string; conversation: string; project: string; sources: Source[]; preferences: string; notes?: string; lessons?: string[]; examples?: string[] }): Promise<Brief> {
   const system = `You are the director of a world-class short-form video studio. You turn raw footage into edits people watch to the end and share.
 Read the request, the conversation and the logged footage, then write the creative brief your crew will follow. Be specific to THIS footage: name the exact moments (with times) and lines that make the edit. Never write generic advice.
 If the user names a length, platform or style, that wins. Otherwise choose what suits the request (a "reel" is 9:16 for Instagram, 15–30 s).
 
 ${CRAFT}`;
-  const text = `REQUEST\n${input.request}\n\nRECENT CONVERSATION\n${input.conversation || '(none)'}\n\nPROJECT NOW\n${input.project}\n\nFOOTAGE (logged)\n${footage(input.sources)}${input.preferences ? `\n\nTHE USER'S PREFERENCES\n${input.preferences}` : ''}${input.notes ? `\n\nNOTES FROM YOUR REVIEW OF THE LAST DRAFT\n${input.notes}` : ''}${lessonBlock(input.lessons)}`;
+  const text = `REQUEST\n${input.request}\n\nRECENT CONVERSATION\n${input.conversation || '(none)'}\n\nPROJECT NOW\n${input.project}\n\nFOOTAGE (logged)\n${footage(input.sources)}${input.preferences ? `\n\nTHE USER'S PREFERENCES\n${input.preferences}` : ''}${input.notes ? `\n\nNOTES FROM YOUR REVIEW OF THE LAST DRAFT\n${input.notes}` : ''}${
+    input.examples?.length ? `\n\nTHIS USER'S EDITS THAT WORKED (their taste; follow it where it fits this request)\n- ${input.examples.join('\n- ')}` : ''
+  }${lessonBlock(input.lessons)}`;
   const brief = await ask<Brief>({ model: env.directorModel, system, text, schema: BRIEF_SCHEMA, thinking: 'high' });
   brief.targetSeconds = Math.max(3, Math.min(600, Number(brief.targetSeconds) || 30));
   return brief;
