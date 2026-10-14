@@ -76,6 +76,8 @@ const TRANSITION_IDS: Record<string, string> = {
   blur: 'blur-dissolve',
 };
 const TRANSITION_SECONDS = 0.3;
+/** How much larger wide footage with burned-in captions is set, to push them below a tall frame */
+const BURNED_CAPTION_ZOOM = 1.2;
 
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 const id = (kind: string) => `cue-${kind}-${uuidv4()}`;
@@ -285,6 +287,7 @@ export function compileEdit(input: CompileInput): CompiledEdit {
 
   // --- Framing: footage of another shape (wide footage in a tall frame) ---
   const frameAspect = frame.width / frame.height;
+  let hidBurnedCaptions = false;
   placed.forEach((p, i) => {
     const clip = clips[i];
     const src = byRef.get(p.source)!;
@@ -295,8 +298,10 @@ export function compileEdit(input: CompileInput): CompiledEdit {
     const asked = input.motion?.pieces.find((m) => Number(m.piece) === i + 1)?.framing;
     const textInPicture = shots.some((x) => x.onScreenText) || !!src.analysis?.hasBurnedCaptions;
     const group = shots.some((x) => (x.people ?? 0) >= 3);
-    // Captions burned into the footage are cut by any crop: those pieces are always shown whole
-    const fit = asked === 'fit' || !!src.analysis?.hasBurnedCaptions || ((!asked || asked === 'auto') && (textInPicture || group) && sourceAspect > frameAspect);
+    // Captions burned into the footage: crop past them (zoomed so their band at the bottom is out of
+    // frame) and caption afresh, rather than letterbox the whole reel or chop the old captions
+    const burned = !!src.analysis?.hasBurnedCaptions && sourceAspect > frameAspect;
+    const fit = !burned && (asked === 'fit' || ((!asked || asked === 'auto') && (textInPicture || group) && sourceAspect > frameAspect));
     if (fit) {
       // The whole picture, over a blurred, enlarged copy of itself that fills the frame
       const backdrop = {
@@ -326,7 +331,15 @@ export function compileEdit(input: CompileInput): CompiledEdit {
     const xs = shots.map((x) => Number(x.subjectX)).filter((v) => v >= 0 && v <= 1);
     const focus = xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0.5;
     if (sourceAspect > frameAspect) {
-      const W = (sourceAspect / frameAspect) * 100;
+      // Past burned captions: 20% larger, top-anchored, so the bottom sixth of the footage is below the frame
+      const zoom = burned ? BURNED_CAPTION_ZOOM : 1;
+      if (burned) {
+        clip.height = `${r3(100 * zoom)}%`;
+        clip.y = '0%';
+        clip.anchorY = 0;
+        hidBurnedCaptions = true;
+      }
+      const W = (sourceAspect / frameAspect) * 100 * zoom;
       const left = Math.max(100 - W, Math.min(0, 50 - focus * W));
       clip.width = `${r3(W)}%`;
       clip.anchorX = r3(((50 - left) / W) * 100);
@@ -387,9 +400,10 @@ export function compileEdit(input: CompileInput): CompiledEdit {
 
   // --- Captions: the spoken words, moved onto the new timeline ---
   const cap = input.type?.captions;
-  const burned = placed.some((p) => byRef.get(p.source)?.analysis?.hasBurnedCaptions);
-  if (burned && (cap?.use || brief.captions.use)) notes.push('Captions: your footage already has them burned in, so no second set was added.');
-  if (!burned && (cap?.use || (cap === undefined && brief.captions.use))) {
+  // Burned-in captions still in the picture: no second set. Cropped out of the picture: fresh ones
+  const burnedShowing = !hidBurnedCaptions && placed.some((p) => byRef.get(p.source)?.analysis?.hasBurnedCaptions);
+  if (burnedShowing && (cap?.use || brief.captions.use)) notes.push('Captions: your footage already has them burned in, so no second set was added.');
+  if (!burnedShowing && (hidBurnedCaptions || cap?.use || (cap === undefined && brief.captions.use))) {
     const words: Array<{ word: string; startMs: number; endMs: number }> = [];
     for (const p of placed) {
       const src = byRef.get(p.source)!;

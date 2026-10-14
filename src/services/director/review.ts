@@ -187,3 +187,64 @@ Be demanding but fair: only ask for changes that clearly improve it, and say exa
     notes: Object.fromEntries(Object.entries(r.notes ?? {}).filter(([k, v]) => CREW.includes(k) && typeof v === 'string' && v.trim())) as Review['notes'],
   };
 }
+
+export interface Verdict {
+  hook: number;
+  pacing: number;
+  readability: number;
+  framing: number;
+  fitsRequest: number;
+  overall: number;
+  biggestProblem: string;
+  wouldPost: boolean;
+}
+
+const VERDICT_SCHEMA = {
+  type: 'OBJECT',
+  properties: Object.fromEntries([
+    ...['hook', 'pacing', 'readability', 'framing', 'fitsRequest', 'overall'].map((k) => [k, { type: 'INTEGER', description: '1–10' }]),
+    ['biggestProblem', { type: 'STRING' }],
+    ['wouldPost', { type: 'BOOLEAN' }],
+  ]),
+  required: ['hook', 'pacing', 'readability', 'framing', 'fitsRequest', 'overall', 'biggestProblem', 'wouldPost'],
+};
+
+/**
+ * An independent judge for evals (not the director grading its own work):
+ * a harsh head of content scores the finished edit from its frames and
+ * timeline. Null when there is nothing to judge.
+ */
+export async function judgeEdit(result: CompiledEdit & { storyboard?: StoryboardFrame[] }, request: string): Promise<Verdict | null> {
+  const frames = (result.storyboard ?? []).filter((f) => f.url);
+  const images = (
+    await Promise.all(
+      frames.map(async (f) => {
+        try {
+          const res = await fetch(f.url!, { signal: AbortSignal.timeout(15_000) });
+          return res.ok ? { f, bytes: Buffer.from(await res.arrayBuffer()) } : null;
+        } catch {
+          return null;
+        }
+      })
+    )
+  ).filter(Boolean) as Array<{ f: StoryboardFrame; bytes: Buffer }>;
+  if (!images.length && !result.elements.length) return null;
+  const out = await getGeminiClient().generate({
+    model: env.directorModel,
+    fallback: env.aiModelStrong,
+    system:
+      'You are a harsh head of content at a social video agency judging an edit from its storyboard frames and timeline. Score 1–10 each: hook (the first second), pacing, readability (text size, contrast, inside the frame and safe area), framing (subjects well framed in this shape), fitsRequest. overall = how well it would perform. Most edits are 4–6; 8+ only if you would post it as is.',
+    messages: [
+      {
+        role: 'user',
+        text: `REQUEST: ${request}\n\nTIMELINE\n${describeEdit(result)}\n\nFRAMES: ${images.map((x, i) => `image ${i + 1} at ${clock(x.f.time)} (${x.f.label})`).join('; ') || 'none'}`,
+        media: images.map((x) => ({ mimeType: 'image/jpeg', data: x.bytes.toString('base64') })),
+      },
+    ],
+    jsonSchema: VERDICT_SCHEMA,
+    thinking: 'high',
+    timeoutMs: 120_000,
+    patient: true,
+  });
+  return out.json as Verdict;
+}

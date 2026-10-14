@@ -130,6 +130,16 @@ describe('compiling an edit', () => {
     expect(editProblems(fit)).toEqual([]);
   });
 
+  it('wide footage with burned-in captions fills the tall frame, zoomed past them, with fresh captions', () => {
+    const burned = { ...source(), width: 1920, height: 1080, analysis: { ...analysis, hasBurnedCaptions: true, shots: [{ start: 0, end: 60, description: 'Host', subjectX: 0.5 }] } };
+    const e = compileEdit({ original, brief, sources: [burned], segments: [{ source: 'S1', from: 3, to: 6 }], type: { titles: [], captions: { use: false, style: 'word-pop', position: 'lower' }, notes: '' } });
+    const clip = e.elements.find((x) => x.type === 'video')!;
+    expect(clip).toMatchObject({ fit: 'cover', height: '120%', y: '0%', anchorY: 0 });
+    expect(parseFloat(clip.width)).toBeCloseTo(316.05 * 1.2, 0);
+    expect(e.groups.backdrops).toBeUndefined();
+    expect(e.elements.some((x) => x.type === 'caption')).toBe(true);
+  });
+
   it('a title too wide for the frame breaks into two lines, then shrinks', () => {
     const frame = { width: 1080, height: 1920 };
     expect(fitTitle('LISBON', 8.5, frame, { upper: true, padEm: 0 })).toEqual({ text: 'LISBON', fontSize: 8.5 });
@@ -383,7 +393,10 @@ describe('cuts follow what is said', () => {
     expect(snapToSpeech([{ source: 'S1', from: 5, to: 13.2 }], [s])).toEqual([{ source: 'S1', from: 5, to: 14.15 }]);
     // Too far to the end (5 s): back to the end of the sentence before
     expect(snapToSpeech([{ source: 'S1', from: 5, to: 25 }], [s])).toEqual([{ source: 'S1', from: 5, to: 14.1 }]);
-    expect(snapToSpeech([{ source: 'S1', from: 11, to: 16 }], [s])).toEqual([{ source: 'S1', from: 9.95, to: 16 }]);
+    // More than a second to go and no sentence before it in the piece: left as chosen
+    expect(snapToSpeech([{ source: 'S1', from: 5, to: 12.5 }], [s])).toEqual([{ source: 'S1', from: 5, to: 12.5 }]);
+    // Starts stay where the story editor put them
+    expect(snapToSpeech([{ source: 'S1', from: 11, to: 16 }], [s])).toEqual([{ source: 'S1', from: 11, to: 16 }]);
   });
 });
 

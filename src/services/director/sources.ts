@@ -143,17 +143,19 @@ export function cutView(segments: Segment[], sources: Source[], cutaways: Cutawa
 }
 
 /**
- * Pieces never start or end in the middle of something said: an edge that
- * falls inside a sentence moves out to its end (or its start), up to 2 s;
- * otherwise in to the previous sentence's end. (A cut ended on "the Pyramids
- * in" without "Egypt".)
+ * Pieces never end in the middle of something said: an end inside a
+ * sentence moves out to the sentence's end (up to 1 s), else back to the end
+ * of the sentence before. (A cut ended on "the Pyramids in" without
+ * "Egypt".) Starts are left as chosen: moving them back made edits long and
+ * brought back slow openings.
  */
 export function snapToSpeech(segments: Segment[], sources: Source[]): Segment[] {
   const byRef = new Map(sources.map((s) => [s.ref, s]));
-  const MAX_STRETCH = 2;
+  const MAX_STRETCH = 1;
   return segments.map((seg) => {
     const lines = byRef.get(seg.source)?.analysis?.speech ?? [];
-    let { from, to } = seg;
+    const { from } = seg;
+    let { to } = seg;
     const endIn = lines.find((l) => to > l.start + 0.15 && to < l.end - 0.1);
     if (endIn) {
       const duration = byRef.get(seg.source)?.duration || Infinity;
@@ -163,9 +165,7 @@ export function snapToSpeech(segments: Segment[], sources: Source[]): Segment[] 
         if (before) to = before.end + 0.1;
       }
     }
-    const startIn = lines.find((l) => from > l.start + 0.1 && from < l.end - 0.15);
-    if (startIn && from - startIn.start <= MAX_STRETCH) from = Math.max(0, startIn.start - 0.05);
-    return { ...seg, from: Math.round(from * 100) / 100, to: Math.round(to * 100) / 100 };
+    return { ...seg, to: Math.round(to * 100) / 100 };
   });
 }
 

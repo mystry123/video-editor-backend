@@ -11,6 +11,7 @@
 
 import { env } from '../../config/env';
 import { getGeminiClient } from '../ai/gemini';
+import { lessonBlock } from './lessons';
 import { clock, cutView, sourceDigest, type Cutaway, type Segment, type Source } from './sources';
 
 // ---------------------------------------------------------------------------
@@ -133,13 +134,13 @@ const BRIEF_SCHEMA = obj({
   keepOtherLayers: { type: 'BOOLEAN', description: 'Keep the project\'s existing titles, stickers and overlays (true) or replace them with the new edit (false)' },
 });
 
-export async function writeBrief(input: { request: string; conversation: string; project: string; sources: Source[]; preferences: string; notes?: string }): Promise<Brief> {
+export async function writeBrief(input: { request: string; conversation: string; project: string; sources: Source[]; preferences: string; notes?: string; lessons?: string[] }): Promise<Brief> {
   const system = `You are the director of a world-class short-form video studio. You turn raw footage into edits people watch to the end and share.
 Read the request, the conversation and the logged footage, then write the creative brief your crew will follow. Be specific to THIS footage: name the exact moments (with times) and lines that make the edit. Never write generic advice.
 If the user names a length, platform or style, that wins. Otherwise choose what suits the request (a "reel" is 9:16 for Instagram, 15–30 s).
 
 ${CRAFT}`;
-  const text = `REQUEST\n${input.request}\n\nRECENT CONVERSATION\n${input.conversation || '(none)'}\n\nPROJECT NOW\n${input.project}\n\nFOOTAGE (logged)\n${footage(input.sources)}${input.preferences ? `\n\nTHE USER'S PREFERENCES\n${input.preferences}` : ''}${input.notes ? `\n\nNOTES FROM YOUR REVIEW OF THE LAST DRAFT\n${input.notes}` : ''}`;
+  const text = `REQUEST\n${input.request}\n\nRECENT CONVERSATION\n${input.conversation || '(none)'}\n\nPROJECT NOW\n${input.project}\n\nFOOTAGE (logged)\n${footage(input.sources)}${input.preferences ? `\n\nTHE USER'S PREFERENCES\n${input.preferences}` : ''}${input.notes ? `\n\nNOTES FROM YOUR REVIEW OF THE LAST DRAFT\n${input.notes}` : ''}${lessonBlock(input.lessons)}`;
   const brief = await ask<Brief>({ model: env.directorModel, system, text, schema: BRIEF_SCHEMA, thinking: 'high' });
   brief.targetSeconds = Math.max(3, Math.min(600, Number(brief.targetSeconds) || 30));
   return brief;
@@ -180,7 +181,7 @@ const time = (v: unknown) => {
   return t.split(':').reduce((a, p) => a * 60 + Number(p), 0);
 };
 
-export async function cutStory(input: { brief: Brief; sources: Source[]; problems?: string[]; notes?: string; previous?: Segment[]; previousCutaways?: Cutaway[] }): Promise<Cut> {
+export async function cutStory(input: { brief: Brief; sources: Source[]; problems?: string[]; notes?: string; previous?: Segment[]; previousCutaways?: Cutaway[]; lessons?: string[] }): Promise<Cut> {
   const system = `You are the story editor. You build the cut: which spans of footage play, in what order, to hit the brief's beats and length exactly.
 Use the logged shots, speech and moments; choose the strongest material. Start and end each piece on the edges of what is said (use the "Said" times) so no sentence is cut off, or on shot changes for pieces without speech. Pieces may come from anywhere in any source, in any order (a later line can open the edit as the hook).
 Cutaways: while someone talks, the picture can cut away to other footage (what they talk about, a beautiful shot) and the voice plays on — the classic way to keep a talking edit visual and fast. Use them when the brief asks for voice over B-roll or when a speaking piece runs long on one face.
@@ -192,7 +193,7 @@ ${CRAFT}`;
   const prev = input.previous?.length
     ? `\n\nYOUR LAST CUT\n${input.previous.map((s, i) => `#${i + 1} ${s.source} ${clock(s.from)}–${clock(s.to)} ${s.beat ?? ''}`).join('\n')}${(input.previousCutaways ?? []).map((c) => `\ncutaway over #${c.piece} at ${c.at}s for ${c.length}s → ${c.source} ${clock(c.from)}`).join('')}`
     : '';
-  const text = `BRIEF\n${JSON.stringify(input.brief, null, 1)}\n\nFOOTAGE (logged)\n${footage(input.sources)}${prev}${fix}${input.notes ? `\n\nDIRECTOR'S NOTES ON YOUR LAST CUT\n${input.notes}` : ''}`;
+  const text = `BRIEF\n${JSON.stringify(input.brief, null, 1)}\n\nFOOTAGE (logged)\n${footage(input.sources)}${prev}${fix}${input.notes ? `\n\nDIRECTOR'S NOTES ON YOUR LAST CUT\n${input.notes}` : ''}${lessonBlock(input.lessons)}`;
   const raw = await ask<{ segments: Array<Record<string, unknown>>; cutaways?: Array<Record<string, unknown>>; notes: string }>({ model: env.directorModel, system, text, schema: CUT_SCHEMA, thinking: 'high', timeoutMs: 120_000 });
   return {
     notes: String(raw.notes || ''),
@@ -224,13 +225,14 @@ interface OnCut {
   sources: Source[];
   frame: { width: number; height: number };
   notes?: string;
+  lessons?: string[];
 }
 
 const cutText = (input: OnCut) => {
   const total = input.segments.reduce((t, s) => t + (s.to - s.from), 0);
   return `BRIEF\n${JSON.stringify(input.brief, null, 1)}\n\nTHE CUT (new timeline, ${total.toFixed(1)}s, frame ${input.frame.width}×${input.frame.height})\n${cutView(input.segments, input.sources, input.cutaways)}${
     input.notes ? `\n\nDIRECTOR'S NOTES ON YOUR LAST PASS\n${input.notes}` : ''
-  }\n\nTimes you give are seconds on the NEW timeline (0 = start of the edit).`;
+  }\n\nTimes you give are seconds on the NEW timeline (0 = start of the edit).${lessonBlock(input.lessons)}`;
 };
 
 const TYPE_SCHEMA = obj({

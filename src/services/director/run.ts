@@ -35,6 +35,7 @@ import { attachAnalyses, cutProblems, snapToSpeech, sourcesOf, type Cutaway, typ
 import { cutStory, designMotion, pickStock, designSound, designType, scoutAssets, writeBrief, type AssetPart, type Brief, type MotionPart, type SoundPart, type TypePart } from './crew';
 import { compileEdit, frameFor, type AudioAsset, type CompiledEdit, type VisualAsset } from './compile';
 import { editProblems } from './checks';
+import { liveLessons, type Lessons } from './lessons';
 import { GOOD_ENOUGH, renderStoryboard, reviewDraft, type Review, type StoryboardFrame } from './review';
 
 export interface DirectorInput {
@@ -104,147 +105,7 @@ async function carryOut(runId: string, input: DirectorInput): Promise<void> {
   if (!user) return;
   const started = Date.now();
   try {
-    // --- Watching ---
-    const sources = sourcesOf(input.project).slice(0, MAX_SOURCES);
-    await progress(runId, 'watching', sources.length ? `Watching ${sources.length === 1 ? `"${sources[0].name}"` : `${sources.length} clips`}` : 'No footage in the project: working from your request');
-    // Only the user's own files
-    const owned = await File.find({ _id: { $in: sources.map((s) => s.fileId).filter((f) => Types.ObjectId.isValid(f)) }, userId: user._id }).select('_id metadata').lean();
-    const ownedIds = new Set(owned.map((f) => String(f._id)));
-    const mine = sources.filter((s) => ownedIds.has(s.fileId));
-    for (const s of mine) {
-      const meta = owned.find((f) => String(f._id) === s.fileId)?.metadata as any;
-      if (!s.duration && meta?.duration) s.duration = Number(meta.duration);
-      s.width = Number(meta?.width) || 0;
-      s.height = Number(meta?.height) || 0;
-    }
-    const analyses = await Promise.all(mine.map((s) => footageAnalysis(s.fileId, user._id)));
-    const watched = attachAnalyses(mine, analyses);
-    const words: Record<string, Array<{ text: string; start: number; end: number }>> = {};
-    for (const t of await Transcription.find({ fileId: { $in: watched.map((s) => s.fileId) } }).select('fileId words').lean()) {
-      const list = (t.words ?? []).filter((w: any) => !w.type || w.type === 'word').map((w: any) => ({ text: String(w.text), start: Number(w.start), end: Number(w.end) }));
-      if (list.length) words[String(t.fileId)] = list;
-    }
-    // Watching (long for big files, once per file) doesn't count against the review budget
-    const watchedAt = Date.now();
-    const seen = watched.filter((s) => s.analysis).length;
-    await progress(runId, 'watching', seen ? `Watched ${seen} clip${seen === 1 ? '' : 's'}: ${watched.map((s) => s.analysis?.moments.length ?? 0).reduce((a, b) => a + b, 0)} moments worth using` : 'Could not watch the footage; using what is known about it');
-
-    // --- Briefing ---
-    await progress(runId, 'briefing', 'Director is writing the brief');
-    const preferences = describePreferences((user as any).assistantPreferences).concat(((user as any).assistantMemory || []).map((m: any) => m.note)).filter(Boolean).join('\n');
-    const conversation = input.conversation.slice(-8).map((m) => `${m.role === 'user' ? 'User' : 'Cue'}: ${m.text.slice(0, 800)}`).join('\n');
-    const brief: Brief = await writeBrief({ request: input.request, conversation, project: input.context, sources: watched, preferences });
-    await progress(runId, 'briefing', `Brief: ${brief.understood} (${brief.aspect}, ${brief.targetSeconds}s, ${brief.tone})`, { brief });
-
-    // --- Cutting ---
-    let segments: Segment[] = [];
-    let cutaways: Cutaway[] = [];
-    if (watched.length) {
-      await progress(runId, 'cutting', 'Story editor is choosing the moments');
-      let cut = await cutStory({ brief, sources: watched });
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const problems = cutProblems(cut.segments, watched, brief.targetSeconds, cut.cutaways);
-        if (!problems.length) break;
-        await progress(runId, 'cutting', `Fixing the cut: ${problems[0]}`);
-        cut = await cutStory({ brief, sources: watched, problems, previous: cut.segments, previousCutaways: cut.cutaways });
-      }
-      // Whatever still doesn't fit its source is clamped or dropped
-      const byRef = new Map(watched.map((s) => [s.ref, s]));
-      segments = snapToSpeech(cut.segments, watched)
-        .filter((s) => byRef.has(s.source))
-        .map((s) => ({ ...s, from: Math.max(0, s.from), to: Math.min(byRef.get(s.source)!.duration || s.to, s.to) }))
-        .filter((s) => s.to - s.from >= 0.3);
-      cutaways = keepValidCutaways(cut.cutaways, segments, watched);
-      const length = segments.reduce((t, s) => t + s.to - s.from, 0);
-      await progress(runId, 'cutting', `Cut: ${segments.length} moments${cutaways.length ? ` + ${cutaways.length} cutaways` : ''}, ${length.toFixed(1)}s`);
-    }
-
-    // --- Crafting (in parallel) ---
-    await progress(runId, 'crafting', 'Titles, captions, motion, sound and B-roll are being designed');
-    const frame = frameFor(brief.aspect, input.project);
-    const settle = async <T>(label: string, job: Promise<T>): Promise<T | undefined> => {
-      try {
-        return await job;
-      } catch (error) {
-        logger.warn('Director specialist failed', { runId, label, error: (error as Error).message });
-        return undefined;
-      }
-    };
-    const wantsAssets = !!brief.assets && !/^none\b/i.test(brief.assets.trim());
-    let parts: { type?: TypePart; motion?: MotionPart; sound?: SoundPart; assets?: AssetPart } = {};
-    /** Runs the specialists named (all when none are), each with its review notes */
-    const craft = async (only: Set<string> | null, notes: Review['notes'] = {}) => {
-      const onCut = (key: string) => ({ brief, segments, cutaways, sources: watched, frame, notes: notes[key as keyof Review['notes']] });
-      const want = (key: string) => !only || only.has(key);
-      const [type, motion, sound, assets] = await Promise.all([
-        want('type') ? settle<TypePart>('type', designType(onCut('type'))) : Promise.resolve(parts.type),
-        want('motion') && segments.length ? settle<MotionPart>('motion', designMotion(onCut('motion'))) : Promise.resolve(parts.motion),
-        want('sound') ? settle<SoundPart>('sound', designSound(onCut('sound'))) : Promise.resolve(parts.sound),
-        want('assets') && (wantsAssets || notes.assets) ? settle<AssetPart>('assets', scoutAssets(onCut('assets'))) : Promise.resolve(parts.assets),
-      ]);
-      // A specialist that failed this time keeps its last answer
-      parts = { type: type ?? parts.type, motion: motion ?? parts.motion, sound: sound ?? parts.sound, assets: assets ?? parts.assets };
-    };
-    await craft(null);
-    await progress(runId, 'crafting', craftSummary(parts), { parts });
-
-    // --- Assembling ---
-    let sfx: Array<{ at: number; asset: AudioAsset }> = [];
-    let visuals: VisualAsset[] = [];
-    const assemble = async () => {
-      const total = segments.reduce((t, s) => t + s.to - s.from, 0);
-      sfx = await soundEffects(user, (parts.sound?.sfx ?? []).filter((s) => s.at >= 0 && s.at < total).slice(0, MAX_SFX));
-      visuals = await pictures(user, parts.assets?.assets ?? [], { text: brief.tone, tall: frame.height > frame.width });
-      return compileEdit({ original: input.project, brief, sources: watched, segments, cutaways, ...parts, sfx, visuals, words });
-    };
-    await progress(runId, 'assembling', 'Making sound effects and putting the edit together');
-    let edit: CompiledEdit = await assemble();
-    let problems = editProblems(edit);
-
-    // --- Reviewing: the director looks at real frames; revisions until it's good enough ---
-    const reviews: Array<Review & { round: number; frames: Array<Omit<StoryboardFrame, 'bytes'>> }> = [];
-    let storyboard: Array<Omit<StoryboardFrame, 'bytes'>> = [];
-    for (let round = 1; round <= MAX_REVIEWS; round++) {
-      if (Date.now() - watchedAt > REVIEW_BUDGET_MS) break;
-      await progress(runId, 'reviewing', round === 1 ? 'Director is watching the draft' : `Director is checking revision ${round - 1}`);
-      let review: Review;
-      let frames: StoryboardFrame[] = [];
-      try {
-        frames = await renderStoryboard(edit, String(user._id), runId, round);
-        review = await reviewDraft({ brief, request: input.request, edit, frames, problems, round });
-      } catch (error) {
-        logger.warn('Director review failed; the draft goes as it is', { runId, error: (error as Error).message });
-        break;
-      }
-      storyboard = frames.map(({ bytes: _bytes, ...f }) => f);
-      reviews.push({ ...review, round, frames: storyboard });
-      const verdict = `Score ${review.score}/10${review.issues.length ? `: ${review.issues[0].problem}` : ''}`;
-      await progress(runId, 'reviewing', verdict, { reviews });
-      if (review.verdict === 'ship' || review.score >= GOOD_ENOUGH || round === MAX_REVIEWS) break;
-
-      // --- Revising: only the parts with notes (a new cut means everything on it is redone) ---
-      const asked = new Set(Object.keys(review.notes));
-      for (const i of review.issues) asked.add(i.who);
-      const notes = { ...review.notes };
-      for (const i of review.issues) notes[i.who] = [notes[i.who], `${i.problem} → ${i.fix}`].filter(Boolean).join('\n');
-      await progress(runId, 'revising', `Revising: ${[...asked].map((a) => CREW_WORDS[a] ?? a).join(', ')}`);
-      if (asked.has('story') && watched.length) {
-        const recut = await cutStory({ brief, sources: watched, previous: segments, previousCutaways: cutaways, notes: notes.story });
-        const fixed = cutProblems(recut.segments, watched, brief.targetSeconds);
-        if (!fixed.some((p) => /outside|no source|before it starts/.test(p))) {
-          segments = snapToSpeech(recut.segments, watched);
-          cutaways = keepValidCutaways(recut.cutaways, segments, watched);
-        }
-        await craft(null, notes);
-      } else {
-        await craft(asked, notes);
-      }
-      edit = await assemble();
-      problems = editProblems(edit);
-    }
-
-    const last = reviews[reviews.length - 1];
-    const result = { ...edit, summary: summaryOf(brief, edit), problems, storyboard, review: last ? { score: last.score, strengths: last.strengths, rounds: reviews.length } : null };
+    const { result } = await directEdit({ user, input, key: runId, report: (stage, text, set) => progress(runId, stage, text, set), lessons: await liveLessons() });
     await progress(runId, 'done', `Ready in ${Math.round((Date.now() - started) / 1000)}s`, { result });
     await settleUsage(user._id, 'directorRuns', run.usageJobId);
   } catch (error) {
@@ -256,6 +117,171 @@ async function carryOut(runId: string, input: DirectorInput): Promise<void> {
     });
     await releaseUsage('directorRuns', run.usageJobId, stopped ? 'stopped' : 'failed').catch(() => undefined);
   }
+}
+
+export interface EditContext {
+  user: any;
+  input: DirectorInput;
+  /** Names this edit's stored frames (the run id; an eval's own key) */
+  key: string;
+  /** Progress, as the editor sees it (and where a stop is noticed) */
+  report: (stage: DirectorStage, text: string, set?: Record<string, unknown>) => Promise<void>;
+  /** What the crew learned from past edits, per member */
+  lessons?: Lessons;
+}
+
+/**
+ * One creative edit, start to finish: watch, brief, cut, craft, assemble,
+ * review and revise. Runs for a user's Director run and for the learning
+ * loop's evals (with candidate lessons).
+ */
+export async function directEdit(ctx: EditContext) {
+  const { user, input, key, report } = ctx;
+  const lessons = ctx.lessons ?? {};
+  const started = Date.now();
+  // --- Watching ---
+  const sources = sourcesOf(input.project).slice(0, MAX_SOURCES);
+  await report('watching', sources.length ? `Watching ${sources.length === 1 ? `"${sources[0].name}"` : `${sources.length} clips`}` : 'No footage in the project: working from your request');
+  // Only the user's own files
+  const owned = await File.find({ _id: { $in: sources.map((s) => s.fileId).filter((f) => Types.ObjectId.isValid(f)) }, userId: user._id }).select('_id metadata').lean();
+  const ownedIds = new Set(owned.map((f) => String(f._id)));
+  const mine = sources.filter((s) => ownedIds.has(s.fileId));
+  for (const s of mine) {
+    const meta = owned.find((f) => String(f._id) === s.fileId)?.metadata as any;
+    if (!s.duration && meta?.duration) s.duration = Number(meta.duration);
+    s.width = Number(meta?.width) || 0;
+    s.height = Number(meta?.height) || 0;
+  }
+  const analyses = await Promise.all(mine.map((s) => footageAnalysis(s.fileId, user._id)));
+  const watched = attachAnalyses(mine, analyses);
+  const words: Record<string, Array<{ text: string; start: number; end: number }>> = {};
+  for (const t of await Transcription.find({ fileId: { $in: watched.map((s) => s.fileId) } }).select('fileId words').lean()) {
+    const list = (t.words ?? []).filter((w: any) => !w.type || w.type === 'word').map((w: any) => ({ text: String(w.text), start: Number(w.start), end: Number(w.end) }));
+    if (list.length) words[String(t.fileId)] = list;
+  }
+  // Watching (long for big files, once per file) doesn't count against the review budget
+  const watchedAt = Date.now();
+  const seen = watched.filter((s) => s.analysis).length;
+  await report('watching', seen ? `Watched ${seen} clip${seen === 1 ? '' : 's'}: ${watched.map((s) => s.analysis?.moments.length ?? 0).reduce((a, b) => a + b, 0)} moments worth using` : 'Could not watch the footage; using what is known about it');
+
+  // --- Briefing ---
+  await report('briefing', 'Director is writing the brief');
+  const preferences = describePreferences((user as any).assistantPreferences).concat(((user as any).assistantMemory || []).map((m: any) => m.note)).filter(Boolean).join('\n');
+  const conversation = input.conversation.slice(-8).map((m) => `${m.role === 'user' ? 'User' : 'Cue'}: ${m.text.slice(0, 800)}`).join('\n');
+  const brief: Brief = await writeBrief({ request: input.request, conversation, project: input.context, sources: watched, preferences, lessons: lessons.director });
+  await report('briefing', `Brief: ${brief.understood} (${brief.aspect}, ${brief.targetSeconds}s, ${brief.tone})`, { brief });
+
+  // --- Cutting ---
+  let segments: Segment[] = [];
+  let cutaways: Cutaway[] = [];
+  if (watched.length) {
+    await report('cutting', 'Story editor is choosing the moments');
+    let cut = await cutStory({ brief, sources: watched, lessons: lessons.story });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      // Checked as it will play (ends snapped to sentences), so a snap that makes it long goes back too
+      const problems = cutProblems(snapToSpeech(cut.segments, watched), watched, brief.targetSeconds, cut.cutaways);
+      if (!problems.length) break;
+      await report('cutting', `Fixing the cut: ${problems[0]}`);
+      cut = await cutStory({ brief, sources: watched, problems, previous: cut.segments, previousCutaways: cut.cutaways, lessons: lessons.story });
+    }
+    // Whatever still doesn't fit its source is clamped or dropped
+    const byRef = new Map(watched.map((s) => [s.ref, s]));
+    segments = snapToSpeech(cut.segments, watched)
+      .filter((s) => byRef.has(s.source))
+      .map((s) => ({ ...s, from: Math.max(0, s.from), to: Math.min(byRef.get(s.source)!.duration || s.to, s.to) }))
+      .filter((s) => s.to - s.from >= 0.3);
+    cutaways = keepValidCutaways(cut.cutaways, segments, watched);
+    const length = segments.reduce((t, s) => t + s.to - s.from, 0);
+    await report('cutting', `Cut: ${segments.length} moments${cutaways.length ? ` + ${cutaways.length} cutaways` : ''}, ${length.toFixed(1)}s`);
+  }
+
+  // --- Crafting (in parallel) ---
+  await report('crafting', 'Titles, captions, motion, sound and B-roll are being designed');
+  const frame = frameFor(brief.aspect, input.project);
+  const settle = async <T>(label: string, job: Promise<T>): Promise<T | undefined> => {
+    try {
+      return await job;
+    } catch (error) {
+      logger.warn('Director specialist failed', { key, label, error: (error as Error).message });
+      return undefined;
+    }
+  };
+  const wantsAssets = !!brief.assets && !/^none\b/i.test(brief.assets.trim());
+  let parts: { type?: TypePart; motion?: MotionPart; sound?: SoundPart; assets?: AssetPart } = {};
+  /** Runs the specialists named (all when none are), each with its review notes */
+  const craft = async (only: Set<string> | null, notes: Review['notes'] = {}) => {
+    const onCut = (who: string) => ({ brief, segments, cutaways, sources: watched, frame, notes: notes[who as keyof Review['notes']], lessons: lessons[who as keyof Lessons] });
+    const want = (key: string) => !only || only.has(key);
+    const [type, motion, sound, assets] = await Promise.all([
+      want('type') ? settle<TypePart>('type', designType(onCut('type'))) : Promise.resolve(parts.type),
+      want('motion') && segments.length ? settle<MotionPart>('motion', designMotion(onCut('motion'))) : Promise.resolve(parts.motion),
+      want('sound') ? settle<SoundPart>('sound', designSound(onCut('sound'))) : Promise.resolve(parts.sound),
+      want('assets') && (wantsAssets || notes.assets) ? settle<AssetPart>('assets', scoutAssets(onCut('assets'))) : Promise.resolve(parts.assets),
+    ]);
+    // A specialist that failed this time keeps its last answer
+    parts = { type: type ?? parts.type, motion: motion ?? parts.motion, sound: sound ?? parts.sound, assets: assets ?? parts.assets };
+  };
+  await craft(null);
+  await report('crafting', craftSummary(parts), { parts });
+
+  // --- Assembling ---
+  let sfx: Array<{ at: number; asset: AudioAsset }> = [];
+  let visuals: VisualAsset[] = [];
+  const assemble = async () => {
+    const total = segments.reduce((t, s) => t + s.to - s.from, 0);
+    sfx = await soundEffects(user, (parts.sound?.sfx ?? []).filter((s) => s.at >= 0 && s.at < total).slice(0, MAX_SFX));
+    visuals = await pictures(user, parts.assets?.assets ?? [], { text: brief.tone, tall: frame.height > frame.width });
+    return compileEdit({ original: input.project, brief, sources: watched, segments, cutaways, ...parts, sfx, visuals, words });
+  };
+  await report('assembling', 'Making sound effects and putting the edit together');
+  let edit: CompiledEdit = await assemble();
+  let problems = editProblems(edit);
+
+  // --- Reviewing: the director looks at real frames; revisions until it's good enough ---
+  const reviews: Array<Review & { round: number; frames: Array<Omit<StoryboardFrame, 'bytes'>> }> = [];
+  let storyboard: Array<Omit<StoryboardFrame, 'bytes'>> = [];
+  for (let round = 1; round <= MAX_REVIEWS; round++) {
+    if (Date.now() - watchedAt > REVIEW_BUDGET_MS) break;
+    await report('reviewing', round === 1 ? 'Director is watching the draft' : `Director is checking revision ${round - 1}`);
+    let review: Review;
+    let frames: StoryboardFrame[] = [];
+    try {
+      frames = await renderStoryboard(edit, String(user._id), key, round);
+      review = await reviewDraft({ brief, request: input.request, edit, frames, problems, round });
+    } catch (error) {
+      logger.warn('Director review failed; the draft goes as it is', { key, error: (error as Error).message });
+      break;
+    }
+    storyboard = frames.map(({ bytes: _bytes, ...f }) => f);
+    reviews.push({ ...review, round, frames: storyboard });
+    const verdict = `Score ${review.score}/10${review.issues.length ? `: ${review.issues[0].problem}` : ''}`;
+    await report('reviewing', verdict, { reviews });
+    if (review.verdict === 'ship' || review.score >= GOOD_ENOUGH || round === MAX_REVIEWS) break;
+
+    // --- Revising: only the parts with notes (a new cut means everything on it is redone) ---
+    const asked = new Set(Object.keys(review.notes));
+    for (const i of review.issues) asked.add(i.who);
+    const notes = { ...review.notes };
+    for (const i of review.issues) notes[i.who] = [notes[i.who], `${i.problem} → ${i.fix}`].filter(Boolean).join('\n');
+    await report('revising', `Revising: ${[...asked].map((a) => CREW_WORDS[a] ?? a).join(', ')}`);
+    if (asked.has('story') && watched.length) {
+      const recut = await cutStory({ brief, sources: watched, previous: segments, previousCutaways: cutaways, notes: notes.story, lessons: lessons.story });
+      const fixed = cutProblems(recut.segments, watched, brief.targetSeconds);
+      if (!fixed.some((p) => /outside|no source|before it starts/.test(p))) {
+        segments = snapToSpeech(recut.segments, watched);
+        cutaways = keepValidCutaways(recut.cutaways, segments, watched);
+      }
+      await craft(null, notes);
+    } else {
+      await craft(asked, notes);
+    }
+    edit = await assemble();
+    problems = editProblems(edit);
+  }
+
+  const last = reviews[reviews.length - 1];
+  const result = { ...edit, summary: summaryOf(brief, edit), problems, storyboard, review: last ? { score: last.score, strengths: last.strengths, rounds: reviews.length } : null };
+  return { result, brief };
 }
 
 /** Cutaways that fit their piece and source (the rest are dropped) */

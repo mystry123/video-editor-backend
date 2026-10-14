@@ -5,6 +5,7 @@ export * from './TemplateVersion';
 export * from './File';
 export * from './MediaAnalysis';
 export * from './DirectorRun';
+export * from './DirectorLessonSet';
 export * from './Transcription';
 export * from './RenderJob';
 export * from './Webhook';
