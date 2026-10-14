@@ -313,6 +313,31 @@ describe('Director runs', () => {
     }
   });
 
+  it('when a revision comes out worse, the better draft the director judged is the one kept', async () => {
+    const { token, body } = await setup();
+    setStillRenderer(async () => Buffer.from('jpeg'));
+    let reviews = 0;
+    const base = fake.generate.getMockImplementation()!;
+    fake.generate.mockImplementation(async (req: GeminiRequest) => {
+      if (!req.system.includes('reviewing your crew')) return base(req);
+      reviews++;
+      const json = reviews === 1
+        ? { score: 7, verdict: 'revise', strengths: ['Strong hook'], issues: [{ who: 'type', problem: 'Title a bit late', fix: 'Earlier' }], notes: { type: 'Earlier title' } }
+        : { score: 5, verdict: 'revise', strengths: [], issues: [{ who: 'type', problem: 'Worse now', fix: '-' }], notes: {} };
+      return { text: '', json, calls: [], usage: { input: 1, output: 1 } };
+    });
+    try {
+      const res = await api().post('/api/v1/ai/director').set('Authorization', `Bearer ${token}`).send(body);
+      const run = await waitFor(token, res.body.run.id);
+      expect(reviews).toBe(2);
+      expect(run.result.review).toMatchObject({ score: 7, strengths: ['Strong hook'], rounds: 2 });
+      expect(run.result.storyboard[0].url).toContain('/r1-');
+    } finally {
+      setStillRenderer(null);
+      fake.generate.mockImplementation(base);
+    }
+  });
+
   it('music the sound designer asks for is made to the edit\'s length and laid under it', async () => {
     const { token, body } = await setup();
     const music = vi.fn(async () => Buffer.from('mp3'));

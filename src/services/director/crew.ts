@@ -105,7 +105,8 @@ const E = (values: readonly string[], description = '') => ({ type: 'STRING', en
 const obj = (properties: Record<string, unknown>, required = Object.keys(properties)) => ({ type: 'OBJECT', properties, required });
 const arr = (items: unknown, description = '') => ({ type: 'ARRAY', items, ...(description ? { description } : {}) });
 
-const CRAFT = `Craft rules for short social edits (follow them unless the brief says otherwise):
+const CRAFT = `The brief's explicit instructions (hard cuts only, one continuous shot, a font, a length) come first: they override these rules, your own taste and your habits.
+Craft rules for short social edits (follow them unless the brief says otherwise):
 - The first 1–2 seconds decide everything: open on the strongest line or image, never on a slow intro, greeting or logo.
 - Something new every 2–3 seconds (a cut, a move, a title, a sound) so attention never drops; vary it.
 - Cut on sentence or phrase boundaries: never cut a word in half, never end a piece mid-thought.

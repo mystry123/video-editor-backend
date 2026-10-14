@@ -533,8 +533,8 @@ export function compileEdit(input: CompileInput): CompiledEdit {
       enter: { id: uuidv4(), type: full ? 'fade' : 'pop', category: 'enter', duration: 0.25, easing: 'quadratic-out', params: {}, isExit: false, transition: false, reversed: false },
       exit: { id: uuidv4(), type: 'fade', category: 'exit', duration: 0.2, easing: 'quadratic-out', params: {}, isExit: true, endOffset: 0 },
     };
-    // A stock video shorter than its span loops to fill it
-    if (v.kind === 'video') Object.assign(el, { duration: r3(v.duration || end - start), trimStart: 0, trimDuration: r3(end - start), loop: (v.duration || 0) < end - start - 0.05, muted: true, volume: 0, speed: 100 });
+    // A stock video shorter than its span (or of unknown length: one that ran out showed black) loops to fill it
+    if (v.kind === 'video') Object.assign(el, { duration: r3(v.duration || end - start), trimStart: 0, trimDuration: r3(end - start), loop: !v.duration || v.duration < end - start - 0.05, muted: true, volume: 0, speed: 100 });
     else el.duration = r3(end - start);
     elements.push(el);
     add('extras', el.id);

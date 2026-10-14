@@ -221,6 +221,16 @@ export async function directEdit(ctx: EditContext) {
   const wantsAssets = brief.picture === 'replace' || (!!brief.assets && !/^none\b/i.test(brief.assets.trim()));
   let parts: { type?: TypePart; motion?: MotionPart; sound?: SoundPart; assets?: AssetPart } = {};
   /** Runs the specialists named (all when none are), each with its review notes */
+  /** The asset scout; when the picture is replaced, too few pictures for the edit go back to it once */
+  const scoutCovering = async (onCutInput: Parameters<typeof scoutAssets>[0]) => {
+    const first = await scoutAssets(onCutInput);
+    if (brief.picture !== 'replace') return first;
+    const total = segments.reduce((t, s) => t + s.to - s.from, 0);
+    const needed = Math.max(2, Math.ceil(total / 6));
+    if (first.assets.length >= needed) return first;
+    const retry = await scoutAssets({ ...onCutInput, notes: `${onCutInput.notes ?? ''}\nYou gave ${first.assets.length} pictures for ${total.toFixed(1)}s. The footage's picture is replaced, so the edit needs at least ${needed}, back to back from 0 to the end, a new one every 2.5–6 s.`.trim() });
+    return retry.assets.length > first.assets.length ? retry : first;
+  };
   const craft = async (only: Set<string> | null, notes: Review['notes'] = {}) => {
     const onCut = (who: string) => ({ brief, segments, cutaways, sources: watched, frame, notes: notes[who as keyof Review['notes']], lessons: lessons[who as keyof Lessons] });
     const want = (key: string) => !only || only.has(key);
@@ -228,7 +238,7 @@ export async function directEdit(ctx: EditContext) {
       want('type') ? settle<TypePart>('type', designType(onCut('type'))) : Promise.resolve(parts.type),
       want('motion') && segments.length ? settle<MotionPart>('motion', designMotion(onCut('motion'))) : Promise.resolve(parts.motion),
       want('sound') ? settle<SoundPart>('sound', designSound(onCut('sound'))) : Promise.resolve(parts.sound),
-      want('assets') && (wantsAssets || notes.assets) ? settle<AssetPart>('assets', scoutAssets(onCut('assets'))) : Promise.resolve(parts.assets),
+      want('assets') && (wantsAssets || notes.assets) ? settle<AssetPart>('assets', scoutCovering(onCut('assets'))) : Promise.resolve(parts.assets),
     ]);
     // A specialist that failed this time keeps its last answer
     parts = { type: type ?? parts.type, motion: motion ?? parts.motion, sound: sound ?? parts.sound, assets: assets ?? parts.assets };
@@ -276,6 +286,7 @@ export async function directEdit(ctx: EditContext) {
 
   // --- Reviewing: the director looks at real frames; revisions until it's good enough ---
   const reviews: Array<Review & { round: number; frames: Array<Omit<StoryboardFrame, 'bytes'>> }> = [];
+  let best: { edit: CompiledEdit; problems: string[]; storyboard: Array<Omit<StoryboardFrame, 'bytes'>>; review: Review } | null = null;
   let storyboard: Array<Omit<StoryboardFrame, 'bytes'>> = [];
   for (let round = 1; round <= MAX_REVIEWS; round++) {
     // The first look always happens (unless the run is far too long); revisions only within the budget
@@ -292,6 +303,8 @@ export async function directEdit(ctx: EditContext) {
     }
     storyboard = frames.map(({ bytes: _bytes, ...f }) => f);
     reviews.push({ ...review, round, frames: storyboard });
+    // The best-judged draft is kept: a revision can come out worse (a 7 became a 6)
+    if (!best || review.score > best.review.score) best = { edit, problems, storyboard, review };
     const verdict = `Score ${review.score}/10${review.issues.length ? `: ${review.issues[0].problem}` : ''}`;
     await report('reviewing', verdict, { reviews });
     if (review.verdict === 'ship' || review.score >= GOOD_ENOUGH || round === MAX_REVIEWS) break;
@@ -317,8 +330,16 @@ export async function directEdit(ctx: EditContext) {
     problems = editProblems(edit);
   }
 
-  const last = reviews[reviews.length - 1];
-  const result = { ...edit, summary: summaryOf(brief, edit), problems, storyboard, review: last ? { score: last.score, strengths: last.strengths, rounds: reviews.length } : null };
+  // The best reviewed draft goes to the user; a revision the director never got to look at is
+  // dropped in favour of one it judged (unless nothing was judged at all)
+  const chosen = best ?? { edit, problems, storyboard, review: null };
+  const result = {
+    ...chosen.edit,
+    summary: summaryOf(brief, chosen.edit),
+    problems: chosen.problems,
+    storyboard: chosen.storyboard,
+    review: chosen.review ? { score: chosen.review.score, strengths: chosen.review.strengths, rounds: reviews.length } : null,
+  };
   return { result, brief };
 }
 
