@@ -38,6 +38,7 @@ const dubState = vi.hoisted(() => ({ status: { state: 'dubbing' } as any }));
 const tools = {
   isolateVoice: vi.fn(async () => Buffer.alloc(20_000, 2)),
   soundEffect: vi.fn(async () => Buffer.alloc(8_000, 3)),
+  music: vi.fn(async () => Buffer.alloc(40_000, 5)),
   startDub: vi.fn(async () => ({ id: 'dub123', expectedSeconds: 40 })),
   dubStatus: vi.fn(async () => dubState.status),
   dubbedAudio: vi.fn(async () => Buffer.alloc(30_000, 4)),
@@ -125,6 +126,18 @@ describe('sound effects', () => {
     expect(JSON.stringify(sixth.body)).toMatch(/SOUND_EFFECTS_EXCEEDED/);
     expect((await api().post('/api/v1/voice/sound-effect').set(user.auth).send({ prompt: 'x' })).status).toBe(400);
     expect((await api().post('/api/v1/voice/sound-effect').set(user.auth).send({ prompt: 'boom', duration: 60 })).status).toBe(400);
+  });
+});
+
+describe('background music', () => {
+  it('makes instrumental music to a length, counted like a sound effect', async () => {
+    const user = await createUser();
+    const res = await api().post('/api/v1/voice/music').set(user.auth).send({ prompt: 'polished corporate ambient, soft piano', duration: 30 });
+    expect(res.status).toBe(201);
+    expect(res.body.file).toMatchObject({ name: 'Music - polished corporate ambient, soft piano.mp3', mimeType: 'audio/mpeg' });
+    expect(tools.music).toHaveBeenCalledWith('polished corporate ambient, soft piano', 30);
+    expect(await used(user.user._id, 'soundEffects')).toBe(1);
+    expect((await api().post('/api/v1/voice/music').set(user.auth).send({ prompt: 'calm', duration: 600 })).status).toBe(400);
   });
 });
 

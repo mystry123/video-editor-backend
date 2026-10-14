@@ -218,6 +218,22 @@ export const EDITOR_TOOLS: Record<string, ToolDef> = {
       S.obj({ prompt: S.str('Describe the sound'), at: S.num('Start, seconds'), duration: S.num('0.5–22 seconds (omit for automatic)') }, ['prompt', 'at']),
     args: () => z.object({ prompt: z.string().min(2).max(300), at: seconds, duration: num(0.5, 22).optional() }),
   },
+  add_music: {
+    description:
+      'Generate instrumental background music from a description and lay it under the video. Use for "add music", "change the background music", "something more professional/upbeat/calm". With replace (default true) the current music clips (audio clips named Music…) are removed first. Not for voiceovers or sound effects.',
+    parameters: () =>
+      S.obj(
+        {
+          prompt: S.str('The music: genre, mood, tempo, instruments (e.g. "polished corporate ambient, soft piano and light strings, 90 bpm"); no artist names'),
+          replace: S.bool('Remove the current music first (default true)'),
+          start: S.num('Start, seconds (default 0)'),
+          duration: S.num('Seconds (default: to the end of the project), 5–180'),
+          volume: S.num('0–100 (default: 25 under speech, 60 without)'),
+        },
+        ['prompt']
+      ),
+    args: () => z.object({ prompt: z.string().min(3).max(400), replace: z.boolean().optional(), start: seconds.optional(), duration: num(5, 180).optional(), volume: num(0, 100).optional() }),
+  },
   add_gif: {
     description:
       'Add an animated GIF or sticker from GIPHY found by a search query (stickers have transparent backgrounds: emojis, arrows, reactions, decorations). The user sees the match and can pick another before applying.',

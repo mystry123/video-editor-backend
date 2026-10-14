@@ -63,6 +63,14 @@ export const soundEffectSchema = z.object({
   }),
 });
 
+export const musicSchema = z.object({
+  body: z.object({
+    prompt: z.string().trim().min(3, 'Describe the music').max(400, 'Keep the description under 400 characters'),
+    // seconds
+    duration: z.number().min(5).max(180),
+  }),
+});
+
 export const createDubSchema = z.object({
   body: z.object({
     fileId: z.string().regex(/^[a-f0-9]{24}$/, 'Pick a video or audio clip'),

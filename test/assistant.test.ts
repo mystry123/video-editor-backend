@@ -246,3 +246,28 @@ describe('Vertex rate limits', () => {
     resetRateLimits();
   });
 });
+
+describe('what goes to Cue Director', () => {
+  it('only whole new edits of the footage, never a change to one part', async () => {
+    const { looksLikeWholeEdit } = await import('../src/controllers/assistant.controller');
+    for (const yes of ['Turn this into a punchy 15 second reel', 'make a youtube short from this', 'Cut this down to 30 seconds', 'make a trailer', 'edit this video for tiktok', 'make it more engaging and punchy', 'give me the highlights']) {
+      expect(looksLikeWholeEdit(yes), yes).toBe(true);
+    }
+    for (const no of ['change the bg-music to something professional', 'make the title red', 'add captions', 'replace the background music with something calm', 'make this 9:16', 'add a sound effect at 3s', 'make the text bigger']) {
+      expect(looksLikeWholeEdit(no), no).toBe(false);
+    }
+  });
+
+  it('a hand-off for a small change goes back to the model, which uses the specific tool', async () => {
+    const user = await createUser();
+    replies.push(reply('', [{ name: 'direct_edit', args: { request: 'professional music' } }]));
+    replies.push(reply('Swapping the music.', [{ name: 'add_music', args: { prompt: 'polished corporate ambient, soft piano, 90 bpm', replace: true } }]));
+    const res = await api()
+      .post('/api/v1/ai/chat')
+      .set('Authorization', `Bearer ${user.token}`)
+      .send({ messages: [{ role: 'user', text: 'change the bg-music to something professional' }], context: 'c1 audio "Music"' });
+    expect(res.status).toBe(200);
+    expect(res.body.calls.map((c: any) => c.name)).toEqual(['add_music']);
+    expect(requests[1].messages.at(-1)?.text).toContain('direct_edit is only for making a whole new edit');
+  });
+});

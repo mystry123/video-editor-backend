@@ -141,6 +141,23 @@ export const createSoundEffect = async (req: AuthRequest, res: Response, next: N
   }
 };
 
+/** Instrumental background music from a description (metered like a sound effect) */
+export const createMusic = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { prompt, duration } = req.body as { prompt: string; duration: number };
+    const user = await loadUser(req);
+    const result = await metered(user._id, 'soundEffects', 1, getEffectiveQuota(user).maxSoundEffects, async () => {
+      const audio = await getAudioTools().music(prompt, duration);
+      if (audio.length === 0) throw ApiError.withCode(503, 'VOICE_UNAVAILABLE', "Music isn't available right now.");
+      const label = safeName(prompt).slice(0, 40) || 'Music';
+      return saveAudio(user, audio, `Music - ${label}.mp3`, 'ai_music');
+    });
+    res.status(201).json({ file: result });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const createDub = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { fileId, language } = req.body as { fileId: string; language: string };

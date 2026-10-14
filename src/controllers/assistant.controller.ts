@@ -40,6 +40,34 @@ interface ChatBody {
 
 export const MAX_MEMORY_NOTES = 30;
 
+/**
+ * A request for a whole new edit of the footage (a reel, short, trailer,
+ * highlight, recap, cut-down…): the only kind Cue Director takes. Changing
+ * one part ("change the background music") never is, however it's worded.
+ */
+export function looksLikeWholeEdit(text: string): boolean {
+  const t = text.toLowerCase();
+  return (
+    /\b(reels?|shorts?|tiktoks?|trailer|teaser|highlights?|recap|montage|promo|supercut|sizzle)\b/.test(t) ||
+    /\b(turn|make|edit|cut|convert|transform)\b[^.?!]{0,40}\b(into|down to|as)\b/.test(t) ||
+    /\b(cut|trim|edit)\b[^.?!]{0,20}\b(down|to)\b[^.?!]{0,12}\b\d+\s*(s|sec|secs|seconds|min|minutes)\b/.test(t) ||
+    /\bmake (it|this|the video)\b[^.?!]{0,20}\b(punchy|engaging|viral|shorter|snappier|more exciting)\b/.test(t) ||
+    /\b(edit|re-?edit) (this|it|the video|my video|the footage)\b/.test(t)
+  );
+}
+
+/** A hand-off to Cue Director for something smaller goes back to the model, to be done with the specific tools */
+function guardDirector(checked: { valid: CheckedCall[]; problems: string[] }, request: string) {
+  if (!checked.valid.some((c) => c.name === 'direct_edit') || looksLikeWholeEdit(request)) return checked;
+  return {
+    valid: checked.valid.filter((c) => c.name !== 'direct_edit'),
+    problems: [
+      ...checked.problems,
+      'direct_edit is only for making a whole new edit of the footage (a reel, short, trailer, highlight, cut-down). This request changes one part of the project: make it with the specific tools (e.g. add_music for background music, update_clip, add_text…).',
+    ],
+  };
+}
+
 /** "How do I…", "what is…", "…?" : a question to answer, not an edit to make */
 export function isQuestion(text: string): boolean {
   const t = text.trim().toLowerCase();
@@ -60,6 +88,7 @@ const TOOL_WORDS: Record<string, string> = {
   set_transition: 'transitions',
   add_voiceover: 'a voiceover',
   add_sound_effect: 'a sound effect',
+  add_music: 'background music',
   add_gif: 'a sticker or GIF',
   add_stock: 'stock media',
   add_lottie: 'a Lottie animation',
@@ -128,7 +157,8 @@ export const chat = async (req: AuthRequest, res: Response, next: NextFunction):
 
     let model = env.aiModel;
     let result = await gemini.generate({ model, system, messages: conversation, tools });
-    let checked = checkCalls(result.calls.slice(0, MAX_CALLS_PER_REPLY), capabilities, exclude);
+    const requestText = messages[messages.length - 1].text;
+    let checked = guardDirector(checkCalls(result.calls.slice(0, MAX_CALLS_PER_REPLY), capabilities, exclude), requestText);
     let usage = { ...result.usage };
 
     // An edit request answered in words (e.g. a plan described instead of
@@ -151,7 +181,7 @@ export const chat = async (req: AuthRequest, res: Response, next: NextFunction):
       usage = { input: usage.input + nudged.usage.input, output: usage.output + nudged.usage.output };
       if (nudged.calls.length) {
         result = { ...nudged, text: nudged.text || result.text };
-        checked = checkCalls(result.calls.slice(0, MAX_CALLS_PER_REPLY), capabilities, exclude);
+        checked = guardDirector(checkCalls(result.calls.slice(0, MAX_CALLS_PER_REPLY), capabilities, exclude), requestText);
       }
     }
 
@@ -169,7 +199,7 @@ export const chat = async (req: AuthRequest, res: Response, next: NextFunction):
       ];
       model = retryModel;
       result = await gemini.generate({ model, system, messages: conversation, tools });
-      checked = checkCalls(result.calls.slice(0, MAX_CALLS_PER_REPLY), capabilities, exclude);
+      checked = guardDirector(checkCalls(result.calls.slice(0, MAX_CALLS_PER_REPLY), capabilities, exclude), requestText);
       usage = { input: usage.input + result.usage.input, output: usage.output + result.usage.output };
     }
 
