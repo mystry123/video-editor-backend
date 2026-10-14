@@ -34,7 +34,7 @@ const brief: Brief = {
 const analysis = {
   summary: 'A host in Lisbon.', kind: 'vlog', language: 'en', hasSpeech: true, hasMusic: false,
   shots: [{ start: 0, end: 30, description: 'Host talks' }, { start: 30, end: 60, description: 'View of the river' }],
-  speech: [{ start: 3, end: 5, text: 'Good morning from Lisbon.' }, { start: 40, end: 42, text: 'Look at that.' }],
+  speech: [{ start: 3, end: 5, text: 'Good morning from Lisbon.' }, { start: 40, end: 46, text: 'Look at that.' }],
   moments: [{ start: 3, end: 5, title: 'Opener', why: 'Line', kind: 'hook', score: 8 }],
 };
 
@@ -446,7 +446,9 @@ describe('cuts follow what is said', () => {
     // More than a second to go and no sentence before it in the piece: left as chosen
     expect(snapToSpeech([{ source: 'S1', from: 5, to: 12.5 }], [s])).toEqual([{ source: 'S1', from: 5, to: 12.5 }]);
     // Starts stay where the story editor put them
-    expect(snapToSpeech([{ source: 'S1', from: 11, to: 16 }], [s])).toEqual([{ source: 'S1', from: 11, to: 16 }]);
+    expect(snapToSpeech([{ source: 'S1', from: 11, to: 16 }, { source: 'S1', from: 20, to: 30 }], [s])[0]).toEqual({ source: 'S1', from: 11, to: 16 });
+    // The last piece ends just after its last words instead of lingering
+    expect(snapToSpeech([{ source: 'S1', from: 5, to: 13.2 }, { source: 'S1', from: 9, to: 17 }], [s])[1]).toEqual({ source: 'S1', from: 9, to: 14.35 });
   });
 });
 

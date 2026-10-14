@@ -153,7 +153,7 @@ export function cutView(segments: Segment[], sources: Source[], cutaways: Cutawa
 export function snapToSpeech(segments: Segment[], sources: Source[]): Segment[] {
   const byRef = new Map(sources.map((s) => [s.ref, s]));
   const MAX_STRETCH = 1;
-  return segments.map((seg) => {
+  return segments.map((seg, index) => {
     const lines = byRef.get(seg.source)?.analysis?.speech ?? [];
     const { from } = seg;
     let { to } = seg;
@@ -165,6 +165,11 @@ export function snapToSpeech(segments: Segment[], sources: Source[]): Segment[] 
         const before = lines.filter((l) => l.end <= endIn.start + 0.05 && l.end > from + 0.4).pop();
         if (before) to = before.end + 0.1;
       }
+    }
+    // The edit ends on its last words: a final piece that lingers well past them is cut just after
+    if (index === segments.length - 1) {
+      const lastSaid = lines.filter((l) => l.end > from + 0.3 && l.end <= to + 0.05).pop();
+      if (lastSaid && to - lastSaid.end > 0.8) to = lastSaid.end + 0.35;
     }
     return { ...seg, to: Math.round(to * 100) / 100 };
   });

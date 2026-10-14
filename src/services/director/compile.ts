@@ -165,7 +165,24 @@ export function fitTitle(text: string, fontSize: number, frame: { width: number;
 
 const hex = (v: unknown, fallback: string) => (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v.trim()) ? v.trim() : fallback);
 
-function titleStyle(style: string, color: string, accent: string, hook: boolean): Record<string, unknown> {
+/** Fonts with one weight (asking for bold makes the browser fake it) */
+const SINGLE_WEIGHT = new Set(['Bebas Neue', 'Anton', 'Archivo Black', 'Abril Fatface', 'Permanent Marker']);
+/** Fonts set as written (capitals spoil serif and script faces) */
+const AS_WRITTEN = new Set(['Playfair Display', 'Lora', 'Abril Fatface', 'Permanent Marker', 'Caveat']);
+const KNOWN_FONTS = new Set(['Inter', 'Montserrat', 'Poppins', 'Space Grotesk', 'Bebas Neue', 'Anton', 'Archivo Black', 'Oswald', 'Playfair Display', 'Lora', 'Abril Fatface', 'Permanent Marker', 'Caveat']);
+
+function titleStyle(style: string, color: string, accent: string, hook: boolean, font = 'Inter'): Record<string, unknown> {
+  const family = KNOWN_FONTS.has(font) ? font : 'Inter';
+  const look = titleLook(style, color, accent, hook);
+  return {
+    ...look,
+    fontFamily: family,
+    ...(SINGLE_WEIGHT.has(family) ? { fontWeight: '400' } : {}),
+    ...(AS_WRITTEN.has(family) ? { textTransform: 'none' } : {}),
+  };
+}
+
+function titleLook(style: string, color: string, accent: string, hook: boolean): Record<string, unknown> {
   const base = { fontFamily: 'Inter', fontStyle: 'normal', lineHeight: 1.1, letterSpacing: 0, textAlign: 'center', verticalAlign: 'middle', textTransform: 'uppercase', fontSize: hook ? 8.5 : 6.5 };
   switch (style) {
     case 'boxed':
@@ -457,7 +474,7 @@ export function compileEdit(input: CompileInput): CompiledEdit {
     const end = Math.max(start + 0.3, Math.min(total, Number(t.end) || start + 2));
     const enter = TEXT_ENTER[t.motion];
     const hook = /hook/i.test(t.role) || start < 0.5;
-    const look = titleStyle(t.style, hex(t.color, '#FFFFFF'), hex(t.accent, '#2447F9'), hook);
+    const look = titleStyle(t.style, hex(t.color, '#FFFFFF'), hex(t.accent, '#2447F9'), hook, t.font);
     const padEm = look.backgroundColor ? ((Number(look.backgroundXPadding) || 0) / 100) : look.strokeEnabled ? 0.05 : 0;
     const fitted = fitTitle(t.text, Number(look.fontSize), frame, { upper: look.textTransform === 'uppercase', padEm });
     const text = {

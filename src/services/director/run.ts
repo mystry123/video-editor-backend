@@ -61,6 +61,8 @@ const MAX_AI_IMAGES = 4;
 const MAX_REVIEWS = 2;
 /** No new review round starts after this long (a round takes about a minute) */
 const REVIEW_BUDGET_MS = 8 * 60 * 1000;
+/** Even the first review is skipped past this (a run already this long goes as it is) */
+const HARD_STOP_MS = 14 * 60 * 1000;
 
 class Stopped extends Error {}
 
@@ -250,13 +252,22 @@ export async function directEdit(ctx: EditContext) {
   let visuals: VisualAsset[] = [];
   // Made once per prompt and length (a revision that keeps the music doesn't make it again)
   let music: { key: string; asset: AudioAsset | undefined } | null = null;
+  // Pictures are made again only when the asset scout's picks change (a revision of the titles keeps them)
+  let picturesFor = '';
   const assemble = async () => {
     const total = segments.reduce((t, s) => t + s.to - s.from, 0);
-    sfx = await soundEffects(user, (parts.sound?.sfx ?? []).filter((s) => s.at >= 0 && s.at < total).slice(0, MAX_SFX));
-    visuals = await pictures(user, parts.assets?.assets ?? [], { text: brief.tone, tall: frame.height > frame.width });
     const want = parts.sound?.music.use ? `${parts.sound.music.prompt || parts.sound.music.mood}|${Math.ceil(total)}` : '';
-    if (want && music?.key !== want) music = { key: want, asset: await makeMusic(user, parts.sound!.music, total) };
-    if (!want) music = null;
+    const pictureKey = JSON.stringify(parts.assets?.assets ?? []);
+    // Sound effects, pictures and music are fetched at the same time
+    const [effects, pics, bed] = await Promise.all([
+      soundEffects(user, (parts.sound?.sfx ?? []).filter((s) => s.at >= 0 && s.at < total).slice(0, MAX_SFX)),
+      pictureKey === picturesFor ? Promise.resolve(visuals) : pictures(user, parts.assets?.assets ?? [], { text: brief.tone, tall: frame.height > frame.width }),
+      want && music?.key !== want ? makeMusic(user, parts.sound!.music, total) : Promise.resolve(music?.asset),
+    ]);
+    sfx = effects;
+    visuals = pics;
+    picturesFor = pictureKey;
+    music = want ? { key: want, asset: bed } : null;
     return compileEdit({ original: input.project, brief, sources: watched, segments, cutaways, ...parts, sfx, visuals, words, music: music?.asset });
   };
   await report('assembling', 'Making sound effects and putting the edit together');
@@ -267,7 +278,8 @@ export async function directEdit(ctx: EditContext) {
   const reviews: Array<Review & { round: number; frames: Array<Omit<StoryboardFrame, 'bytes'>> }> = [];
   let storyboard: Array<Omit<StoryboardFrame, 'bytes'>> = [];
   for (let round = 1; round <= MAX_REVIEWS; round++) {
-    if (Date.now() - watchedAt > REVIEW_BUDGET_MS) break;
+    // The first look always happens (unless the run is far too long); revisions only within the budget
+    if (Date.now() - watchedAt > (round === 1 ? HARD_STOP_MS : REVIEW_BUDGET_MS)) break;
     await report('reviewing', round === 1 ? 'Director is watching the draft' : `Director is checking revision ${round - 1}`);
     let review: Review;
     let frames: StoryboardFrame[] = [];

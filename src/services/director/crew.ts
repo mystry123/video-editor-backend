@@ -22,6 +22,23 @@ export const ASPECTS = ['9:16', '1:1', '4:5', '16:9', 'keep'] as const;
 export const POSITIONS = ['top', 'upper', 'center', 'lower', 'bottom'] as const;
 export const TITLE_STYLES = ['bold', 'boxed', 'outline', 'minimal', 'highlight'] as const;
 export const TEXT_MOTIONS = ['pop', 'slide-up', 'fade', 'zoom', 'typewriter', 'word-by-word', 'none'] as const;
+/** Fonts the typographer chooses from, with their character: each checked to render in the export (Cormorant Garamond didn't) */
+export const FONTS: Record<string, string> = {
+  Inter: 'clean neutral sans',
+  Montserrat: 'bold geometric sans, confident',
+  Poppins: 'friendly rounded sans',
+  'Space Grotesk': 'techy, modern',
+  'Bebas Neue': 'tall condensed capitals, punchy headlines',
+  Anton: 'heavy condensed, loud',
+  'Archivo Black': 'very heavy wide sans, impact',
+  Oswald: 'condensed sans, sporty',
+  'Playfair Display': 'elegant high-contrast serif: editorial, calm luxury, cinematic',
+  Lora: 'warm readable serif, storytelling',
+  'Abril Fatface': 'fashion-magazine display serif',
+  'Permanent Marker': 'hand-drawn marker, playful',
+  Caveat: 'casual handwriting, personal',
+};
+
 export const CAPTION_STYLES = ['word-pop', 'karaoke', 'clean', 'bold-box'] as const;
 export const MOVES = ['none', 'punch-in', 'slow-zoom-in', 'slow-zoom-out', 'pan-left', 'pan-right', 'shake', 'zoom-out-reveal'] as const;
 export const TRANSITIONS = ['cut', 'crossfade', 'whip', 'zoom', 'flash', 'slide', 'glitch', 'blur'] as const;
@@ -58,7 +75,7 @@ export interface Cut {
 }
 
 export interface TypePart {
-  titles: Array<{ text: string; start: number; end: number; role: string; position: (typeof POSITIONS)[number]; style: (typeof TITLE_STYLES)[number]; motion: (typeof TEXT_MOTIONS)[number]; color?: string; accent?: string }>;
+  titles: Array<{ text: string; start: number; end: number; role: string; position: (typeof POSITIONS)[number]; style: (typeof TITLE_STYLES)[number]; motion: (typeof TEXT_MOTIONS)[number]; font?: string; color?: string; accent?: string }>;
   captions: { use: boolean; style: (typeof CAPTION_STYLES)[number]; position: (typeof POSITIONS)[number]; highlightColor?: string };
   notes: string;
 }
@@ -251,6 +268,7 @@ const TYPE_SCHEMA = obj({
         position: E(POSITIONS),
         style: E(TITLE_STYLES),
         motion: E(TEXT_MOTIONS, 'How it comes in'),
+        font: E(Object.keys(FONTS), `The typeface, matching the tone: ${Object.entries(FONTS).map(([f, d]) => `${f} (${d})`).join('; ')}`),
         color: S('Text colour as #RRGGBB'),
         accent: S('Box or highlight colour as #RRGGBB'),
       },
