@@ -1,3 +1,4 @@
+import { markDirectorExport } from '../services/director/outcomes';
 import { Response, NextFunction } from 'express';
 import { enqueueJob } from '../utils/jobs';
 import { releaseAllUsage, releaseUsage, reserveUsage } from '../services/usage.service';
@@ -160,6 +161,8 @@ export const startRender = async (
     }
 
     await queueRender(renderJob._id.toString(), getPriority(user.role));
+    // A Director edit that gets exported is the strongest sign it was good
+    void markDirectorExport(user._id, String(template._id));
     await Template.updateOne({ _id: template._id }, { $inc: { usageCount: 1 } });
     // Version history keeps every rendered state (owner's templates only).
     if (String(template.userId) === String(user._id)) await snapshotTemplate(template, user._id, 'render');

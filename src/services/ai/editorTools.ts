@@ -337,6 +337,13 @@ export const EDITOR_TOOLS: Record<string, ToolDef> = {
       ),
     args: () => z.object({ title: z.string().min(1).max(120), steps: z.array(z.string().min(3).max(300)).min(2).max(8) }),
   },
+  direct_edit: {
+    description:
+      'Hand a creative edit of the footage to Cue Director (watches the clips, writes a brief, cuts, adds titles, captions, motion and sound, reviews its draft). Use for: make a reel/short/trailer/highlight/recap/intro, make it punchy or engaging, cut it down to N seconds, edit it for a platform. Call it alone.',
+    parameters: () =>
+      S.obj({ request: S.str('The full creative goal in the user\'s terms: length, platform, style, must-haves from the conversation') }, ['request']),
+    args: () => z.object({ request: z.string().min(3).max(2000) }),
+  },
   remember: {
     description:
       'Save a lasting preference the user states about how they want their videos (fonts, brand colours, caption style, tone, defaults), so future edits follow it. Only for preferences, not one-off edits.',

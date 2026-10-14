@@ -105,6 +105,17 @@ export const env = {
   aiModelFallback: process.env.AI_MODEL_FALLBACK || 'gemini-2.5-flash',
   /** Image generation (Gemini image model on Vertex) */
   imageModel: process.env.IMAGE_MODEL || 'gemini-3.1-flash-image',
+  /** Cue Director: the director and reviewer (creative judgement) */
+  directorModel: process.env.DIRECTOR_MODEL || 'gemini-3.1-pro-preview',
+  /** Cue Director: the specialists (fast) */
+  directorWorkerModel: process.env.DIRECTOR_WORKER_MODEL || 'gemini-3.6-flash',
+  /** Cue Director: watches footage (video input) */
+  footageModel: process.env.DIRECTOR_FOOTAGE_MODEL || 'gemini-3.5-flash',
+  /** Cue Director learns from past edits (nightly lessons + eval gate); off with DIRECTOR_LEARNING=false */
+  directorLearning: process.env.DIRECTOR_LEARNING !== 'false',
+  /** The eval gate's footage owner and cases: [{"fileId":"…","request":"…"}] */
+  directorEvalUser: process.env.DIRECTOR_EVAL_USER || '',
+  directorEvalCases: process.env.DIRECTOR_EVAL_CASES || '',
   /** Stock photos and videos (Pixabay); empty turns stock search off */
   pixabayApiKey: process.env.PIXABAY_API_KEY || '',
   

@@ -68,6 +68,7 @@ export const QUOTA_FIELDS: QuotaFieldDef[] = [
   { key: 'maxSoundEffects', label: 'Sound effects', description: 'Sound effects generated per month.', type: 'count', group: 'features' },
   { key: 'maxAiMessages', label: 'Assistant messages', description: 'Messages to the editing assistant per month.', type: 'count', group: 'features' },
   { key: 'maxAiImages', label: 'Generated images', description: 'Images made with AI per month.', type: 'count', group: 'features' },
+  { key: 'maxDirectorRuns', label: 'Director runs', description: 'Edits made by Cue Director (watches the footage, plans, edits and reviews) per month.', type: 'count', group: 'features' },
   { key: 'maxDubbingMinutes', label: 'Dubbing minutes', description: 'Minutes of audio dubbed into another language per month.', type: 'minutes', group: 'features' },
 ];
 

@@ -14,6 +14,8 @@ import { logger } from '../../utils/logger';
 export interface GeminiMessage {
   role: 'user' | 'model';
   text: string;
+  /** Pictures, video or audio sent with the text: inline bytes (base64) or a URL the model fetches */
+  media?: Array<{ mimeType: string; data?: string; uri?: string }>;
 }
 
 /** A function the model may call; `parameters` is a Vertex (OpenAPI-subset) schema */
@@ -29,6 +31,20 @@ export interface GeminiRequest {
   messages: GeminiMessage[];
   tools?: GeminiTool[];
   temperature?: number;
+  /** Answer as JSON matching this (Vertex OpenAPI-subset) schema; the parsed value comes back as `json` */
+  jsonSchema?: Record<string, unknown>;
+  /** How hard Gemini 3+ thinks before answering */
+  thinking?: 'low' | 'high';
+  /** How long one attempt may take (default 30 s) before the next route is tried */
+  timeoutMs?: number;
+  /** The model to fall back to when this one is over its limit (default AI_MODEL_FALLBACK; null: none) */
+  fallback?: string | null;
+  /**
+   * Background jobs (Cue Director) wait out a busy model instead of
+   * downgrading at once: retries with growing pauses (3, 8, 15, 25 s) on the
+   * same model before the fallback. Chat replies stay quick (one short retry).
+   */
+  patient?: boolean;
 }
 
 export interface GeminiResult {
@@ -37,6 +53,8 @@ export interface GeminiResult {
   text: string;
   calls: Array<{ name: string; args: Record<string, unknown> }>;
   usage: { input: number; output: number };
+  /** With `jsonSchema`: the parsed answer */
+  json?: unknown;
 }
 
 export interface GeminiClient {
@@ -62,6 +80,8 @@ const unavailable = () =>
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 class RateLimited extends Error {}
+/** An answer that came back empty or not as the JSON asked for: worth another try */
+class BadAnswer extends RateLimited {}
 
 /** Models that stayed over their rate limit: skipped (straight to the fallback) until then */
 const coolingUntil = new Map<string, number>();
@@ -75,13 +95,17 @@ export function resetRateLimits(): void {
 const vertexClient: GeminiClient = {
   /** Over the rate limit: one short retry, then the fallback model (and the limited one rests for a while) */
   async generate(request) {
-    const fallback = env.aiModelFallback && env.aiModelFallback !== request.model ? env.aiModelFallback : null;
+    const wanted = request.fallback === undefined ? env.aiModelFallback : request.fallback;
+    const fallback = wanted && wanted !== request.model ? wanted : null;
     const resting = fallback && (coolingUntil.get(request.model) ?? 0) > Date.now();
     // Routes in order: the model (twice), the fallback, then the fallback in another region
     // (separate capacity from the global endpoint)
     const alt = env.vertexLocation === 'global' ? 'us-central1' : 'global';
+    const pauses = request.patient ? PATIENT_PAUSES_MS : [1500];
+    const own: Array<[string, string]> = Array.from({ length: pauses.length + 1 }, () => [request.model, env.vertexLocation]);
     const routes: Array<[string, string]> = [
-      ...(resting ? [] : ([[request.model, env.vertexLocation], [request.model, env.vertexLocation]] as Array<[string, string]>)),
+      // A patient job tries the model even while it rests (it can wait)
+      ...(resting && !request.patient ? [] : own),
       ...(fallback ? ([[fallback, env.vertexLocation], [fallback, alt]] as Array<[string, string]>) : []),
     ];
     for (const [attempt, [model, location]] of routes.entries()) {
@@ -90,18 +114,28 @@ const vertexClient: GeminiClient = {
       } catch (error) {
         if (!(error instanceof RateLimited)) throw error;
         logger.warn('Vertex rate limited', { model, location, attempt });
-        if (attempt === 0 && !resting) await sleep(1500);
-        if (attempt === 1 && model === request.model) coolingUntil.set(model, Date.now() + COOL_DOWN_MS);
+        const ownAttempt = model === request.model && location === env.vertexLocation;
+        if (ownAttempt && attempt < pauses.length) await sleep(pauses[attempt]);
+        if (ownAttempt && attempt === pauses.length) coolingUntil.set(model, Date.now() + COOL_DOWN_MS);
       }
     }
     throw ApiError.withCode(503, 'ASSISTANT_BUSY', 'Cue is busy right now. Try again in a minute.');
   },
 };
 
+/** Pauses between a patient job's retries of a busy model */
+export const PATIENT_PAUSES_MS = [3000, 8000, 15000, 25000];
+
 /** How long one attempt may take before trying the next route */
 const ATTEMPT_MS = 30_000;
 
-async function callVertex({ model, system, messages, tools, temperature }: GeminiRequest, location = env.vertexLocation): Promise<GeminiResult> {
+/** Thinking levels are Gemini 3+ only */
+const thinks = (model: string) => /^gemini-([3-9]|\d\d)/.test(model);
+
+async function callVertex(
+  { model, system, messages, tools, temperature, jsonSchema, thinking, timeoutMs }: GeminiRequest,
+  location = env.vertexLocation
+): Promise<GeminiResult> {
   {
     let token: string | null | undefined;
     try {
@@ -119,13 +153,23 @@ async function callVertex({ model, system, messages, tools, temperature }: Gemin
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: system }] },
-          contents: messages.map((m) => ({ role: m.role, parts: [{ text: m.text }] })),
+          contents: messages.map((m) => ({
+            role: m.role,
+            parts: [
+              ...(m.media ?? []).map((x) => (x.data ? { inlineData: { mimeType: x.mimeType, data: x.data } } : { fileData: { mimeType: x.mimeType, fileUri: x.uri } })),
+              { text: m.text },
+            ],
+          })),
           ...(tools?.length
             ? { tools: [{ functionDeclarations: tools }], toolConfig: { functionCallingConfig: { mode: 'AUTO' } } }
             : {}),
-          generationConfig: { temperature: temperatureFor(model, temperature) },
+          generationConfig: {
+            temperature: temperatureFor(model, temperature),
+            ...(jsonSchema ? { responseMimeType: 'application/json', responseSchema: jsonSchema } : {}),
+            ...(thinking && thinks(model) ? { thinkingConfig: { thinkingLevel: thinking.toUpperCase() } } : {}),
+          },
         }),
-        signal: AbortSignal.timeout(ATTEMPT_MS),
+        signal: AbortSignal.timeout(timeoutMs ?? ATTEMPT_MS),
       });
     } catch (error) {
       // Too slow (Vertex busy): treated like a rate limit, so the next route is tried
@@ -140,9 +184,20 @@ async function callVertex({ model, system, messages, tools, temperature }: Gemin
     }
     const body = (await response.json()) as any;
     const parts: any[] = body.candidates?.[0]?.content?.parts ?? [];
+    // Thought summaries (if any) aren't part of the reply
+    const text = parts.filter((p) => !p.thought).map((p) => p.text || '').join('').trim();
+    let json: unknown;
+    if (jsonSchema) {
+      try {
+        json = JSON.parse(text);
+      } catch {
+        logger.warn('Vertex answer is not the JSON asked for', { model, finish: body.candidates?.[0]?.finishReason, text: text.slice(0, 200) });
+        throw new BadAnswer();
+      }
+    }
     return {
-      // Thought summaries (if any) aren't part of the reply
-      text: parts.filter((p) => !p.thought).map((p) => p.text || '').join('').trim(),
+      text,
+      json,
       calls: parts.filter((p) => p.functionCall).map((p) => ({ name: String(p.functionCall.name), args: p.functionCall.args ?? {} })),
       usage: { input: Number(body.usageMetadata?.promptTokenCount) || 0, output: Number(body.usageMetadata?.candidatesTokenCount) || 0 },
     };

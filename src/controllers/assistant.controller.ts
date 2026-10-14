@@ -65,6 +65,7 @@ const TOOL_WORDS: Record<string, string> = {
   add_lottie: 'a Lottie animation',
   generate_image: 'an AI image',
   propose_plan: 'a plan',
+  direct_edit: 'Cue Director',
   remember: 'remembering it',
   add_captions: 'captions',
   clean_audio: 'cleaning up the audio',
@@ -83,6 +84,7 @@ export function plainReply(text: string): string {
 
 /** When the model sends tool calls with no words: say what came */
 function fallbackReply(calls: CheckedCall[]): string {
+  if (calls.some((c) => c.name === 'direct_edit')) return "This is a job for Cue Director: it watches your footage, plans the edit, makes it and checks it. It's on it below.";
   const edits = calls.filter((c) => c.name !== 'propose_plan');
   if (calls.some((c) => c.name === 'propose_plan')) return edits.length ? "Here's a plan, plus a few changes to start." : "Here's a plan. Untick any step you don't want, then run it.";
   if (edits.length === 1) return "Here's the change. Check it, then apply.";
@@ -119,7 +121,7 @@ export const chat = async (req: AuthRequest, res: Response, next: NextFunction):
     const gemini = getGeminiClient();
     const base = mode === 'ask' ? `${ASSISTANT_SYSTEM}\n\n${ASK_MODE_NOTE}` : ASSISTANT_SYSTEM;
     const system = `${base}${planStep ? `\n\n${PLAN_STEP_NOTE}` : ''}${memoryBlock(user)}`;
-    const exclude = planStep ? ['propose_plan'] : [];
+    const exclude = planStep ? ['propose_plan', 'direct_edit'] : [];
     const canEdit = mode !== 'ask';
     const tools = canEdit ? toolDeclarations(capabilities, exclude) : undefined;
     let conversation = withContext(messages, context);

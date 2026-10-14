@@ -17,13 +17,13 @@ export interface GeneratedImage {
   mimeType: string;
 }
 
-export type ImageGenerator = (prompt: string, aspect: ImageAspect) => Promise<GeneratedImage>;
+export type ImageGenerator = (prompt: string, aspect: ImageAspect, timeoutMs?: number) => Promise<GeneratedImage>;
 
 const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'], projectId: env.vertexProject });
 
 const unavailable = () => ApiError.withCode(503, 'IMAGES_UNAVAILABLE', "Image generation isn't available right now. Try again in a minute.");
 
-const vertexGenerator: ImageGenerator = async (prompt, aspect) => {
+const vertexGenerator: ImageGenerator = async (prompt, aspect, timeoutMs = 120_000) => {
   let token: string | null | undefined;
   try {
     token = await auth.getAccessToken();
@@ -42,7 +42,7 @@ const vertexGenerator: ImageGenerator = async (prompt, aspect) => {
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         generationConfig: { responseModalities: ['IMAGE'], imageConfig: { aspectRatio: aspect } },
       }),
-      signal: AbortSignal.timeout(120_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
     logger.error('Vertex unreachable (image)', { error: (error as Error).message });

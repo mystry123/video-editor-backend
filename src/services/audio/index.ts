@@ -15,6 +15,8 @@ export interface AudioTools {
   isolateVoice(audio: Buffer, filename: string): Promise<Buffer>;
   /** A sound effect from a description; duration in seconds, or chosen by the model */
   soundEffect(prompt: string, durationSeconds?: number): Promise<Buffer>;
+  /** Instrumental music from a description, about `durationSeconds` long (MP3) */
+  music(prompt: string, durationSeconds: number): Promise<Buffer>;
   /** Starts dubbing `audio` (an MP3) into `language` (ISO 639-1); the job's id and expected wait */
   startDub(audio: Buffer, filename: string, language: string): Promise<{ id: string; expectedSeconds: number }>;
   dubStatus(id: string): Promise<DubStatus>;
@@ -46,6 +48,18 @@ const elevenLabsAudioTools: AudioTools = {
         }),
       },
       'sound effect'
+    );
+    return Buffer.from(await response.arrayBuffer());
+  },
+  async music(prompt, durationSeconds) {
+    const response = await elevenLabsCall(
+      '/v1/music?output_format=mp3_44100_128',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: `${prompt}. Instrumental, no vocals.`, music_length_ms: Math.round(Math.max(10, Math.min(120, durationSeconds)) * 1000) }),
+      },
+      'music'
     );
     return Buffer.from(await response.arrayBuffer());
   },

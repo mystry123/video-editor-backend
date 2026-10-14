@@ -24,6 +24,8 @@ import {
 import { deleteFromS3 } from '../services/storage.service';
 import { advanceDub } from './dubbing.service';
 import { enqueueJob, transition } from '../utils/jobs';
+import { DirectorRun } from '../models/DirectorRun';
+import { maybeLearn } from './director/learning';
 import { logger } from '../utils/logger';
 
 const MINUTE = 60_000;
@@ -216,7 +218,26 @@ async function reservationOutcome(kind: string, jobId: string): Promise<'done' |
     const p = Types.ObjectId.isValid(projectId) ? await CaptionProject.findById(projectId).select('status').lean() : null;
     return finalState(p?.status, ['completed'], ACTIVE_CAPTION_STATES);
   }
+  if (kind === 'directorRuns') {
+    const run = await DirectorRun.findOne({ usageJobId: jobId }).select('stage').lean();
+    return finalState(run?.stage, ['done'], ['queued', 'watching', 'briefing', 'cutting', 'crafting', 'assembling', 'reviewing', 'revising']);
+  }
   return 'running'; // unknown kinds are left alone
+}
+
+/** Director runs a restart left mid-way: failed (their run is refunded by sweepUsage) */
+async function sweepDirector(counts: Record<string, number>) {
+  const stuck = await DirectorRun.find({ stage: { $nin: ['done', 'failed', 'stopped'] }, updatedAt: { $lt: ago(STUCK_AFTER_MS) } }).limit(BATCH).select('_id usageJobId');
+  for (const run of stuck) {
+    await DirectorRun.updateOne(
+      { _id: run._id, stage: { $nin: ['done', 'failed', 'stopped'] } },
+      { $set: { stage: 'failed', error: "Cue Director was interrupted. Try again." }, $push: { events: { at: new Date(), stage: 'failed', text: 'Interrupted' } } }
+    );
+    await releaseUsage('directorRuns', run.usageJobId, 'interrupted');
+    counts.directorRunsFailed = (counts.directorRunsFailed || 0) + 1;
+  }
+  // Once a day at most: learn from recent edits (in the background)
+  await maybeLearn();
 }
 
 async function sweepUsage(counts: Record<string, number>) {
@@ -244,6 +265,7 @@ export async function runMaintenanceSweep(): Promise<Record<string, number>> {
     ['reframes', sweepReframes],
     ['files', sweepFiles],
     ['dubs', sweepDubs],
+    ['director', sweepDirector],
     // Last, so records the steps above just failed get their minutes back.
     ['usage', sweepUsage],
   ];

@@ -36,7 +36,7 @@ function safeName(name: string): string {
 }
 
 /** Saves generated audio as a new MP3 in the user's media. */
-async function saveAudio(user: any, audio: Buffer, name: string, source: 'audio_cleanup' | 'sound_effect') {
+export async function saveAudio(user: any, audio: Buffer, name: string, source: 'audio_cleanup' | 'sound_effect' | 'ai_music') {
   assertCanStore(user, audio.length, 'audio/mpeg');
   const key = `users/${user._id}/uploads/${uuidv4()}.mp3`;
   const cdnUrl = await uploadBufferToS3(audio, key, 'audio/mpeg');
