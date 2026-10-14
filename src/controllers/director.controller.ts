@@ -4,6 +4,7 @@
 //   GET  /ai/director?projectId= → { run }   the latest run in a project (last 2 hours), or null
 //   GET  /ai/director/:id        → { run }   (the editor polls this)
 //   POST /ai/director/:id/stop   → { run }
+//   POST /ai/director/:id/outcome { event, leftOut?, rating?, comment? } → 204   what the user did with the draft
 //   POST /ai/director/prepare    { fileIds } → 202   watch the project's footage ahead of a run
 //
 // Cue Director: a creative edit made by a crew of models (see
@@ -16,6 +17,7 @@ import { ApiError } from '../utils/ApiError';
 import { DirectorRun, type IDirectorRun } from '../models/DirectorRun';
 import { startDirectorRun, stopDirectorRun, type DirectorInput } from '../services/director/run';
 import { footageAnalysis } from '../services/director/footage';
+import { recordOutcome, type OutcomeEvent } from '../services/director/outcomes';
 import { logger } from '../utils/logger';
 
 /** Footage being prepared ahead of a run, at most this many files per request */
@@ -45,6 +47,7 @@ export function runView(run: IDirectorRun) {
     brief: run.brief ?? null,
     result: run.stage === 'done' ? (run.result ?? null) : null,
     error: run.error ?? null,
+    outcome: run.outcome ? { rating: run.outcome.rating ?? null, applied: !!run.outcome.applied, discarded: !!run.outcome.discarded } : null,
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,
   };
@@ -73,6 +76,16 @@ export const latestDirector = async (req: AuthRequest, res: Response, next: Next
   try {
     const run = await DirectorRun.findOne({ userId: req.userId, projectId: String(req.query.projectId), createdAt: { $gt: new Date(Date.now() - 2 * 60 * 60 * 1000) } }).sort({ createdAt: -1 });
     res.json({ run: run ? runView(run) : null });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const directorOutcome = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const found = await recordOutcome(String(req.params.id), String(req.userId), req.body as OutcomeEvent);
+    if (!found) throw ApiError.notFound('Run not found');
+    res.status(204).end();
   } catch (error) {
     next(error);
   }

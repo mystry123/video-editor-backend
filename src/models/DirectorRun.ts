@@ -16,6 +16,21 @@ export interface DirectorEvent {
   text: string;
 }
 
+/** What the user did with the draft: the signal the Director learns from */
+export interface DirectorOutcome {
+  applied?: Date;
+  discarded?: Date;
+  /** Parts unticked when applying (titles, sound…) */
+  leftOut?: string[];
+  /** The edit was undone or removed soon after it was applied */
+  undone?: Date;
+  /** Thumbs up (1) or down (-1) */
+  rating?: number;
+  comment?: string;
+  /** The project was rendered after the edit was applied */
+  exported?: Date;
+}
+
 export interface IDirectorRun extends Document {
   userId: Types.ObjectId;
   projectId: string;
@@ -33,6 +48,7 @@ export interface IDirectorRun extends Document {
   error?: string;
   stopRequested: boolean;
   usageJobId: string;
+  outcome?: DirectorOutcome;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -51,6 +67,15 @@ const DirectorRunSchema = new Schema<IDirectorRun>(
     error: { type: String, maxlength: 1000 },
     stopRequested: { type: Boolean, default: false },
     usageJobId: { type: String, required: true },
+    outcome: {
+      applied: Date,
+      discarded: Date,
+      leftOut: [{ type: String, maxlength: 20 }],
+      undone: Date,
+      rating: Number,
+      comment: { type: String, maxlength: 1000 },
+      exported: Date,
+    },
   },
   { timestamps: true }
 );

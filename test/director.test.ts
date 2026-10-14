@@ -386,3 +386,26 @@ describe('cuts follow what is said', () => {
     expect(snapToSpeech([{ source: 'S1', from: 11, to: 16 }], [s])).toEqual([{ source: 'S1', from: 9.95, to: 16 }]);
   });
 });
+
+describe('what users do with drafts', () => {
+  it('records applied (with parts left out), rating and undo; export marks the latest applied edit', async () => {
+    const { markDirectorExport } = await import('../src/services/director/outcomes');
+    const { user, token } = await createUser();
+    const other = await createUser();
+    const run = await DirectorRun.create({ userId: user._id, projectId: 'p5', request: 'reel', stage: 'done', events: [], usageJobId: 'o1' });
+    const post = (body: unknown, t = token) => api().post(`/api/v1/ai/director/${run._id}/outcome`).set('Authorization', `Bearer ${t}`).send(body);
+    expect((await post({ event: 'applied', leftOut: ['sound', 'titles'] })).status).toBe(204);
+    expect((await post({ event: 'rated', rating: -1, comment: 'Too many sound effects' })).status).toBe(204);
+    expect((await post({ event: 'rated', rating: 5 })).status).toBe(400);
+    expect((await post({ event: 'applied' }, other.token)).status).toBe(404);
+    await markDirectorExport(user._id, 'p5');
+    const saved = await DirectorRun.findById(run._id).lean();
+    expect(saved?.outcome).toMatchObject({ leftOut: ['sound', 'titles'], rating: -1, comment: 'Too many sound effects' });
+    expect(saved?.outcome?.applied).toBeTruthy();
+    expect(saved?.outcome?.exported).toBeTruthy();
+    // Undone edits are never counted as exported
+    const undone = await DirectorRun.create({ userId: user._id, projectId: 'p6', request: 'reel', stage: 'done', events: [], usageJobId: 'o2', outcome: { applied: new Date(), undone: new Date() } });
+    await markDirectorExport(user._id, 'p6');
+    expect((await DirectorRun.findById(undone._id).lean())?.outcome?.exported).toBeUndefined();
+  });
+});

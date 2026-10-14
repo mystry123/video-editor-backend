@@ -9,6 +9,7 @@ import * as director from '../controllers/director.controller';
 import {
   addMemorySchema,
   chatSchema,
+  directorOutcomeSchema,
   directorRunSchema,
   latestDirectorSchema,
   prepareDirectorSchema,
@@ -37,6 +38,7 @@ router.post('/director/prepare', voiceLimiter, validate(prepareDirectorSchema), 
 router.post('/director', voiceLimiter, validate(startDirectorSchema), director.startDirector);
 router.get('/director', validate(latestDirectorSchema), director.latestDirector);
 router.get('/director/:id', validate(directorRunSchema), director.getDirector);
+router.post('/director/:id/outcome', validate(directorOutcomeSchema), director.directorOutcome);
 router.post('/director/:id/stop', validate(directorRunSchema), director.stopDirector);
 router.get('/memory', assistantController.getMemory);
 router.post('/memory', validate(addMemorySchema), assistantController.addMemory);

@@ -76,4 +76,14 @@ export const prepareDirectorSchema = z.object({ body: z.object({ fileIds: z.arra
 
 export const latestDirectorSchema = z.object({ query: z.object({ projectId: z.string().min(1).max(100) }) });
 
+export const directorOutcomeSchema = z.object({
+  params: z.object({ id: z.string().regex(/^[a-f0-9]{24}$/) }),
+  body: z.discriminatedUnion('event', [
+    z.object({ event: z.literal('applied'), leftOut: z.array(z.string().max(20)).max(12).optional() }),
+    z.object({ event: z.literal('discarded') }),
+    z.object({ event: z.literal('undone') }),
+    z.object({ event: z.literal('rated'), rating: z.union([z.literal(1), z.literal(-1)]), comment: z.string().trim().max(1000).optional() }),
+  ]),
+});
+
 export const directorRunSchema = z.object({ params: z.object({ id: z.string().regex(/^[a-f0-9]{24}$/) }) });
