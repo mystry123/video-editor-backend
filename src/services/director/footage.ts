@@ -65,6 +65,7 @@ const PIECE_SCHEMA = {
           people: { type: 'INTEGER' },
           onScreenText: { ...str, description: 'Text visible in the picture, if any' },
           motion: { ...str, enum: ['static', 'some', 'high'] },
+          subjectX: { type: 'NUMBER', description: 'Where the main subject or action is across the frame: 0 = left edge, 0.5 = centre, 1 = right edge (for cropping to a tall frame)' },
           enters: { ...str, enum: ['cut', 'dissolve', 'fade-in', 'wipe', 'start'], description: 'How this shot begins in the footage: a hard cut, or a dissolve/fade/wipe already edited into it (the overlap is part of this shot)' },
         },
         required: ['start', 'end', 'description'],

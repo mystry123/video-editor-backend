@@ -114,6 +114,8 @@ async function carryOut(runId: string, input: DirectorInput): Promise<void> {
     for (const s of mine) {
       const meta = owned.find((f) => String(f._id) === s.fileId)?.metadata as any;
       if (!s.duration && meta?.duration) s.duration = Number(meta.duration);
+      s.width = Number(meta?.width) || 0;
+      s.height = Number(meta?.height) || 0;
     }
     const analyses = await Promise.all(mine.map((s) => footageAnalysis(s.fileId, user._id)));
     const watched = attachAnalyses(mine, analyses);

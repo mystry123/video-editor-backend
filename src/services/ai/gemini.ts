@@ -80,6 +80,8 @@ const unavailable = () =>
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 class RateLimited extends Error {}
+/** An answer that came back empty or not as the JSON asked for: worth another try */
+class BadAnswer extends RateLimited {}
 
 /** Models that stayed over their rate limit: skipped (straight to the fallback) until then */
 const coolingUntil = new Map<string, number>();
@@ -190,7 +192,7 @@ async function callVertex(
         json = JSON.parse(text);
       } catch {
         logger.warn('Vertex answer is not the JSON asked for', { model, finish: body.candidates?.[0]?.finishReason, text: text.slice(0, 200) });
-        throw unavailable();
+        throw new BadAnswer();
       }
     }
     return {

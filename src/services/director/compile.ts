@@ -16,7 +16,7 @@ import type { AnalysisLine } from '../../models/MediaAnalysis';
 import type { Brief, MotionPart, SoundPart, TypePart } from './crew';
 import { placeSegments, type Cutaway, type ProjectJson, type Segment, type Source } from './sources';
 
-export type Group = 'cut' | 'cutaways' | 'titles' | 'captions' | 'motion' | 'sound' | 'music' | 'extras' | 'kept';
+export type Group = 'cut' | 'backdrops' | 'cutaways' | 'titles' | 'captions' | 'motion' | 'sound' | 'music' | 'extras' | 'kept';
 
 export interface CompiledEdit extends ProjectJson {
   /** Element ids (or, for motion, ids of the clips that carry it) per group */
@@ -122,6 +122,44 @@ const TEXT_ENTER: Record<string, { type: string; params?: Record<string, unknown
   typewriter: { type: 'text-typewriter', duration: 0.6, easing: 'linear' },
   'word-by-word': { type: 'text-slide', params: { split: 'word' }, duration: 0.5, easing: 'cubic-out' },
 };
+
+/** About how wide `text` sets, in em (bold sans; capitals are wider) */
+export function textWidthEm(text: string, upper: boolean): number {
+  let em = 0;
+  for (const ch of upper ? text.toUpperCase() : text) {
+    if (ch === ' ') em += 0.28;
+    else if (/[MWmw@]/.test(ch)) em += upper ? 0.92 : 0.84;
+    else if (/[IJijl1.,:;'!|]/.test(ch)) em += 0.32;
+    else if (/[A-Z0-9#%&?]/.test(ch)) em += upper ? 0.7 : 0.66;
+    else em += 0.56;
+  }
+  return em;
+}
+
+/**
+ * A title that fits its frame: one line if it can, else broken into two at
+ * the most even space, and only then a smaller size. (A title wider than its
+ * box spilled past its background.)
+ */
+export function fitTitle(text: string, fontSize: number, frame: { width: number; height: number }, opts: { upper: boolean; padEm: number; maxWidth?: number }): { text: string; fontSize: number } {
+  const fontPx = (fontSize / 100) * Math.min(frame.width, frame.height);
+  const room = (opts.maxWidth ?? 0.86) * frame.width;
+  const widthOf = (lines: string[]) => (Math.max(...lines.map((l) => textWidthEm(l, opts.upper))) + opts.padEm * 2) * fontPx;
+  const oneLine = text.replace(/\s*\n\s*/g, ' ').trim();
+  let lines = text.includes('\n') ? text.split('\n').map((l) => l.trim()).filter(Boolean) : [oneLine];
+  if (widthOf(lines) > room && lines.length === 1) {
+    const words = oneLine.split(' ');
+    let best: string[] = lines;
+    for (let i = 1; i < words.length; i++) {
+      const pair = [words.slice(0, i).join(' '), words.slice(i).join(' ')];
+      if (widthOf(pair) < widthOf(best)) best = pair;
+    }
+    lines = best;
+  }
+  const width = widthOf(lines);
+  const size = width > room ? Math.max(3, fontSize * (room / width)) : fontSize;
+  return { text: lines.join('\n'), fontSize: Math.round(size * 100) / 100 };
+}
 
 const hex = (v: unknown, fallback: string) => (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v.trim()) ? v.trim() : fallback);
 
@@ -245,6 +283,70 @@ export function compileEdit(input: CompileInput): CompiledEdit {
   }
 
 
+  // --- Framing: footage of another shape (wide footage in a tall frame) ---
+  const frameAspect = frame.width / frame.height;
+  placed.forEach((p, i) => {
+    const clip = clips[i];
+    const src = byRef.get(p.source)!;
+    if (clip.type !== 'video' || !src.width || !src.height) return;
+    const sourceAspect = src.width / src.height;
+    if (Math.abs(sourceAspect - frameAspect) / frameAspect < 0.08) return;
+    const shots = src.analysis?.shots.filter((x) => x.end > p.from && x.start < p.to) ?? [];
+    const asked = input.motion?.pieces.find((m) => Number(m.piece) === i + 1)?.framing;
+    const textInPicture = shots.some((x) => x.onScreenText) || !!src.analysis?.hasBurnedCaptions;
+    const group = shots.some((x) => (x.people ?? 0) >= 3);
+    const fit = asked === 'fit' || ((!asked || asked === 'auto') && (textInPicture || group) && sourceAspect > frameAspect);
+    if (fit) {
+      // The whole picture, over a blurred, enlarged copy of itself that fills the frame
+      const backdrop = {
+        ...clip,
+        id: id('backdrop'),
+        name: `${clip.name} · backdrop`,
+        // Its own span only (the clip may run on under a transition)
+        trimDuration: r3(p.length),
+        muted: true,
+        volume: 0,
+        fit: 'cover',
+        blurEnabled: true,
+        blurRadius: 40,
+        scaleX: '112%',
+        scaleY: '112%',
+        keyframes: undefined,
+        animations: undefined,
+        transition: undefined,
+      };
+      elements.push(backdrop);
+      add('backdrops', backdrop.id);
+      clip.fit = 'contain';
+      return;
+    }
+    // Crop: the box keeps the footage's shape and slides so the subject is in frame;
+    // it scales about the frame's centre, so moves stay on the subject
+    const xs = shots.map((x) => Number(x.subjectX)).filter((v) => v >= 0 && v <= 1);
+    const focus = xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0.5;
+    if (sourceAspect > frameAspect) {
+      const W = (sourceAspect / frameAspect) * 100;
+      const left = Math.max(100 - W, Math.min(0, 50 - focus * W));
+      clip.width = `${r3(W)}%`;
+      clip.anchorX = r3(((50 - left) / W) * 100);
+      // A pan slides within what the footage has either side
+      const room = { left: -left, right: left + W - 100 };
+      if (clip.keyframes?.x) {
+        // Same direction as asked, only as far as the footage reaches
+        const [from, to] = clip.keyframes.x;
+        const direction = Math.sign(to.value - from.value) || -1;
+        const span = Math.min(5, room.left, room.right);
+        if (span < 0.5) delete clip.keyframes.x;
+        else clip.keyframes.x = [{ ...from, value: r3(50 - direction * span) }, { ...to, value: r3(50 + direction * span) }];
+      }
+    } else {
+      const H = (frameAspect / sourceAspect) * 100;
+      clip.height = `${r3(H)}%`;
+      clip.anchorY = 50;
+      if (clip.keyframes?.x) delete clip.keyframes.x;
+    }
+  });
+
   // --- Cutaways: other footage over a piece while its sound plays on ---
   for (const c of input.cutaways ?? []) {
     const p = placed[c.piece - 1];
@@ -338,11 +440,14 @@ export function compileEdit(input: CompileInput): CompiledEdit {
     const end = Math.max(start + 0.3, Math.min(total, Number(t.end) || start + 2));
     const enter = TEXT_ENTER[t.motion];
     const hook = /hook/i.test(t.role) || start < 0.5;
+    const look = titleStyle(t.style, hex(t.color, '#FFFFFF'), hex(t.accent, '#2447F9'), hook);
+    const padEm = look.backgroundColor ? ((Number(look.backgroundXPadding) || 0) / 100) : look.strokeEnabled ? 0.05 : 0;
+    const fitted = fitTitle(t.text, Number(look.fontSize), frame, { upper: look.textTransform === 'uppercase', padEm });
     const text = {
       id: id('title'),
       type: 'text',
       name: `Title: ${t.text.slice(0, 30)}`,
-      text: t.text,
+      text: fitted.text,
       track: 0,
       time: r3(start),
       duration: r3(end - start),
@@ -353,7 +458,8 @@ export function compileEdit(input: CompileInput): CompiledEdit {
       sizingMode: 'auto-dimensions',
       opacity: 1,
       visible: true,
-      ...titleStyle(t.style, hex(t.color, '#FFFFFF'), hex(t.accent, '#2447F9'), hook),
+      ...look,
+      fontSize: fitted.fontSize,
       ...(enter ? { enter: { id: uuidv4(), type: enter.type, category: 'enter', duration: enter.duration, easing: enter.easing, params: enter.params ?? {}, isExit: false, transition: false, reversed: false } } : {}),
       exit: { id: uuidv4(), type: 'fade', category: 'exit', duration: 0.2, easing: 'quadratic-out', params: {}, isExit: true, endOffset: 0 },
     };
@@ -419,15 +525,17 @@ export function compileEdit(input: CompileInput): CompiledEdit {
 
   // Tracks are set here, bottom to top: the cut, pictures, captions, titles, sounds, then kept layers.
   // Each overlay gets its own track (they may overlap in time; only the cut shares one)
-  const order: Group[] = ['cut', 'cutaways', 'extras', 'captions', 'titles', 'sound', 'music', 'kept'];
+  const order: Group[] = ['backdrops', 'cut', 'cutaways', 'extras', 'captions', 'titles', 'sound', 'music', 'kept'];
   const groupOf = new Map<string, Group>();
   for (const g of order) for (const elementId of groups[g] ?? []) if (!groupOf.has(elementId)) groupOf.set(elementId, g);
-  // Cutaways never overlap each other (one piece's sound at a time), so they share track 2
-  let nextTrack = groups.cutaways?.length ? 3 : 2;
+  // Shared tracks, bottom to top: blurred backdrops, the cut, cutaways (none of them overlap
+  // within their group); every overlay above gets its own track
+  const shared = (['backdrops', 'cut', 'cutaways'] as Group[]).filter((g) => groups[g]?.length);
+  let nextTrack = shared.length + 1;
   const sorted = [...elements].sort((a, b) => order.indexOf(groupOf.get(a.id) ?? 'kept') - order.indexOf(groupOf.get(b.id) ?? 'kept'));
   for (const el of sorted) {
-    const g = groupOf.get(el.id);
-    el.track = g === 'cut' ? 1 : g === 'cutaways' ? 2 : nextTrack++;
+    const g = groupOf.get(el.id)!;
+    el.track = shared.includes(g) ? shared.indexOf(g) + 1 : nextTrack++;
   }
 
   const duration = Math.ceil(Math.max(total, ...elements.map((e) => (Number(e.time) || 0) + clipLength(e))) * 100) / 100;

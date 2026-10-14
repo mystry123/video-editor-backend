@@ -9,7 +9,7 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
 /** Bump when the prompt or shape changes: older analyses are made again */
-export const MEDIA_ANALYSIS_VERSION = 3;
+export const MEDIA_ANALYSIS_VERSION = 4;
 
 export interface AnalysisShot {
   start: number;
@@ -21,6 +21,8 @@ export interface AnalysisShot {
   motion?: string;
   /** How the shot begins in the source: a cut, or a dissolve/fade already in the footage */
   enters?: string;
+  /** Horizontal centre of the main subject or action, 0 (left edge) to 1 (right edge) */
+  subjectX?: number;
 }
 
 export interface AnalysisLine {

@@ -21,6 +21,9 @@ export interface Source {
   kind: 'video' | 'audio';
   url: string;
   duration: number;
+  /** Picture size (0 when unknown) */
+  width?: number;
+  height?: number;
   /** The clip on the timeline it came from (its fields are the template for cut pieces) */
   element: Record<string, any>;
   analysis?: MediaAnalysisResult;

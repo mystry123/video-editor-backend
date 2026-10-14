@@ -25,6 +25,8 @@ export const CAPTION_STYLES = ['word-pop', 'karaoke', 'clean', 'bold-box'] as co
 export const MOVES = ['none', 'punch-in', 'slow-zoom-in', 'slow-zoom-out', 'pan-left', 'pan-right', 'shake', 'zoom-out-reveal'] as const;
 export const TRANSITIONS = ['cut', 'crossfade', 'whip', 'zoom', 'flash', 'slide', 'glitch', 'blur'] as const;
 export const SFX_KINDS = ['whoosh', 'pop', 'riser', 'hit', 'click', 'ding', 'swoosh', 'camera-shutter', 'record-scratch'] as const;
+/** How a piece fills a frame of another shape: crop to the subject, or the whole picture over a blurred copy */
+export const FRAMINGS = ['auto', 'crop', 'fit'] as const;
 export const ASSET_KINDS = ['stock-video', 'stock-photo', 'ai-image'] as const;
 
 export interface Brief {
@@ -59,7 +61,7 @@ export interface TypePart {
 }
 
 export interface MotionPart {
-  pieces: Array<{ piece: number; move: (typeof MOVES)[number]; transitionIn: (typeof TRANSITIONS)[number]; why?: string }>;
+  pieces: Array<{ piece: number; move: (typeof MOVES)[number]; transitionIn: (typeof TRANSITIONS)[number]; framing?: (typeof FRAMINGS)[number]; why?: string }>;
   notes: string;
 }
 
@@ -260,7 +262,7 @@ ${CRAFT}`;
 }
 
 const MOTION_SCHEMA = obj({
-  pieces: arr(obj({ piece: { type: 'INTEGER', description: 'Piece number (#1…)' }, move: E(MOVES), transitionIn: E(TRANSITIONS, 'How this piece comes in (cut for #1)'), why: S('few words') }, ['piece', 'move', 'transitionIn'])),
+  pieces: arr(obj({ piece: { type: 'INTEGER', description: 'Piece number (#1…)' }, move: E(MOVES), transitionIn: E(TRANSITIONS, 'How this piece comes in (cut for #1)'), framing: E(FRAMINGS, 'When the footage is a different shape from the frame: crop (follow the subject, fills the frame) or fit (whole picture over a blurred copy: keeps text and groups whole); auto decides from the footage'), why: S('few words') }, ['piece', 'move', 'transitionIn'])),
   notes: S('One sentence'),
 });
 

@@ -7,7 +7,7 @@ import { UsageCounter } from '../src/models/Usage';
 import { currentPeriod } from '../src/services/usage.service';
 import { setGeminiClient, type GeminiRequest, type GeminiResult } from '../src/services/ai/gemini';
 import { setAudioTools } from '../src/services/audio';
-import { compileEdit, wordsFromLines } from '../src/services/director/compile';
+import { compileEdit, fitTitle, wordsFromLines } from '../src/services/director/compile';
 import { editProblems } from '../src/services/director/checks';
 import { cutProblems, cutView, placeSegments, sourcesOf, type Source } from '../src/services/director/sources';
 import type { Brief } from '../src/services/director/crew';
@@ -106,6 +106,39 @@ describe('compiling an edit', () => {
     const e = compileEdit({ original, brief, sources: [burned], segments: [{ source: 'S1', from: 3, to: 6 }], type: { titles: [], captions: { use: true, style: 'word-pop', position: 'lower' }, notes: '' } });
     expect(e.elements.some((x) => x.type === 'caption')).toBe(false);
     expect(e.notes.join(' ')).toMatch(/already has them burned in/);
+  });
+
+  it('wide footage in a tall frame follows the subject; text-heavy shots are shown whole over a blur', () => {
+    const wide = (shots: any[], extra: any = {}) => ({ ...source(), width: 1920, height: 1080, analysis: { ...analysis, shots, ...extra } });
+    // Subject on the right third: the box (316% wide) slides left so x≈0.8 of the footage is centred
+    const right = compileEdit({ original, brief, sources: [wide([{ start: 0, end: 60, description: 'Host', subjectX: 0.8 }])], segments: [{ source: 'S1', from: 3, to: 6 }] });
+    const clip = right.elements.find((e) => e.type === 'video')!;
+    expect(parseFloat(clip.width)).toBeCloseTo(316.05, 1);
+    expect(clip.anchorX).toBeCloseTo(80, 0);
+    expect(clip.fit).toBe('cover');
+    // At the edge, the crop stops at the footage's edge (no black)
+    const edge = compileEdit({ original, brief, sources: [wide([{ start: 0, end: 60, description: 'Host', subjectX: 1 }])], segments: [{ source: 'S1', from: 3, to: 6 }] }).elements.find((e) => e.type === 'video')!;
+    const W = parseFloat(edge.width);
+    const left = 50 - (edge.anchorX / 100) * W;
+    expect(left).toBeCloseTo(100 - W, 1);
+    // Words in the picture: whole picture (contain) over a blurred, muted copy on the track below
+    const fit = compileEdit({ original, brief, sources: [wide([{ start: 0, end: 60, description: 'Title card', onScreenText: 'DAY 1' }])], segments: [{ source: 'S1', from: 3, to: 6 }] });
+    const [back, front] = [...fit.elements].filter((e) => e.type === 'video').sort((a, b) => a.track - b.track);
+    expect(front).toMatchObject({ fit: 'contain', muted: false, track: 2 });
+    expect(back).toMatchObject({ fit: 'cover', muted: true, blurEnabled: true, track: 1, trimStart: 3, trimDuration: 3 });
+    expect(fit.groups.backdrops).toEqual([back.id]);
+    expect(editProblems(fit)).toEqual([]);
+  });
+
+  it('a title too wide for the frame breaks into two lines, then shrinks', () => {
+    const frame = { width: 1080, height: 1920 };
+    expect(fitTitle('LISBON', 8.5, frame, { upper: true, padEm: 0 })).toEqual({ text: 'LISBON', fontSize: 8.5 });
+    const two = fitTitle('THE END OF CODING?', 8.5, frame, { upper: true, padEm: 0.3 });
+    expect(two.text).toBe('THE END OF\nCODING?');
+    expect(two.fontSize).toBe(8.5);
+    const shrunk = fitTitle('INCOMPREHENSIBILITIES', 8.5, frame, { upper: true, padEm: 0.3 });
+    expect(shrunk.text).toBe('INCOMPREHENSIBILITIES');
+    expect(shrunk.fontSize).toBeLessThan(8.5);
   });
 
   it('titles are kept out of the app-button zones', () => {
