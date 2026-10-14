@@ -93,12 +93,12 @@ const CRAFT = `Craft rules for short social edits (follow them unless the brief 
 - Text is short (2–6 words per title), big, high contrast, inside the safe area (not the top 12% or bottom 18% on 9:16, where app buttons sit).
 - Sound sells cuts: a whoosh into a transition, a pop on a title, a hit on the payoff — sparingly, never on every cut.`;
 
-async function ask<T>(opts: { model: string; system: string; text: string; schema: Record<string, unknown>; thinking: 'low' | 'high'; timeoutMs?: number }): Promise<T> {
+async function ask<T>(opts: { model: string; system: string; text: string; schema: Record<string, unknown>; thinking: 'low' | 'high'; timeoutMs?: number; media?: Array<{ mimeType: string; data: string }> }): Promise<T> {
   const result = await getGeminiClient().generate({
     model: opts.model,
     fallback: opts.model === env.directorModel ? env.aiModelStrong : env.aiModelFallback,
     system: opts.system,
-    messages: [{ role: 'user', text: opts.text }],
+    messages: [{ role: 'user', text: opts.text, ...(opts.media ? { media: opts.media } : {}) }],
     jsonSchema: opts.schema,
     thinking: opts.thinking,
     // Specialists answer in seconds; a stuck call moves on to the fallback quickly
@@ -299,6 +299,24 @@ const ASSET_SCHEMA = obj({
   ),
   notes: S('One sentence'),
 });
+
+/**
+ * Which of the found stock pictures fits (looking at them), or none: the
+ * first search result was often off-brief (orange bokeh for "dark tech").
+ */
+export async function pickStock(want: { query: string; why: string; tone: string }, previews: Array<{ title: string; bytes: Buffer }>): Promise<number> {
+  if (!previews.length) return -1;
+  const result = await ask<{ pick: number; reason: string }>({
+    model: env.directorWorkerModel,
+    system: 'You pick stock footage for an edit. Look at the numbered pictures and choose the one that best shows what is wanted, in the right mood. If none fits well, answer -1: no picture is better than a wrong one.',
+    text: `Wanted: ${want.query}\nWhy: ${want.why}\nMood of the edit: ${want.tone}\n\n${previews.map((p, i) => `Picture ${i + 1}: ${p.title}`).join('\n')}`,
+    schema: obj({ pick: { type: 'INTEGER', description: 'Picture number, or -1 for none' }, reason: S('few words') }),
+    thinking: 'low',
+    media: previews.map((p) => ({ mimeType: 'image/jpeg', data: p.bytes.toString('base64') })),
+  } as any);
+  const n = Math.round(Number(result.pick));
+  return n >= 1 && n <= previews.length ? n - 1 : -1;
+}
 
 export async function scoutAssets(input: OnCut): Promise<AssetPart> {
   const system = `You are the asset scout. Suggest outside pictures only where the footage lacks something the story needs (an establishing shot, an illustration of what is said). The user's own footage is almost always better than stock: prefer none. Never cover a speaker's key line with stock.

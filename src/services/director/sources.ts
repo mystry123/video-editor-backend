@@ -142,6 +142,33 @@ export function cutView(segments: Segment[], sources: Source[], cutaways: Cutawa
     .join('\n');
 }
 
+/**
+ * Pieces never start or end in the middle of something said: an edge that
+ * falls inside a sentence moves out to its end (or its start), up to 2 s;
+ * otherwise in to the previous sentence's end. (A cut ended on "the Pyramids
+ * in" without "Egypt".)
+ */
+export function snapToSpeech(segments: Segment[], sources: Source[]): Segment[] {
+  const byRef = new Map(sources.map((s) => [s.ref, s]));
+  const MAX_STRETCH = 2;
+  return segments.map((seg) => {
+    const lines = byRef.get(seg.source)?.analysis?.speech ?? [];
+    let { from, to } = seg;
+    const endIn = lines.find((l) => to > l.start + 0.15 && to < l.end - 0.1);
+    if (endIn) {
+      const duration = byRef.get(seg.source)?.duration || Infinity;
+      if (endIn.end - to <= MAX_STRETCH && endIn.end + 0.15 <= duration) to = endIn.end + 0.15;
+      else {
+        const before = lines.filter((l) => l.end <= endIn.start + 0.05 && l.end > from + 0.4).pop();
+        if (before) to = before.end + 0.1;
+      }
+    }
+    const startIn = lines.find((l) => from > l.start + 0.1 && from < l.end - 0.15);
+    if (startIn && from - startIn.start <= MAX_STRETCH) from = Math.max(0, startIn.start - 0.05);
+    return { ...seg, from: Math.round(from * 100) / 100, to: Math.round(to * 100) / 100 };
+  });
+}
+
 /** Problems with a cut a model must fix (outside its source, too short, unknown source) */
 export function cutProblems(segments: Segment[], sources: Source[], targetSeconds?: number, cutaways: Cutaway[] = []): string[] {
   const byRef = new Map(sources.map((s) => [s.ref, s]));

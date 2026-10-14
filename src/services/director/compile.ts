@@ -295,7 +295,8 @@ export function compileEdit(input: CompileInput): CompiledEdit {
     const asked = input.motion?.pieces.find((m) => Number(m.piece) === i + 1)?.framing;
     const textInPicture = shots.some((x) => x.onScreenText) || !!src.analysis?.hasBurnedCaptions;
     const group = shots.some((x) => (x.people ?? 0) >= 3);
-    const fit = asked === 'fit' || ((!asked || asked === 'auto') && (textInPicture || group) && sourceAspect > frameAspect);
+    // Captions burned into the footage are cut by any crop: those pieces are always shown whole
+    const fit = asked === 'fit' || !!src.analysis?.hasBurnedCaptions || ((!asked || asked === 'auto') && (textInPicture || group) && sourceAspect > frameAspect);
     if (fit) {
       // The whole picture, over a blurred, enlarged copy of itself that fills the frame
       const backdrop = {

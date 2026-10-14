@@ -375,3 +375,14 @@ describe('preparing footage ahead of a run', () => {
     set(null);
   });
 });
+
+describe('cuts follow what is said', () => {
+  it('a piece ending mid-sentence runs on to the end of it; a start mid-sentence moves back to its start', async () => {
+    const { snapToSpeech } = await import('../src/services/director/sources');
+    const s = { ...{ ref: 'S1', fileId: 'f', name: 'n', kind: 'video' as const, url: 'u', duration: 60, element: {} }, analysis: { ...analysis, speech: [{ start: 10, end: 14, text: 'like the Pyramids in Egypt.' }, { start: 20, end: 30, text: 'a very long sentence that goes on' }] } };
+    expect(snapToSpeech([{ source: 'S1', from: 5, to: 13.2 }], [s])).toEqual([{ source: 'S1', from: 5, to: 14.15 }]);
+    // Too far to the end (5 s): back to the end of the sentence before
+    expect(snapToSpeech([{ source: 'S1', from: 5, to: 25 }], [s])).toEqual([{ source: 'S1', from: 5, to: 14.1 }]);
+    expect(snapToSpeech([{ source: 'S1', from: 11, to: 16 }], [s])).toEqual([{ source: 'S1', from: 9.95, to: 16 }]);
+  });
+});

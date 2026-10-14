@@ -31,8 +31,8 @@ import { saveAudio } from '../../controllers/audioTools.controller';
 import { copyStockToMedia } from '../../controllers/stock.controller';
 import { searchStock, stockEnabled } from '../stock.service';
 import { footageAnalysis } from './footage';
-import { attachAnalyses, cutProblems, sourcesOf, type Cutaway, type ProjectJson, type Segment, type Source } from './sources';
-import { cutStory, designMotion, designSound, designType, scoutAssets, writeBrief, type AssetPart, type Brief, type MotionPart, type SoundPart, type TypePart } from './crew';
+import { attachAnalyses, cutProblems, snapToSpeech, sourcesOf, type Cutaway, type ProjectJson, type Segment, type Source } from './sources';
+import { cutStory, designMotion, pickStock, designSound, designType, scoutAssets, writeBrief, type AssetPart, type Brief, type MotionPart, type SoundPart, type TypePart } from './crew';
 import { compileEdit, frameFor, type AudioAsset, type CompiledEdit, type VisualAsset } from './compile';
 import { editProblems } from './checks';
 import { GOOD_ENOUGH, renderStoryboard, reviewDraft, type Review, type StoryboardFrame } from './review';
@@ -124,6 +124,8 @@ async function carryOut(runId: string, input: DirectorInput): Promise<void> {
       const list = (t.words ?? []).filter((w: any) => !w.type || w.type === 'word').map((w: any) => ({ text: String(w.text), start: Number(w.start), end: Number(w.end) }));
       if (list.length) words[String(t.fileId)] = list;
     }
+    // Watching (long for big files, once per file) doesn't count against the review budget
+    const watchedAt = Date.now();
     const seen = watched.filter((s) => s.analysis).length;
     await progress(runId, 'watching', seen ? `Watched ${seen} clip${seen === 1 ? '' : 's'}: ${watched.map((s) => s.analysis?.moments.length ?? 0).reduce((a, b) => a + b, 0)} moments worth using` : 'Could not watch the footage; using what is known about it');
 
@@ -148,7 +150,7 @@ async function carryOut(runId: string, input: DirectorInput): Promise<void> {
       }
       // Whatever still doesn't fit its source is clamped or dropped
       const byRef = new Map(watched.map((s) => [s.ref, s]));
-      segments = cut.segments
+      segments = snapToSpeech(cut.segments, watched)
         .filter((s) => byRef.has(s.source))
         .map((s) => ({ ...s, from: Math.max(0, s.from), to: Math.min(byRef.get(s.source)!.duration || s.to, s.to) }))
         .filter((s) => s.to - s.from >= 0.3);
@@ -192,7 +194,7 @@ async function carryOut(runId: string, input: DirectorInput): Promise<void> {
     const assemble = async () => {
       const total = segments.reduce((t, s) => t + s.to - s.from, 0);
       sfx = await soundEffects(user, (parts.sound?.sfx ?? []).filter((s) => s.at >= 0 && s.at < total).slice(0, MAX_SFX));
-      visuals = await pictures(user, parts.assets?.assets ?? []);
+      visuals = await pictures(user, parts.assets?.assets ?? [], { text: brief.tone, tall: frame.height > frame.width });
       return compileEdit({ original: input.project, brief, sources: watched, segments, cutaways, ...parts, sfx, visuals, words });
     };
     await progress(runId, 'assembling', 'Making sound effects and putting the edit together');
@@ -203,7 +205,7 @@ async function carryOut(runId: string, input: DirectorInput): Promise<void> {
     const reviews: Array<Review & { round: number; frames: Array<Omit<StoryboardFrame, 'bytes'>> }> = [];
     let storyboard: Array<Omit<StoryboardFrame, 'bytes'>> = [];
     for (let round = 1; round <= MAX_REVIEWS; round++) {
-      if (Date.now() - started > REVIEW_BUDGET_MS) break;
+      if (Date.now() - watchedAt > REVIEW_BUDGET_MS) break;
       await progress(runId, 'reviewing', round === 1 ? 'Director is watching the draft' : `Director is checking revision ${round - 1}`);
       let review: Review;
       let frames: StoryboardFrame[] = [];
@@ -230,7 +232,7 @@ async function carryOut(runId: string, input: DirectorInput): Promise<void> {
         const recut = await cutStory({ brief, sources: watched, previous: segments, previousCutaways: cutaways, notes: notes.story });
         const fixed = cutProblems(recut.segments, watched, brief.targetSeconds);
         if (!fixed.some((p) => /outside|no source|before it starts/.test(p))) {
-          segments = recut.segments;
+          segments = snapToSpeech(recut.segments, watched);
           cutaways = keepValidCutaways(recut.cutaways, segments, watched);
         }
         await craft(null, notes);
@@ -315,16 +317,30 @@ async function soundEffects(user: any, wanted: Array<{ at: number; kind: string 
 }
 
 /** Stock pictures for the asset scout's picks (AI images are left as suggestions for now) */
-async function pictures(user: any, wanted: AssetPart['assets']): Promise<VisualAsset[]> {
+async function pictures(user: any, wanted: AssetPart['assets'], tone: { text: string; tall: boolean }): Promise<VisualAsset[]> {
   if (!stockEnabled()) return [];
   const out: VisualAsset[] = [];
   for (const a of wanted.filter((x) => x.kind !== 'ai-image').slice(0, MAX_VISUALS)) {
     try {
       const kind = a.kind === 'stock-video' ? 'video' : 'photo';
-      const found = await searchStock(kind, a.query, 1);
-      const first = found.items[0];
-      if (!first) continue;
-      const file = await copyStockToMedia(user, kind, first.id);
+      const found = await searchStock(kind, a.query, 1, tone.tall ? 'vertical' : undefined);
+      const candidates = found.items.slice(0, 6);
+      const previews = (
+        await Promise.all(
+          candidates.map(async (item) => {
+            try {
+              const res = await fetch(item.preview, { signal: AbortSignal.timeout(10_000) });
+              return res.ok ? { title: item.title, bytes: Buffer.from(await res.arrayBuffer()) } : null;
+            } catch {
+              return null;
+            }
+          })
+        )
+      ).filter((p) => !!p) as Array<{ title: string; bytes: Buffer }>;
+      const pick = await pickStock({ query: a.query, why: a.why, tone: tone.text }, previews);
+      if (pick < 0) continue;
+      const chosen = candidates.find((c) => c.title === previews[pick].title) ?? candidates[pick];
+      const file = await copyStockToMedia(user, kind, chosen.id);
       out.push({ kind: kind === 'video' ? 'video' : 'image', url: file.url, fileId: file.fileId, duration: file.duration, start: a.start, end: a.end, placement: a.placement });
     } catch (error) {
       logger.warn('Director stock pick failed', { query: a.query, error: (error as Error).message });
