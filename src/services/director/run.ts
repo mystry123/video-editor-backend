@@ -30,6 +30,7 @@ import { getAudioTools } from '../audio';
 import { saveAudio } from '../../controllers/audioTools.controller';
 import { copyStockToMedia } from '../../controllers/stock.controller';
 import { makeImageFile } from '../../controllers/aiImage.controller';
+import { createElevenLabsTranscription } from '../transcription.service';
 import { searchStock, stockEnabled } from '../stock.service';
 import { footageAnalysis } from './footage';
 import { attachAnalyses, cutProblems, snapToSpeech, sourcesOf, type Cutaway, type ProjectJson, type Segment, type Source } from './sources';
@@ -176,6 +177,8 @@ export async function directEdit(ctx: EditContext) {
   const preferences = describePreferences((user as any).assistantPreferences).concat(((user as any).assistantMemory || []).map((m: any) => m.note)).filter(Boolean).join('\n');
   const conversation = input.conversation.slice(-8).map((m) => `${m.role === 'user' ? 'User' : 'Cue'}: ${m.text.slice(0, 800)}`).join('\n');
   const brief: Brief = await writeBrief({ request: input.request, conversation, project: input.context, sources: watched, preferences, lessons: lessons.director, examples: ctx.examples });
+  // Footage that is only worth hearing (black, a placeholder) gets its picture replaced, whatever the brief says
+  if (watched.length && watched.every((s) => s.analysis?.pictureValue === 'none')) brief.picture = 'replace';
   await report('briefing', `Brief: ${brief.understood} (${brief.aspect}, ${brief.targetSeconds}s, ${brief.tone})`, { brief });
 
   // --- Cutting ---
@@ -230,6 +233,17 @@ export async function directEdit(ctx: EditContext) {
   };
   await craft(null);
   await report('crafting', craftSummary(parts), { parts });
+
+  // --- Captions need real word timings: transcribe what the cut uses, once per file ---
+  const wantCaptions = parts.type ? parts.type.captions.use : brief.captions.use;
+  if (wantCaptions) {
+    const needed = watched.filter((s) => s.analysis?.hasSpeech && !words[s.fileId] && segments.some((p) => p.source === s.ref) && s.duration <= MAX_TRANSCRIBE_SECONDS);
+    if (needed.length) await report('crafting', 'Transcribing the speech for captions');
+    await Promise.all(needed.map(async (s) => {
+      const got = await transcribeFor(user, s.fileId, s.url);
+      if (got) words[s.fileId] = got;
+    }));
+  }
 
   // --- Assembling ---
   let sfx: Array<{ at: number; asset: AudioAsset }> = [];
@@ -341,6 +355,25 @@ async function makeMusic(user: any, want: { mood: string; prompt: string }, seco
   }
 }
 
+/** Speech longer than this isn't transcribed during a run (captions are left to the Captions tool) */
+const MAX_TRANSCRIBE_SECONDS = 20 * 60;
+
+/** Word-timed transcript of a file (ElevenLabs), kept like a Captions transcript so it's reused */
+async function transcribeFor(user: any, fileId: string, url: string): Promise<Array<{ text: string; start: number; end: number }> | null> {
+  try {
+    const result = await createElevenLabsTranscription(url);
+    await Transcription.updateOne(
+      { fileId },
+      { $setOnInsert: { userId: user._id, fileId, status: 'completed', text: result.text, words: result.words, language: result.language_code } },
+      { upsert: true }
+    );
+    return (result.words ?? []).filter((w) => w.type === 'word').map((w) => ({ text: String(w.text), start: Number(w.start), end: Number(w.end) }));
+  } catch (error) {
+    logger.warn('Director transcription failed', { fileId, error: (error as Error).message });
+    return null;
+  }
+}
+
 /** One file per kind of sound effect per user, made once and reused */
 async function soundEffects(user: any, wanted: Array<{ at: number; kind: string }>): Promise<Array<{ at: number; asset: AudioAsset }>> {
   const out: Array<{ at: number; asset: AudioAsset }> = [];
@@ -370,18 +403,33 @@ async function soundEffects(user: any, wanted: Array<{ at: number; kind: string 
 /** The asset scout's picks: stock (the fitting one of the top results) or generated images */
 async function pictures(user: any, wanted: AssetPart['assets'], tone: { text: string; tall: boolean }): Promise<VisualAsset[]> {
   const out: VisualAsset[] = [];
-  let generated = 0;
-  for (const a of wanted.slice(0, MAX_VISUALS)) {
+  // Generated images are made together (each with one retry); any that can't be made fall back to stock
+  const asked = wanted.slice(0, MAX_VISUALS);
+  const images = asked.filter((a) => a.kind === 'ai-image').slice(0, MAX_AI_IMAGES);
+  const made = new Map<(typeof asked)[number], VisualAsset>();
+  await Promise.all(
+    images.map(async (a) => {
+      for (let attempt = 0; attempt < 2 && !made.has(a); attempt++) {
+        try {
+          const image = await makeImageFile(user, a.query, tone.tall ? '9:16' : '16:9', 60_000);
+          made.set(a, { kind: 'image', url: image.url, fileId: image.fileId, start: a.start, end: a.end, placement: a.placement });
+        } catch (error) {
+          logger.warn('Director image failed', { attempt, error: (error as Error).message });
+        }
+      }
+    })
+  );
+  for (const a of asked) {
     try {
-      if (a.kind === 'ai-image') {
-        if (generated >= MAX_AI_IMAGES) continue;
-        generated++;
-        const image = await makeImageFile(user, a.query, tone.tall ? '9:16' : '16:9');
-        out.push({ kind: 'image', url: image.url, fileId: image.fileId, start: a.start, end: a.end, placement: a.placement });
+      const image = made.get(a);
+      if (image) {
+        out.push(image);
         continue;
       }
       if (!stockEnabled()) continue;
-      const kind = a.kind === 'stock-video' ? 'video' : 'photo';
+      // A stock photo in place of an image that couldn't be made: its subject in a few words
+      if (a.kind === 'ai-image') a.query = a.query.replace(/^(cinematic|vertical|a|an|the)\s+/gi, '').split(/[,.]/)[0].split(/\s+/).slice(0, 6).join(' ');
+      const kind: 'video' | 'photo' = a.kind === 'stock-video' ? 'video' : 'photo';
       const found = await searchStock(kind, a.query, 1, tone.tall ? 'vertical' : undefined);
       const candidates = found.items.slice(0, 6);
       const previews = (

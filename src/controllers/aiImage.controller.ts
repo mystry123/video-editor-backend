@@ -25,8 +25,8 @@ const nameFrom = (prompt: string) =>
   prompt.replace(/[\\/:*?"<>|,.;]/g, ' ').replace(/\s+/g, ' ').trim().split(' ').slice(0, 8).join(' ').slice(0, 60) || 'Generated image';
 
 /** Makes an image and keeps it in the user's media (no metering: callers meter) */
-export async function makeImageFile(user: any, prompt: string, aspect: ImageAspect) {
-  const image = await getImageGenerator()(prompt, aspect);
+export async function makeImageFile(user: any, prompt: string, aspect: ImageAspect, timeoutMs?: number) {
+  const image = await getImageGenerator()(prompt, aspect, timeoutMs);
   const sniffed = sniffMedia(image.bytes);
   if (!sniffed?.type.startsWith('image/')) throw ApiError.withCode(502, 'IMAGE_NOT_MADE', "That image couldn't be made. Try again.");
   assertCanStore(user, image.bytes.length, sniffed.type);

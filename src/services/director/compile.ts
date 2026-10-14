@@ -403,11 +403,13 @@ export function compileEdit(input: CompileInput): CompiledEdit {
   // Burned-in captions still in the picture: no second set. Cropped out of the picture: fresh ones
   const burnedShowing = !hidBurnedCaptions && placed.some((p) => byRef.get(p.source)?.analysis?.hasBurnedCaptions);
   if (burnedShowing && (cap?.use || brief.captions.use)) notes.push('Captions: your footage already has them burned in, so no second set was added.');
-  if (!burnedShowing && (hidBurnedCaptions || cap?.use || (cap === undefined && brief.captions.use))) {
+  // Captions only when the typographer (or, without one, the brief) asks for them
+  if (!burnedShowing && (cap ? cap.use : brief.captions.use)) {
     const words: Array<{ word: string; startMs: number; endMs: number }> = [];
     for (const p of placed) {
       const src = byRef.get(p.source)!;
-      const all = input.words?.[src.fileId] ?? wordsFromLines(src.analysis?.speech ?? []);
+      // Word timings from a real transcript only: words spread over a sentence drifted off the speech
+      const all = input.words?.[src.fileId] ?? [];
       for (const w of all) {
         const mid = (w.start + w.end) / 2;
         if (mid < p.from || mid >= p.to) continue;
@@ -446,7 +448,7 @@ export function compileEdit(input: CompileInput): CompiledEdit {
       };
       elements.push(caption);
       add('captions', caption.id);
-    } else notes.push("Captions: nothing is said in the cut, so there are none.");
+    } else notes.push(Object.keys(input.words ?? {}).length ? 'Captions: nothing is said in the cut, so there are none.' : "Captions: the speech couldn't be transcribed, so there are none. Add them with Captions.");
   }
 
   // --- Titles ---

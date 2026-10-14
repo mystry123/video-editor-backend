@@ -101,6 +101,7 @@ export function sourceDigest(s: Source): string {
   if (a.moments.length) lines.push(`  Best moments: ${a.moments.slice(0, 20).map((m) => `[${m.score} ${m.kind}] ${clock(m.start)}–${clock(m.end)} ${m.title}: ${cap(m.why, 120)}`).join(' | ')}`);
   lines.push(`  Music in it: ${a.hasMusic ? 'yes' : 'no'}`);
   if (a.hasBurnedCaptions) lines.push('  Captions of the speech are already burned into the picture: do not add another set.');
+  if (a.pictureValue === 'none') lines.push('  Its picture is not worth showing (black, a placeholder or nothing to see): use its sound, replace the picture.');
   return lines.join('\n');
 }
 

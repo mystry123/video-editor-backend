@@ -51,6 +51,7 @@ const PIECE_SCHEMA = {
     language: { ...str, description: 'Spoken language code (en, hi, …) or empty when nothing is said' },
     hasSpeech: { type: 'BOOLEAN' },
     hasMusic: { type: 'BOOLEAN' },
+    pictureValue: { type: 'STRING', enum: ['high', 'some', 'none'], description: 'How much the picture is worth showing: high = good to watch, some = usable, none = black screen, a placeholder, a static slide or nothing to see (only the sound matters)' },
     hasBurnedCaptions: { type: 'BOOLEAN', description: 'True if subtitles/captions of what is said are already burned into the picture (words appearing as people talk)' },
     shots: {
       type: 'ARRAY',
@@ -191,6 +192,7 @@ async function watchPiece(file: IFile, isVideo: boolean, start: number, seconds:
       hasSpeech: !!r.hasSpeech,
       hasMusic: !!r.hasMusic,
       hasBurnedCaptions: !!r.hasBurnedCaptions,
+      pictureValue: (['high', 'some', 'none'] as const).includes(r.pictureValue as any) ? r.pictureValue : undefined,
       shots: (r.shots ?? []).map((x) => clampSpan(x as AnalysisShot, start, start, end)).filter((x): x is AnalysisShot => !!x),
       speech: (r.speech ?? []).map((x) => clampSpan(x as AnalysisLine, start, start, end)).filter((x): x is AnalysisLine => !!x),
       moments: (r.moments ?? [])
@@ -255,6 +257,8 @@ async function analyse(file: IFile): Promise<IMediaAnalysis> {
       hasSpeech: !!transcript?.length || all.some((r) => r.hasSpeech),
       hasMusic: all.some((r) => r.hasMusic),
       hasBurnedCaptions: all.some((r) => r.hasBurnedCaptions),
+      // The whole file is only worth hearing if every piece of it is
+      pictureValue: all.every((r) => r.pictureValue === 'none') ? 'none' : all.some((r) => r.pictureValue === 'high') ? 'high' : 'some',
       shots: all.flatMap((r) => r.shots),
       speech: transcript ? transcript.filter((l) => l.start < analysedSeconds) : all.flatMap((r) => r.speech),
       moments: all.flatMap((r) => r.moments).sort((a, b) => b.score - a.score).slice(0, 40),

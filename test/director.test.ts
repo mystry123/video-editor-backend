@@ -17,6 +17,9 @@ vi.mock('../src/services/storage.service', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/services/storage.service')>();
   return { ...real, uploadBufferToS3: vi.fn(async (_b: Buffer, key: string) => `https://cdn.test/${key}`) };
 });
+// Captions in a run come from a real transcript of the speech
+const transcribe = vi.fn(async () => ({ id: 't', text: 'Good morning from Lisbon.', audio_duration: 60, language_code: 'en', words: [{ text: 'Good', start: 3, end: 3.4, type: 'word' }, { text: ' ', start: 3.4, end: 3.45, type: 'spacing' }, { text: 'morning', start: 3.45, end: 4, type: 'word' }] }));
+vi.mock('../src/services/transcription.service', () => ({ createElevenLabsTranscription: (...args: any[]) => (transcribe as any)(...args) }));
 vi.mock('../src/utils/media', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/utils/media')>();
   return { ...real, probeMedia: vi.fn(async () => ({ format: { duration: '1.0' }, streams: [{ codec_type: 'audio' }] })) };
@@ -72,6 +75,8 @@ describe('compiling an edit', () => {
       motion: { pieces: [{ piece: 1, move: 'punch-in', transitionIn: 'cut' }, { piece: 2, move: 'slow-zoom-in', transitionIn: 'whip' }], notes: '' },
       sound: { originalAudio: 'keep', sfx: [{ at: 3, kind: 'whoosh' }], music: { use: true, mood: 'upbeat', prompt: 'p' }, notes: '' },
       sfx: [{ at: 2.9, asset: { url: 'https://cdn.test/w.mp3', fileId: 'w', duration: 1 } }],
+      // A word-timed transcript (captions are only made from real word timings)
+      words: { f1: wordsFromLines(analysis.speech) },
     });
 
   it('makes a valid 9:16 project: cut on track 1, overlays above, sounds on top', () => {
@@ -130,14 +135,15 @@ describe('compiling an edit', () => {
     expect(editProblems(fit)).toEqual([]);
   });
 
-  it('wide footage with burned-in captions fills the tall frame, zoomed past them, with fresh captions', () => {
+  it('wide footage with burned-in captions fills the tall frame, zoomed past them (captions only if asked)', () => {
     const burned = { ...source(), width: 1920, height: 1080, analysis: { ...analysis, hasBurnedCaptions: true, shots: [{ start: 0, end: 60, description: 'Host', subjectX: 0.5 }] } };
     const e = compileEdit({ original, brief, sources: [burned], segments: [{ source: 'S1', from: 3, to: 6 }], type: { titles: [], captions: { use: false, style: 'word-pop', position: 'lower' }, notes: '' } });
     const clip = e.elements.find((x) => x.type === 'video')!;
     expect(clip).toMatchObject({ fit: 'cover', height: '120%', y: '0%', anchorY: 0 });
     expect(parseFloat(clip.width)).toBeCloseTo(316.05 * 1.2, 0);
     expect(e.groups.backdrops).toBeUndefined();
-    expect(e.elements.some((x) => x.type === 'caption')).toBe(true);
+    // The typographer said no captions: none, though the old ones are out of frame
+    expect(e.elements.some((x) => x.type === 'caption')).toBe(false);
   });
 
   it('footage only worth hearing: its clips are heard, not seen, and pictures cover the whole edit', () => {
@@ -259,6 +265,10 @@ describe('Director runs', () => {
     expect(sfx).toHaveBeenCalledTimes(1);
     const counter = await UsageCounter.findOne({ userId: user._id, kind: 'directorRuns', period: currentPeriod() });
     expect(counter?.total).toBe(1);
+    // Captions were asked for: the speech was transcribed (once, kept) and its words used
+    expect(transcribe).toHaveBeenCalled();
+    const caption = run.result.elements.find((e: any) => e.type === 'caption');
+    expect(caption.transcription.words.map((w: any) => w.word)).toEqual(['Good', 'morning']);
   });
 
   it('the director reviews real frames and sends notes back until it is good enough', async () => {

@@ -9,7 +9,7 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
 /** Bump when the prompt or shape changes: older analyses are made again */
-export const MEDIA_ANALYSIS_VERSION = 4;
+export const MEDIA_ANALYSIS_VERSION = 5;
 
 export interface AnalysisShot {
   start: number;
@@ -49,6 +49,8 @@ export interface MediaAnalysisResult {
   hasMusic: boolean;
   /** Subtitles/captions of the speech are already burned into the picture */
   hasBurnedCaptions?: boolean;
+  /** How much the picture is worth showing: none = black, a placeholder or nothing to see (only the sound matters) */
+  pictureValue?: 'high' | 'some' | 'none';
   shots: AnalysisShot[];
   speech: AnalysisLine[];
   moments: AnalysisMoment[];
