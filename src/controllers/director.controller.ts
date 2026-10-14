@@ -1,6 +1,7 @@
 // controllers/director.controller.ts
 //
 //   POST /ai/director            { projectId, request, messages?, context, project } → { run }
+//   GET  /ai/director?projectId= → { run }   the latest run in a project (last 2 hours), or null
 //   GET  /ai/director/:id        → { run }   (the editor polls this)
 //   POST /ai/director/:id/stop   → { run }
 //
@@ -44,6 +45,15 @@ export const startDirector = async (req: AuthRequest, res: Response, next: NextF
       project: body.project,
     });
     res.status(202).json({ run: runView(run) });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const latestDirector = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const run = await DirectorRun.findOne({ userId: req.userId, projectId: String(req.query.projectId), createdAt: { $gt: new Date(Date.now() - 2 * 60 * 60 * 1000) } }).sort({ createdAt: -1 });
+    res.json({ run: run ? runView(run) : null });
   } catch (error) {
     next(error);
   }

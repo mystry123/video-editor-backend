@@ -39,6 +39,12 @@ export interface GeminiRequest {
   timeoutMs?: number;
   /** The model to fall back to when this one is over its limit (default AI_MODEL_FALLBACK; null: none) */
   fallback?: string | null;
+  /**
+   * Background jobs (Cue Director) wait out a busy model instead of
+   * downgrading at once: retries with growing pauses (3, 8, 15, 25 s) on the
+   * same model before the fallback. Chat replies stay quick (one short retry).
+   */
+  patient?: boolean;
 }
 
 export interface GeminiResult {
@@ -93,8 +99,11 @@ const vertexClient: GeminiClient = {
     // Routes in order: the model (twice), the fallback, then the fallback in another region
     // (separate capacity from the global endpoint)
     const alt = env.vertexLocation === 'global' ? 'us-central1' : 'global';
+    const pauses = request.patient ? PATIENT_PAUSES_MS : [1500];
+    const own: Array<[string, string]> = Array.from({ length: pauses.length + 1 }, () => [request.model, env.vertexLocation]);
     const routes: Array<[string, string]> = [
-      ...(resting ? [] : ([[request.model, env.vertexLocation], [request.model, env.vertexLocation]] as Array<[string, string]>)),
+      // A patient job tries the model even while it rests (it can wait)
+      ...(resting && !request.patient ? [] : own),
       ...(fallback ? ([[fallback, env.vertexLocation], [fallback, alt]] as Array<[string, string]>) : []),
     ];
     for (const [attempt, [model, location]] of routes.entries()) {
@@ -103,13 +112,17 @@ const vertexClient: GeminiClient = {
       } catch (error) {
         if (!(error instanceof RateLimited)) throw error;
         logger.warn('Vertex rate limited', { model, location, attempt });
-        if (attempt === 0 && !resting) await sleep(1500);
-        if (attempt === 1 && model === request.model) coolingUntil.set(model, Date.now() + COOL_DOWN_MS);
+        const ownAttempt = model === request.model && location === env.vertexLocation;
+        if (ownAttempt && attempt < pauses.length) await sleep(pauses[attempt]);
+        if (ownAttempt && attempt === pauses.length) coolingUntil.set(model, Date.now() + COOL_DOWN_MS);
       }
     }
     throw ApiError.withCode(503, 'ASSISTANT_BUSY', 'Cue is busy right now. Try again in a minute.');
   },
 };
+
+/** Pauses between a patient job's retries of a busy model */
+export const PATIENT_PAUSES_MS = [3000, 8000, 15000, 25000];
 
 /** How long one attempt may take before trying the next route */
 const ATTEMPT_MS = 30_000;

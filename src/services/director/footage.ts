@@ -64,6 +64,7 @@ const PIECE_SCHEMA = {
           people: { type: 'INTEGER' },
           onScreenText: { ...str, description: 'Text visible in the picture, if any' },
           motion: { ...str, enum: ['static', 'some', 'high'] },
+          enters: { ...str, enum: ['cut', 'dissolve', 'fade-in', 'wipe', 'start'], description: 'How this shot begins in the footage: a hard cut, or a dissolve/fade/wipe already edited into it (the overlap is part of this shot)' },
         },
         required: ['start', 'end', 'description'],
       },
@@ -95,7 +96,7 @@ const PIECE_SCHEMA = {
 
 const SYSTEM = `You are a senior video editor logging footage before an edit. Watch and listen to the whole clip.
 Be concrete and accurate: name what is actually seen and heard, never invent. Times are MM:SS (or MM:SS.s) from the start of THIS clip, and must lie within it.
-Shots: split at every cut or clear scene change; cover the clip end to end.
+Shots: split at every cut or clear scene change; cover the clip end to end. When the footage itself dissolves, fades or wipes from one shot to the next, mark the new shot's "enters" and make that shot start where the blend starts: editors must know where two pictures are mixed.
 Moments: the strongest 3–12 spans (1–20 s each) an editor would pull for a short, punchy social edit: a great opening line or visual hook, a payoff, a quotable line, a striking image, a laugh. Score honestly; most moments are 4–7.`;
 
 /** Words grouped into sentence-sized lines (a pause, sentence end or ~14 words ends one) */
@@ -175,6 +176,7 @@ async function watchPiece(file: IFile, isVideo: boolean, start: number, seconds:
     jsonSchema: PIECE_SCHEMA,
     thinking: 'low',
     timeoutMs: 180_000,
+    patient: true,
   });
   const r = (result.json ?? {}) as Partial<MediaAnalysisResult>;
   const end = start + seconds;

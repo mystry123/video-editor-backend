@@ -92,7 +92,7 @@ export function sourceDigest(s: Source): string {
   const head = `${s.ref} "${s.name}" · ${s.kind} · ${clock(s.duration)}${a ? ` · ${a.kind}${a.language ? ` · ${a.language}` : ''}` : ''}`;
   if (!a) return `${head}\n  (not analysed: only its name and length are known)`;
   const lines = [head, `  ${cap(a.summary, 600)}`];
-  if (a.shots.length) lines.push(`  Shots: ${a.shots.slice(0, 80).map((x) => `${clock(x.start)}–${clock(x.end)} ${cap(x.description, 90)}${x.framing ? ` [${x.framing}]` : ''}${x.onScreenText ? ` (text: "${cap(x.onScreenText, 40)}")` : ''}`).join(' | ')}`);
+  if (a.shots.length) lines.push(`  Shots: ${a.shots.slice(0, 80).map((x) => `${clock(x.start)}–${clock(x.end)} ${cap(x.description, 90)}${x.framing ? ` [${x.framing}]` : ''}${x.onScreenText ? ` (text: "${cap(x.onScreenText, 40)}")` : ''}${x.enters && x.enters !== 'cut' && x.enters !== 'start' ? ` {starts with a ${x.enters} already in the footage}` : ''}`).join(' | ')}`);
   if (a.speech.length) lines.push(`  Said: ${a.speech.slice(0, 160).map((l) => `${clock(l.start)}–${clock(l.end)}${l.speaker ? ` ${l.speaker}` : ''}: "${cap(l.text, 140)}"`).join(' | ')}`);
   else lines.push('  Said: nothing (no speech)');
   if (a.moments.length) lines.push(`  Best moments: ${a.moments.slice(0, 20).map((m) => `[${m.score} ${m.kind}] ${clock(m.start)}–${clock(m.end)} ${m.title}: ${cap(m.why, 120)}`).join(' | ')}`);

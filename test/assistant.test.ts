@@ -217,4 +217,32 @@ describe('Vertex rate limits', () => {
     expect(asked).toEqual(['gemini-2.5-flash']);
     (await import('../src/services/ai/gemini')).resetRateLimits();
   });
+
+  it('a patient job (Cue Director) waits out a busy model with growing pauses before falling back', async () => {
+    const { setGeminiClient: set, getGeminiClient, resetRateLimits, PATIENT_PAUSES_MS } = await import('../src/services/ai/gemini');
+    set(null);
+    resetRateLimits();
+    const asked: string[] = [];
+    let busy = 3;
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      asked.push(String(url).match(/models\/([^:]+):/)![1]);
+      if (busy-- > 0) return new Response('{"error":{"code":429}}', { status: 429 });
+      return Response.json({ candidates: [{ content: { parts: [{ text: 'ok' }] } }], usageMetadata: {} });
+    }));
+    const auth = await import('google-auth-library');
+    vi.spyOn(auth.GoogleAuth.prototype, 'getAccessToken').mockResolvedValue('token' as any);
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    const started = Date.now();
+    const pending = getGeminiClient().generate({ model: 'gemini-3.1-pro-preview', system: 's', messages: [{ role: 'user', text: 'hi' }], patient: true });
+    await vi.runAllTimersAsync();
+    const out = await pending;
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    // Busy three times, then the same model answers: no downgrade
+    expect(asked).toEqual(['gemini-3.1-pro-preview', 'gemini-3.1-pro-preview', 'gemini-3.1-pro-preview', 'gemini-3.1-pro-preview']);
+    expect(out).toMatchObject({ model: 'gemini-3.1-pro-preview', text: 'ok' });
+    expect(PATIENT_PAUSES_MS.slice(0, 3).reduce((a, b) => a + b, 0)).toBe(26000);
+    expect(started).toBeGreaterThan(0);
+    resetRateLimits();
+  });
 });

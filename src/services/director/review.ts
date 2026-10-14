@@ -161,6 +161,7 @@ export function describeEdit(edit: CompiledEdit): string {
 export async function reviewDraft(input: { brief: Brief; request: string; edit: CompiledEdit; frames: StoryboardFrame[]; problems: string[]; round: number }): Promise<Review> {
   const system = `You are the director reviewing your crew's draft before the client sees it. You have the brief, the edit as a timeline, and real rendered frames from it.
 Judge it as the audience would on their phone: does the first second stop the scroll? Is every word readable (size, contrast, not cut off, not under app buttons, not covering faces)? Is the framing right (subject in frame after the crop to this shape)? Does the pacing hold? Does it deliver the brief and the request?
+Some looks come from the footage itself (dissolves or text already edited into it): when a frame shows that, the fix is the story editor's (choose a span without it), not a rendering fault.
 Be demanding but fair: only ask for changes that clearly improve it, and say exactly what to change. Round ${input.round}: from round 2, ship unless something is still clearly wrong.`;
   const frames = input.frames.filter((f) => f.bytes);
   const text = `REQUEST\n${input.request}\n\nBRIEF\n${JSON.stringify(input.brief, null, 1)}\n\nTHE EDIT\n${describeEdit(input.edit)}${
@@ -173,7 +174,8 @@ Be demanding but fair: only ask for changes that clearly improve it, and say exa
     messages: [{ role: 'user', text, media: frames.map((f) => ({ mimeType: 'image/jpeg', data: f.bytes!.toString('base64') })) }],
     jsonSchema: REVIEW_SCHEMA,
     thinking: 'high',
-    timeoutMs: 150_000,
+    timeoutMs: 90_000,
+    patient: true,
   });
   const r = (result.json ?? {}) as Partial<Review>;
   const score = Math.max(1, Math.min(10, Math.round(Number(r.score) || 5)));

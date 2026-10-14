@@ -100,7 +100,9 @@ async function ask<T>(opts: { model: string; system: string; text: string; schem
     jsonSchema: opts.schema,
     thinking: opts.thinking,
     // Specialists answer in seconds; a stuck call moves on to the fallback quickly
-    timeoutMs: opts.timeoutMs ?? (opts.model === env.directorModel ? 120_000 : 60_000),
+    // A call stuck in Vertex's queue is retried, then falls back, instead of holding the run
+    timeoutMs: opts.timeoutMs ?? (opts.model === env.directorModel ? 90_000 : 45_000),
+    patient: true,
   });
   return result.json as T;
 }
@@ -181,6 +183,7 @@ export async function cutStory(input: { brief: Brief; sources: Source[]; problem
 Use the logged shots, speech and moments; choose the strongest material. Start and end each piece on the edges of what is said (use the "Said" times) so no sentence is cut off, or on shot changes for pieces without speech. Pieces may come from anywhere in any source, in any order (a later line can open the edit as the hook).
 Cutaways: while someone talks, the picture can cut away to other footage (what they talk about, a beautiful shot) and the voice plays on — the classic way to keep a talking edit visual and fast. Use them when the brief asks for voice over B-roll or when a speaking piece runs long on one face.
 The pieces' lengths must add up to the brief's target length (within 10%).
+Where the footage itself dissolves or fades between shots ({starts with a dissolve…}), two pictures are mixed for about a second: start pieces and cutaways after the blend, never inside it.
 
 ${CRAFT}`;
   const fix = input.problems?.length ? `\n\nYOUR LAST CUT HAD THESE PROBLEMS — FIX THEM\n- ${input.problems.join('\n- ')}` : '';
@@ -188,7 +191,7 @@ ${CRAFT}`;
     ? `\n\nYOUR LAST CUT\n${input.previous.map((s, i) => `#${i + 1} ${s.source} ${clock(s.from)}–${clock(s.to)} ${s.beat ?? ''}`).join('\n')}${(input.previousCutaways ?? []).map((c) => `\ncutaway over #${c.piece} at ${c.at}s for ${c.length}s → ${c.source} ${clock(c.from)}`).join('')}`
     : '';
   const text = `BRIEF\n${JSON.stringify(input.brief, null, 1)}\n\nFOOTAGE (logged)\n${footage(input.sources)}${prev}${fix}${input.notes ? `\n\nDIRECTOR'S NOTES ON YOUR LAST CUT\n${input.notes}` : ''}`;
-  const raw = await ask<{ segments: Array<Record<string, unknown>>; cutaways?: Array<Record<string, unknown>>; notes: string }>({ model: env.directorModel, system, text, schema: CUT_SCHEMA, thinking: 'high', timeoutMs: 150_000 });
+  const raw = await ask<{ segments: Array<Record<string, unknown>>; cutaways?: Array<Record<string, unknown>>; notes: string }>({ model: env.directorModel, system, text, schema: CUT_SCHEMA, thinking: 'high', timeoutMs: 120_000 });
   return {
     notes: String(raw.notes || ''),
     segments: (raw.segments ?? []).map((s) => ({

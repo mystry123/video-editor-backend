@@ -72,4 +72,6 @@ export const startDirectorSchema = z.object({
   }),
 });
 
+export const latestDirectorSchema = z.object({ query: z.object({ projectId: z.string().min(1).max(100) }) });
+
 export const directorRunSchema = z.object({ params: z.object({ id: z.string().regex(/^[a-f0-9]{24}$/) }) });

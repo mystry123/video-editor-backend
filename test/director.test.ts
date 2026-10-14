@@ -131,7 +131,7 @@ describe('Director runs', () => {
   const requests: GeminiRequest[] = [];
   const answer = (req: GeminiRequest): unknown => {
     if (req.system.includes('director of a world-class')) return brief;
-    if (req.system.includes('story editor')) return { segments: [{ source: 'S1', from: '0:03', to: '0:06' }, { source: 'S1', from: '0:39', to: '0:46' }], notes: 'n' };
+    if (req.system.includes('You are the story editor')) return { segments: [{ source: 'S1', from: '0:03', to: '0:06' }, { source: 'S1', from: '0:39', to: '0:46' }], notes: 'n' };
     if (req.system.includes('typographer')) return { titles: [{ text: 'LISBON', start: 0, end: 2, role: 'hook', position: 'upper', style: 'bold', motion: 'pop' }], captions: { use: true, style: 'word-pop', position: 'lower' }, notes: '' };
     if (req.system.includes('motion designer')) return { pieces: [{ piece: 1, move: 'punch-in', transitionIn: 'cut' }], notes: '' };
     if (req.system.includes('sound designer')) return { originalAudio: 'keep', sfx: [{ at: 3, kind: 'whoosh' }], music: { use: false, mood: '', prompt: '' }, notes: '' };
@@ -224,7 +224,7 @@ describe('Director runs', () => {
       const typeCalls = requests.filter((r) => r.system.includes('typographer'));
       expect(typeCalls).toHaveLength(2);
       expect(typeCalls[1].messages[0].text).toContain('Bigger hook title');
-      expect(requests.filter((r) => r.system.includes('story editor'))).toHaveLength(1);
+      expect(requests.filter((r) => r.system.includes('You are the story editor'))).toHaveLength(1);
       expect(requests.filter((r) => r.system.includes('motion designer'))).toHaveLength(1);
       expect(run.events.map((e: any) => e.text)).toEqual(expect.arrayContaining(['Score 5/10: Title too small', 'Revising: titles and captions', 'Score 8/10']));
       expect(run.result.review).toMatchObject({ score: 8, rounds: 2 });
@@ -297,7 +297,19 @@ describe('Director runs', () => {
     const res = await api().post('/api/v1/ai/director').set('Authorization', `Bearer ${other.token}`).send(body);
     const run = await waitFor(other.token, res.body.run.id);
     expect(run.events.map((e: any) => e.text).join(' ')).toMatch(/Could not watch|No footage/);
-    expect(requests.some((r) => r.system.includes('story editor'))).toBe(false);
+    expect(requests.some((r) => r.system.includes('You are the story editor'))).toBe(false);
     expect(token).toBeTruthy();
+  });
+});
+
+describe('the latest run in a project', () => {
+  it("is found for the panel to pick up, only the user's own", async () => {
+    const { user, token } = await createUser();
+    const other = await createUser();
+    await DirectorRun.create({ userId: user._id, projectId: 'p9', request: 'reel', stage: 'cutting', events: [], usageJobId: 'x1' });
+    const mine = await api().get('/api/v1/ai/director?projectId=p9').set('Authorization', `Bearer ${token}`);
+    expect(mine.body.run).toMatchObject({ stage: 'cutting', request: 'reel', result: null });
+    const theirs = await api().get('/api/v1/ai/director?projectId=p9').set('Authorization', `Bearer ${other.token}`);
+    expect(theirs.body.run).toBeNull();
   });
 });
