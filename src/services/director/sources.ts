@@ -97,6 +97,7 @@ export function sourceDigest(s: Source): string {
   else lines.push('  Said: nothing (no speech)');
   if (a.moments.length) lines.push(`  Best moments: ${a.moments.slice(0, 20).map((m) => `[${m.score} ${m.kind}] ${clock(m.start)}–${clock(m.end)} ${m.title}: ${cap(m.why, 120)}`).join(' | ')}`);
   lines.push(`  Music in it: ${a.hasMusic ? 'yes' : 'no'}`);
+  if (a.hasBurnedCaptions) lines.push('  Captions of the speech are already burned into the picture: do not add another set.');
   return lines.join('\n');
 }
 
@@ -132,7 +133,8 @@ export function cutView(segments: Segment[], sources: Source[], cutaways: Cutawa
           return `\n    picture cuts away ${clock(p.at + c.at)}–${clock(p.at + c.at + c.length)} to ${c.source} ${clock(c.from)}${shot ? ` (${cap(shot.description, 70)})` : ''} while the sound plays on`;
         })
         .join('');
-      return `#${i + 1} ${clock(p.at)}–${clock(p.at + p.length)} (${p.length.toFixed(1)}s) from ${p.source} ${clock(p.from)}–${clock(p.to)}${p.beat ? ` · ${p.beat}` : ''}\n    seen: ${seen.join('; ') || '—'}\n    said: ${said.join(' ') || '—'}${onScreen.length ? `\n    text already in the picture: ${onScreen.map((t) => `"${t}"`).join('; ')}` : ''}${over}`;
+      const burned = src?.analysis?.hasBurnedCaptions ? '\n    captions of the speech are already burned into this footage' : '';
+      return `#${i + 1} ${clock(p.at)}–${clock(p.at + p.length)} (${p.length.toFixed(1)}s) from ${p.source} ${clock(p.from)}–${clock(p.to)}${p.beat ? ` · ${p.beat}` : ''}\n    seen: ${seen.join('; ') || '—'}\n    said: ${said.join(' ') || '—'}${onScreen.length ? `\n    text already in the picture: ${onScreen.map((t) => `"${t}"`).join('; ')}` : ''}${burned}${over}`;
     })
     .join('\n');
 }

@@ -254,7 +254,7 @@ const TYPE_SCHEMA = obj({
 });
 
 export async function designType(input: OnCut): Promise<TypePart> {
-  const system = `You are the typographer and caption designer. Add the on-screen words that make the edit land: a hook title in the first second when it helps, labels or punchlines that add what the picture can't, a call to action if the brief wants one. If the footage already shows captions or subtitles of the speech (see "text already in the picture"), do NOT add captions (captions.use = false): two sets of captions look broken. Never repeat captions word for word in a title. Never cover faces or important on-screen text (check what is seen). Keep titles clear of captions (different positions).
+  const system = `You are the typographer and caption designer. Add the on-screen words that make the edit land: a hook title in the first second when it helps, labels or punchlines that add what the picture can't, a call to action if the brief wants one. If the footage already has captions of the speech burned in (the cut says so), do NOT add captions (captions.use = false): two sets of captions look broken. Never repeat captions word for word in a title. Never cover faces or important on-screen text (check what is seen). Keep titles clear of captions (different positions).
 ${CRAFT}`;
   return ask<TypePart>({ model: env.directorWorkerModel, system, text: cutText(input), schema: TYPE_SCHEMA, thinking: 'low' });
 }

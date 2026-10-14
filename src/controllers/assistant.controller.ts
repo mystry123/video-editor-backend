@@ -84,7 +84,7 @@ export function plainReply(text: string): string {
 
 /** When the model sends tool calls with no words: say what came */
 function fallbackReply(calls: CheckedCall[]): string {
-  if (calls.some((c) => c.name === 'direct_edit')) return "This is a job for Cue Director: it watches your footage, plans the edit, makes it and checks it. Start it below.";
+  if (calls.some((c) => c.name === 'direct_edit')) return "This is a job for Cue Director: it watches your footage, plans the edit, makes it and checks it. It's on it below.";
   const edits = calls.filter((c) => c.name !== 'propose_plan');
   if (calls.some((c) => c.name === 'propose_plan')) return edits.length ? "Here's a plan, plus a few changes to start." : "Here's a plan. Untick any step you don't want, then run it.";
   if (edits.length === 1) return "Here's the change. Check it, then apply.";

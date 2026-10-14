@@ -101,6 +101,13 @@ describe('compiling an edit', () => {
     expect(cap).toMatchObject({ displayMode: 'tiktok', y: '66%' });
   });
 
+  it('never adds a second set of captions over footage that has them burned in', () => {
+    const burned = { ...source(), analysis: { ...analysis, hasBurnedCaptions: true } };
+    const e = compileEdit({ original, brief, sources: [burned], segments: [{ source: 'S1', from: 3, to: 6 }], type: { titles: [], captions: { use: true, style: 'word-pop', position: 'lower' }, notes: '' } });
+    expect(e.elements.some((x) => x.type === 'caption')).toBe(false);
+    expect(e.notes.join(' ')).toMatch(/already has them burned in/);
+  });
+
   it('titles are kept out of the app-button zones', () => {
     const e = edit();
     e.elements.find((x) => x.type === 'text')!.y = '92%';

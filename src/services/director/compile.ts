@@ -284,7 +284,9 @@ export function compileEdit(input: CompileInput): CompiledEdit {
 
   // --- Captions: the spoken words, moved onto the new timeline ---
   const cap = input.type?.captions;
-  if (cap?.use || (cap === undefined && brief.captions.use)) {
+  const burned = placed.some((p) => byRef.get(p.source)?.analysis?.hasBurnedCaptions);
+  if (burned && (cap?.use || brief.captions.use)) notes.push('Captions: your footage already has them burned in, so no second set was added.');
+  if (!burned && (cap?.use || (cap === undefined && brief.captions.use))) {
     const words: Array<{ word: string; startMs: number; endMs: number }> = [];
     for (const p of placed) {
       const src = byRef.get(p.source)!;

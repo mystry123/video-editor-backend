@@ -51,6 +51,7 @@ const PIECE_SCHEMA = {
     language: { ...str, description: 'Spoken language code (en, hi, …) or empty when nothing is said' },
     hasSpeech: { type: 'BOOLEAN' },
     hasMusic: { type: 'BOOLEAN' },
+    hasBurnedCaptions: { type: 'BOOLEAN', description: 'True if subtitles/captions of what is said are already burned into the picture (words appearing as people talk)' },
     shots: {
       type: 'ARRAY',
       description: 'Every shot or scene in order, covering the whole clip',
@@ -188,6 +189,7 @@ async function watchPiece(file: IFile, isVideo: boolean, start: number, seconds:
       language: r.language ? String(r.language) : undefined,
       hasSpeech: !!r.hasSpeech,
       hasMusic: !!r.hasMusic,
+      hasBurnedCaptions: !!r.hasBurnedCaptions,
       shots: (r.shots ?? []).map((x) => clampSpan(x as AnalysisShot, start, start, end)).filter((x): x is AnalysisShot => !!x),
       speech: (r.speech ?? []).map((x) => clampSpan(x as AnalysisLine, start, start, end)).filter((x): x is AnalysisLine => !!x),
       moments: (r.moments ?? [])
@@ -251,6 +253,7 @@ async function analyse(file: IFile): Promise<IMediaAnalysis> {
       language: transcription?.language || all.find((r) => r.language)?.language,
       hasSpeech: !!transcript?.length || all.some((r) => r.hasSpeech),
       hasMusic: all.some((r) => r.hasMusic),
+      hasBurnedCaptions: all.some((r) => r.hasBurnedCaptions),
       shots: all.flatMap((r) => r.shots),
       speech: transcript ? transcript.filter((l) => l.start < analysedSeconds) : all.flatMap((r) => r.speech),
       moments: all.flatMap((r) => r.moments).sort((a, b) => b.score - a.score).slice(0, 40),
