@@ -149,9 +149,9 @@ export function describeEdit(edit: CompiledEdit): string {
   const sorted = [...edit.elements].sort((a, b) => a.time - b.time);
   for (const e of sorted) {
     const span = `${clock(e.time)}–${clock(e.time + clipLength(e))}`;
-    if (e.type === 'video') lines.push(`${span} clip "${e.name}" (source ${clock(e.trimStart)}–${clock(e.trimStart + e.trimDuration)})${e.transition ? ` in with ${e.transition.type}` : ''}${e.keyframes ? ` moves: ${Object.keys(e.keyframes).join('+')}` : ''}${e.muted ? ' muted' : ''}`);
+    if (e.type === 'video') lines.push(`${span} clip "${e.name}" (source ${clock(e.trimStart)}–${clock(e.trimStart + e.trimDuration)})${e.transition ? ` in with ${e.transition.type}` : ''}${e.keyframes ? ` moves: ${Object.keys(e.keyframes).join('+')}` : ''}${e.muted ? ' muted' : ''}${e.opacityEnabled && e.opacity === 0 ? ' (heard, not seen)' : ''}${e.anchorY === 0 && parseFloat(String(e.height)) > 100 ? ' (zoomed so the footage\'s own burned-in captions are below the frame: any captions you see are the fresh ones)' : ''}`);
     else if (e.type === 'text') lines.push(`${span} title "${e.text}" at y ${e.y}${e.enter ? `, ${e.enter.type} in` : ''}`);
-    else if (e.type === 'caption') lines.push(`${span} captions (${e.displayMode}, y ${e.y}): "${e.transcription.words.map((w: any) => w.word).join(' ').slice(0, 300)}"`);
+    else if (e.type === 'caption') lines.push(`${span} captions (${e.displayMode}, ${e.wordsPerLine} words a line, one line at a time, y ${e.y}): "${e.transcription.words.map((w: any) => w.word).join(' ').slice(0, 300)}"`);
     else if (e.type === 'audio') lines.push(`${span} ${e.name}`);
     else lines.push(`${span} ${e.type} "${e.name}"`);
   }

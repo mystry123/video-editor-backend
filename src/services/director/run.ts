@@ -234,11 +234,16 @@ export async function directEdit(ctx: EditContext) {
   // --- Assembling ---
   let sfx: Array<{ at: number; asset: AudioAsset }> = [];
   let visuals: VisualAsset[] = [];
+  // Made once per prompt and length (a revision that keeps the music doesn't make it again)
+  let music: { key: string; asset: AudioAsset | undefined } | null = null;
   const assemble = async () => {
     const total = segments.reduce((t, s) => t + s.to - s.from, 0);
     sfx = await soundEffects(user, (parts.sound?.sfx ?? []).filter((s) => s.at >= 0 && s.at < total).slice(0, MAX_SFX));
     visuals = await pictures(user, parts.assets?.assets ?? [], { text: brief.tone, tall: frame.height > frame.width });
-    return compileEdit({ original: input.project, brief, sources: watched, segments, cutaways, ...parts, sfx, visuals, words });
+    const want = parts.sound?.music.use ? `${parts.sound.music.prompt || parts.sound.music.mood}|${Math.ceil(total)}` : '';
+    if (want && music?.key !== want) music = { key: want, asset: await makeMusic(user, parts.sound!.music, total) };
+    if (!want) music = null;
+    return compileEdit({ original: input.project, brief, sources: watched, segments, cutaways, ...parts, sfx, visuals, words, music: music?.asset });
   };
   await report('assembling', 'Making sound effects and putting the edit together');
   let edit: CompiledEdit = await assemble();
@@ -321,6 +326,19 @@ function summaryOf(brief: Brief, edit: CompiledEdit) {
     beats: brief.structure,
     counts: { clips: count('cut'), titles: count('titles'), captions: count('captions'), motion: count('motion'), sounds: count('sound'), extras: count('extras') },
   };
+}
+
+/** A music bed for the edit, made to its length (undefined if it can't be made: a note says so) */
+async function makeMusic(user: any, want: { mood: string; prompt: string }, seconds: number): Promise<AudioAsset | undefined> {
+  try {
+    const audio = await getAudioTools().music(want.prompt || want.mood, Math.ceil(seconds) + 1);
+    const label = (want.mood || 'Music').replace(/[\\/:*?"<>|]/g, '').slice(0, 40);
+    const saved = await saveAudio(user, audio, `Music - ${label} (Cue).mp3`, 'ai_music');
+    return { url: saved.url, fileId: saved.fileId, duration: saved.duration };
+  } catch (error) {
+    logger.warn('Director music failed', { error: (error as Error).message });
+    return undefined;
+  }
 }
 
 /** One file per kind of sound effect per user, made once and reused */

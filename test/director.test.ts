@@ -303,6 +303,29 @@ describe('Director runs', () => {
     }
   });
 
+  it('music the sound designer asks for is made to the edit\'s length and laid under it', async () => {
+    const { token, body } = await setup();
+    const music = vi.fn(async () => Buffer.from('mp3'));
+    setAudioTools({ soundEffect: sfx, music } as any);
+    const base = fake.generate.getMockImplementation()!;
+    fake.generate.mockImplementation(async (req: GeminiRequest) => {
+      if (!req.system.includes('sound designer')) return base(req);
+      const json = { originalAudio: 'keep', sfx: [], music: { use: true, mood: 'upbeat travel pop', prompt: 'upbeat travel pop, 120 bpm' }, notes: '' };
+      return { text: '', json, calls: [], usage: { input: 1, output: 1 } };
+    });
+    try {
+      const res = await api().post('/api/v1/ai/director').set('Authorization', `Bearer ${token}`).send(body);
+      const run = await waitFor(token, res.body.run.id);
+      expect(music).toHaveBeenCalledWith('upbeat travel pop, 120 bpm', 11);
+      const bed = run.result.elements.find((e: any) => e.name === 'Music');
+      // Under speech it stays low
+      expect(bed).toMatchObject({ type: 'audio', time: 0, volume: 22 });
+      expect(run.result.groups.music).toEqual([bed.id]);
+    } finally {
+      fake.generate.mockImplementation(base);
+    }
+  });
+
   it('a second sound effect of the same kind reuses the first file', async () => {
     const { token, body } = await setup();
     const first = await api().post('/api/v1/ai/director').set('Authorization', `Bearer ${token}`).send(body);

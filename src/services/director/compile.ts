@@ -183,8 +183,8 @@ function titleStyle(style: string, color: string, accent: string, hook: boolean)
 
 const CAPTION_LOOKS: Record<string, Record<string, unknown>> = {
   'word-pop': { displayMode: 'tiktok', wordsPerLine: 3, linesPerPage: 1, highlightStyle: 'color', highlightColor: '#FFE14D', fontWeight: 900, textTransform: 'uppercase', strokeColor: '#000000', strokeWidth: 5, wordAnimation: { type: 'caption-word-pop', duration: 0.2 } },
-  karaoke: { displayMode: 'karaoke', wordsPerLine: 4, linesPerPage: 2, highlightStyle: 'color', highlightColor: '#4DE1FF', fontWeight: 800, textTransform: 'none', strokeColor: '#000000', strokeWidth: 4 },
-  clean: { displayMode: 'line', wordsPerLine: 6, linesPerPage: 2, highlightStyle: 'none', fontWeight: 600, textTransform: 'none', strokeColor: '#000000', strokeWidth: 0, shadowEnabled: true, shadowColor: '#000000', shadowOpacity: 0.7, shadowBlur: 8 },
+  karaoke: { displayMode: 'karaoke', wordsPerLine: 4, linesPerPage: 1, highlightStyle: 'color', highlightColor: '#4DE1FF', fontWeight: 800, textTransform: 'none', strokeColor: '#000000', strokeWidth: 4 },
+  clean: { displayMode: 'line', wordsPerLine: 4, linesPerPage: 1, highlightStyle: 'none', fontWeight: 600, textTransform: 'none', strokeColor: '#000000', strokeWidth: 0, shadowEnabled: true, shadowColor: '#000000', shadowOpacity: 0.7, shadowBlur: 8 },
   'bold-box': { displayMode: 'tiktok', wordsPerLine: 3, linesPerPage: 1, highlightStyle: 'background', highlightColor: '#FFFFFF', highlightBackgroundColor: '#2447F9', fontWeight: 900, textTransform: 'uppercase', strokeColor: '#000000', strokeWidth: 3 },
 };
 
@@ -533,7 +533,7 @@ export function compileEdit(input: CompileInput): CompiledEdit {
     const el = { id: id('music'), type: 'audio', name: 'Music', source: input.music.url, fileId: input.music.fileId, track: 0, time: 0, duration: r3(input.music.duration), trimStart: 0, trimDuration: r3(Math.min(input.music.duration, total)), volume: speech ? 22 : 60, audioFadeIn: 0.3, audioFadeOut: 1, x: '50%', y: '50%', width: '100%', height: '4.17%', visible: true };
     elements.push(el);
     add('music', el.id);
-  } else if (input.sound?.music.use) notes.push(`Music: the sound designer wanted "${input.sound.music.mood}". Add a track from your library under it.`);
+  } else if (input.sound?.music.use) notes.push(`Music: the sound designer wanted "${input.sound.music.mood}" but it couldn't be made. Add a track from your library under it.`);
 
   // --- The project's other layers, kept as they are when the brief says so ---
   if (brief.keepOtherLayers) {
