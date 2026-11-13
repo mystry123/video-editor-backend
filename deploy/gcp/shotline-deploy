@@ -33,5 +33,6 @@ systemctl reset-failed "$unit" 2>/dev/null || true
 exec systemd-run --quiet --unit "$unit" --uid shotline --gid shotline \
   --setenv HOME=/home/shotline --setenv PM2_HOME=/home/shotline/.pm2 \
   --setenv PATH=/usr/local/bin:/usr/bin:/bin \
+  --setenv COREPACK_HOME=/usr/local/share/corepack \
   --working-directory /var/www/shotline \
   --pipe --wait --collect /usr/local/lib/shotline/app-deploy "$app" "$sha"

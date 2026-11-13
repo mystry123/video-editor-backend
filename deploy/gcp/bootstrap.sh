@@ -51,6 +51,15 @@ if [[ ! -f /var/lib/shotline-bootstrap.v1 ]]; then
   touch /var/lib/shotline-bootstrap.v1
 fi
 
+# --- pnpm: pinned to the version that writes the repos' lockfiles -------------
+# Neither repo sets packageManager, so corepack would otherwise fetch the newest
+# major. Bump this together with the lockfiles.
+PNPM_VERSION=11.9.0
+COREPACK_ENABLE_DOWNLOAD_PROMPT=0 COREPACK_HOME=/usr/local/share/corepack \
+  corepack install -g "pnpm@$PNPM_VERSION"
+chmod -R a+rX /usr/local/share/corepack
+grep -q '^COREPACK_HOME=' /etc/environment || echo 'COREPACK_HOME=/usr/local/share/corepack' >> /etc/environment
+
 # --- service user and layout (same paths as the EC2 box) ----------------------
 id shotline >/dev/null 2>&1 || useradd --system --create-home --home-dir /home/shotline --shell /bin/bash shotline
 install -d -o shotline -g shotline /var/www/shotline /var/www/shotline/backups
