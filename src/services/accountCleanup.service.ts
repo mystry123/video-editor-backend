@@ -5,7 +5,6 @@
 // every step deletes by owner, so a retry after a partial failure just
 // finishes the job.
 
-import { AwsRegion, deleteRender } from '@remotion/lambda-client';
 import { Types } from 'mongoose';
 import { env } from '../config/env';
 import { ApiKey } from '../models/ApiKey';
@@ -22,6 +21,7 @@ import { Session } from '../models/Session';
 import { Webhook } from '../models/Webhook';
 import { WebhookLog } from '../models/WebhookLog';
 import { deleteS3Prefix } from './storage.service';
+import { rendersBucket } from '../config/gcs';
 import { logger } from '../utils/logger';
 import { getTtsProviderById, type TtsProviderId } from './tts';
 
@@ -44,21 +44,8 @@ export async function purgeUserData(
   // 1. Files in storage first, while the documents that point at them still exist.
   const s3Objects = await deleteS3Prefix(`users/${userId}/`);
 
-  const renders = await RenderJob.find({ userId: owner, renderId: { $exists: true, $ne: null } })
-    .select('renderId bucketName')
-    .lean();
-  let renderOutputs = 0;
-  for (const render of renders) {
-    const bucketName = render.bucketName || env.remotionBucket;
-    if (!render.renderId || !bucketName) continue;
-    try {
-      await deleteRender({ bucketName, renderId: render.renderId, region: env.awsRegion as AwsRegion });
-      renderOutputs++;
-    } catch (error: any) {
-      // Already gone is fine; anything else fails the job so it retries.
-      if (!/NoSuchKey|not found|404/i.test(error?.message || '')) throw error;
-    }
-  }
+  // Their renders: every output is at renders/<userId>/ in the renders bucket.
+  const renderOutputs = env.gcsRendersBucket ? await deleteS3Prefix(`renders/${userId}/`, rendersBucket()) : 0;
 
   // 2. Documents. Children before parents so a crash mid-way leaves nothing orphaned
   //    that the next attempt can't find.

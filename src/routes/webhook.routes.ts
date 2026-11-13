@@ -6,10 +6,7 @@ import { createWebhookSchema, updateWebhookSchema } from '../validators/webhook.
 
 const router: ExpressRouter = Router();
 
-// Remotion webhook should be accessible without auth (comes from AWS Lambda)
-router.post('/remotion', webhookController.handleRemotionWebhook);
-
-// All other webhook routes require authentication
+// All webhook routes require authentication
 router.use(requireAuth);
 
 // Secret that signs deliveries to a render's own webhookUrl (before /:id).

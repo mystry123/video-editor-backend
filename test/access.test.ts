@@ -130,25 +130,8 @@ describe('project search', () => {
 });
 
 describe('Remotion webhook', () => {
-  it('does not exist without a configured secret', async () => {
+  it('is gone: renders complete on the worker, so there is nothing to call', async () => {
     const res = await api().post('/api/v1/webhooks/remotion').send({ type: 'success', customData: { jobId: 'x' }, outputUrl: 'https://evil/x.mp4' });
-    expect(res.status).toBe(404);
-  });
-
-  it('rejects unsigned or tampered calls when a secret is set', async () => {
-    const previous = env.remotionWebhookSecret;
-    (env as any).remotionWebhookSecret = 'test-webhook-secret';
-    try {
-      const { user } = await createUser();
-      const job = await RenderJob.create({ userId: user._id, inputProps: {}, status: 'rendering' });
-      const res = await api()
-        .post('/api/v1/webhooks/remotion')
-        .set('X-Remotion-Signature', 'sha512=deadbeef')
-        .send({ type: 'success', renderId: 'r', customData: { jobId: String(job._id) }, outputUrl: 'https://evil/x.mp4' });
-      expect(res.status).toBe(401);
-      expect((await RenderJob.findById(job._id))!.status).toBe('rendering');
-    } finally {
-      (env as any).remotionWebhookSecret = previous;
-    }
+    expect([401, 404]).toContain(res.status);
   });
 });

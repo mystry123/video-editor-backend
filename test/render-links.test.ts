@@ -3,7 +3,7 @@ import { api, createUser } from './helpers';
 import { RenderJob } from '../src/models/RenderJob';
 import { CaptionProject } from '../src/models';
 import { completeRender } from '../src/services/renderLifecycle.service';
-import { parseS3Url, parseStorageUrl } from '../src/services/renderOutput.service';
+import { parseStorageUrl } from '../src/services/renderOutput.service';
 
 // GCS: signed URLs and deletes of render outputs
 const gcsSign = vi.hoisted(() => vi.fn(async (bucket: string, key: string, config: any) => [`https://signed.test/${bucket}/${key}?disposition=${config.responseDisposition ?? ''}`]));
@@ -20,21 +20,12 @@ vi.mock('../src/config/gcs', async (importOriginal) => {
   };
   return { ...actual, gcs: () => fake };
 });
-// Remotion Lambda's S3 bucket, through Remotion's own client
-const s3Send = vi.hoisted(() => vi.fn(async (_command: any) => ({})));
-const s3Presign = vi.hoisted(() => vi.fn(async (input: any) => `https://s3-signed.test/${input.bucketName}/${input.objectKey}`));
-vi.mock('@remotion/lambda-client', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@remotion/lambda-client')>();
-  class DeleteObjectCommand {
-    constructor(public input: unknown) {}
-  }
-  return { ...actual, presignUrl: s3Presign, getAwsClient: () => ({ client: { send: s3Send }, sdk: { DeleteObjectCommand } }) };
-});
 vi.mock('../src/services/thumbnail.service', () => ({
   generateThumbnailFromVideo: vi.fn().mockResolvedValue({ success: false }),
 }));
 
 const OUTPUT = 'https://storage.googleapis.com/test-renders/renders/r1/u/j.mp4';
+// Made on Remotion Lambda before the move to GCP: that AWS account is gone.
 const LAMBDA_OUTPUT = 'https://remotionlambda-test.s3.ap-south-1.amazonaws.com/renders/r1/renders/u/j.mp4';
 
 async function completedRender(outputUrl = OUTPUT) {
@@ -70,11 +61,12 @@ describe('render links', () => {
     expect((await api().get('/r/not-an-id?t=x')).status).toBe(404);
   });
 
-  it('still signs renders made on Remotion Lambda (S3) through Remotion', async () => {
+  it("old renders made on Remotion Lambda (S3) can't be signed any more", async () => {
     const { job, token } = await completedRender(LAMBDA_OUTPUT);
-    const ok = await api().get(`/r/${job._id}?t=${encodeURIComponent(token)}`);
-    expect(ok.status).toBe(302);
-    expect(ok.headers.location).toBe('https://s3-signed.test/remotionlambda-test/renders/r1/renders/u/j.mp4');
+    gcsSign.mockClear();
+    const res = await api().get(`/r/${job._id}?t=${encodeURIComponent(token)}`);
+    expect(res.status).not.toBe(302);
+    expect(gcsSign).not.toHaveBeenCalled();
   });
 
   it('gives renders made before links existed a token on first read', async () => {
@@ -94,11 +86,6 @@ describe('render links', () => {
     expect(gcsDelete).toHaveBeenCalledTimes(1);
     expect(gcsDelete).toHaveBeenCalledWith('test-renders', 'renders/r1/u/j.mp4');
 
-    const lambdaJob = await RenderJob.create({ userId: user._id, inputProps: {}, status: 'cancelled' });
-    s3Send.mockClear();
-    expect(await completeRender(String(lambdaJob._id), { outputUrl: LAMBDA_OUTPUT })).toBe(false);
-    expect(s3Send).toHaveBeenCalledTimes(1);
-    expect((s3Send.mock.calls[0] as any[])[0].input).toEqual({ Bucket: 'remotionlambda-test', Key: 'renders/r1/renders/u/j.mp4' });
   });
 
   it("the projects list links a caption project to its render's output", async () => {
@@ -114,14 +101,11 @@ describe('render links', () => {
     expect(one.body).toMatchObject({ name: 'My captions', outputUrl: link });
   });
 
-  it('parses GCS and both S3 URL styles', () => {
-    expect(parseStorageUrl(OUTPUT)).toEqual({ provider: 'gcs', bucket: 'test-renders', key: 'renders/r1/u/j.mp4' });
-    expect(parseStorageUrl('https://test-renders.storage.googleapis.com/a/b.mp4')).toEqual({ provider: 'gcs', bucket: 'test-renders', key: 'a/b.mp4' });
-    expect(parseStorageUrl('gs://test-renders/a/b.mp4')).toEqual({ provider: 'gcs', bucket: 'test-renders', key: 'a/b.mp4' });
+  it('parses GCS URLs; S3 ones are not ours any more', () => {
+    expect(parseStorageUrl(OUTPUT)).toEqual({ bucket: 'test-renders', key: 'renders/r1/u/j.mp4' });
+    expect(parseStorageUrl('https://test-renders.storage.googleapis.com/a/b.mp4')).toEqual({ bucket: 'test-renders', key: 'a/b.mp4' });
+    expect(parseStorageUrl('gs://test-renders/a/b.mp4')).toEqual({ bucket: 'test-renders', key: 'a/b.mp4' });
     expect(parseStorageUrl('https://storage.googleapis.com/only-bucket')).toBeNull();
-    expect(parseStorageUrl(LAMBDA_OUTPUT)).toEqual({ provider: 's3', bucket: 'remotionlambda-test', key: 'renders/r1/renders/u/j.mp4' });
-    expect(parseS3Url(LAMBDA_OUTPUT)).toEqual({ bucket: 'remotionlambda-test', key: 'renders/r1/renders/u/j.mp4' });
-    expect(parseS3Url('https://s3.ap-south-1.amazonaws.com/b/k/x.mp4')).toEqual({ bucket: 'b', key: 'k/x.mp4' });
-    expect(parseS3Url('https://cdn.test/x.mp4')).toBeNull();
+    expect(parseStorageUrl(LAMBDA_OUTPUT)).toBeNull();
   });
 });

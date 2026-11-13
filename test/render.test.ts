@@ -4,7 +4,7 @@ import { Template } from '../src/models/Template';
 import { RenderJob } from '../src/models/RenderJob';
 import { User } from '../src/models/User';
 import { renderQueue } from '../src/queues';
-import { renderChunking } from '../src/services/render.service';
+import { codecFor } from '../src/services/render.service';
 
 async function template(userId: unknown, project: Record<string, unknown>) {
   return Template.create({
@@ -14,15 +14,12 @@ async function template(userId: unknown, project: Record<string, unknown>) {
   });
 }
 
-describe('renderChunking', () => {
-  it('uses 60-frame chunks while they fit under the Lambda cap', () => {
-    expect(renderChunking({ duration: 10, fps: 30 }, 8)).toEqual({ framesPerLambda: 60 });
-    expect(renderChunking({ duration: 16, fps: 30 }, 8)).toEqual({ framesPerLambda: 60 }); // 480 frames = 8 chunks
-  });
-
-  it('splits long renders into at most the cap, so they stay under the account limit', () => {
-    expect(renderChunking({ duration: 131.75, fps: 25 }, 8)).toEqual({ concurrency: 8 });
-    expect(renderChunking({ duration: 131.75, fps: 25 }, 200)).toEqual({ framesPerLambda: 60 });
+describe('codecFor', () => {
+  it('maps output formats to Remotion codecs, and refuses others', () => {
+    expect(codecFor('mp4')).toBe('h264');
+    expect(codecFor('webm')).toBe('vp8');
+    expect(codecFor('gif')).toBe('gif');
+    expect(() => codecFor('mov')).toThrow(/Unsupported/);
   });
 });
 

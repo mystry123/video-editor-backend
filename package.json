@@ -11,7 +11,6 @@
     "test": "vitest run",
     "seed:presets": "tsx src/seeds/run.ts",
     "admin:grant": "tsx src/scripts/grant-admin.ts",
-    "renders:privatize": "tsx src/scripts/privatize-render-outputs.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p .",
     "start:worker": "node dist/worker.js",
@@ -28,9 +27,7 @@
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@google-cloud/storage": "^7.22.0",
-    "@remotion/cli": "4.0.400",
-    "@remotion/lambda": "4.0.400",
-    "@remotion/lambda-client": "4.0.400",
+    "@remotion/renderer": "4.0.400",
     "axios": "^1.13.2",
     "bcryptjs": "^2.4.3",
     "bullmq": "^5.66.4",
