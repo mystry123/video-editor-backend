@@ -1,0 +1,27 @@
+# /etc/caddy/Caddyfile on the shotline-app VM (delivered via instance metadata).
+# Automatic Let's Encrypt certificates once DNS points here.
+
+shotline.in {
+	encode gzip
+	reverse_proxy 127.0.0.1:3000
+	log
+}
+
+www.shotline.in {
+	redir https://shotline.in{uri} permanent
+}
+
+api.shotline.in {
+	encode gzip
+	# Uploads go straight to GCS with signed URLs, but imports/webhooks can be
+	# large and the AI director can take minutes.
+	request_body {
+		max_size 1GB
+	}
+	reverse_proxy 127.0.0.1:4000 {
+		transport http {
+			response_header_timeout 300s
+		}
+	}
+	log
+}
