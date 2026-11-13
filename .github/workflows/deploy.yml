@@ -1,11 +1,15 @@
 name: Deploy
 
-# Deploys this app to the production EC2 box through AWS Systems Manager:
+# Deploys this app to the production VM (GCP shotline-app):
 # - after CI passes on main, when the repo variable AUTO_DEPLOY is "true";
 # - manually: Actions → Deploy → Run workflow (on main) with a commit of main,
 #   to deploy, redeploy or roll back.
-# Auth: GitHub OIDC → IAM role shotline-github-deployer (may only run the
-# Shotline-Deploy document on this one instance). No keys in GitHub.
+# Auth: GitHub OIDC → Workload Identity Federation (provider github/shotline-app,
+# this repo's main branch only) → app-deployer@, which may only SSH to this VM
+# through IAP and run `sudo shotline-deploy`. No keys in GitHub.
+# The VM side (deploy/gcp/shotline-deploy + app-deploy in video-editor-backend)
+# refuses commits not on origin/main, waits for running jobs, health-checks and
+# rolls back on failure.
 on:
   workflow_run:
     workflows: [CI]
@@ -19,7 +23,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write
+  id-token: write   # OIDC token for Workload Identity Federation
 
 concurrency:
   group: deploy-production-${{ github.repository }}
@@ -27,9 +31,13 @@ concurrency:
 
 env:
   APP: backend
-  AWS_REGION: ap-south-1
-  INSTANCE_ID: i-02e37278036b76a67
-  ROLE_ARN: arn:aws:iam::563235961017:role/shotline-github-deployer
+  PROJECT: shotline-511017
+  ZONE: asia-south1-a
+  VM: shotline-app
+  # Not secrets: resource names. Access is limited by the federation's
+  # attribute condition (these repos, main only) and the deployer's roles.
+  WIF_PROVIDER: projects/394238727487/locations/global/workloadIdentityPools/github/providers/shotline-app
+  DEPLOYER: app-deployer@shotline-511017.iam.gserviceaccount.com
 
 jobs:
   deploy:
@@ -54,29 +62,41 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "Deploying $APP at $sha" >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: google-github-actions/auth@v2
         with:
-          role-to-assume: ${{ env.ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
 
-      - name: Deploy on the box
+      - uses: google-github-actions/setup-gcloud@v2
+
+      # SSH over IAP with OS Login as the deployer. The deploy runs as a
+      # systemd job on the VM, so if the connection drops we reconnect and
+      # wait for its result (--status: 0 deployed, 10 running, 20 failed).
+      - name: Deploy on the VM
         env:
           SHA: ${{ steps.commit.outputs.sha }}
         run: |
-          id=$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name Shotline-Deploy \
-                 --comment "$APP $SHA (${GITHUB_RUN_ID})" \
-                 --parameters "app=$APP,sha=$SHA" --query Command.CommandId --output text)
-          echo "SSM command $id"
-          status=Pending
-          for i in $(seq 1 240); do                       # up to 40 minutes
-            sleep 10
-            status=$(aws ssm get-command-invocation --command-id "$id" --instance-id "$INSTANCE_ID" \
-                       --query Status --output text 2>/dev/null || echo Pending)
-            case "$status" in Pending|InProgress|Delayed) continue ;; *) break ;; esac
+          vm() {
+            gcloud compute ssh "$VM" --zone "$ZONE" --project "$PROJECT" --tunnel-through-iap --quiet \
+              --command "$1" -- -o ServerAliveInterval=20 -o ServerAliveCountMax=6
+          }
+          set +e
+          vm "sudo /usr/local/bin/shotline-deploy $APP $SHA"; rc=$?
+          set -e
+          [ $rc -eq 0 ] && { echo "Deployed $APP $SHA"; exit 0; }
+          echo "Deploy command ended with $rc; checking the result on the VM"
+          unreachable=0
+          for i in $(seq 1 150); do                          # up to ~40 minutes
+            set +e; vm "sudo /usr/local/bin/shotline-deploy --status $APP $SHA"; rc=$?; set -e
+            case $rc in
+              0)  echo "Deployed $APP $SHA"; exit 0 ;;
+              10) unreachable=0; sleep 15 ;;                  # still running
+              20) echo "Deploy failed on the VM; it rolled back to the previous commit (see /var/www/shotline/deploys.log)"; exit 1 ;;
+              *)  unreachable=$((unreachable + 1))             # couldn't connect or run the check
+                  if [ $unreachable -ge 4 ]; then
+                    echo "Couldn't reach the VM (see the errors above)"; exit 1
+                  fi
+                  sleep 15 ;;
+            esac
           done
-          aws ssm get-command-invocation --command-id "$id" --instance-id "$INSTANCE_ID" \
-            --query StandardOutputContent --output text | tail -60
-          aws ssm get-command-invocation --command-id "$id" --instance-id "$INSTANCE_ID" \
-            --query StandardErrorContent --output text | tail -30
-          echo "Result: $status"
-          [[ "$status" == Success ]]
+          echo "Timed out waiting for the deploy result"; exit 1

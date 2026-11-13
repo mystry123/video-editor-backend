@@ -1,5 +1,5 @@
 # Production image for the API (and, with a different command, the worker).
-# Production currently runs on EC2 with pm2 (deploy/ecosystem.config.example.cjs);
+# Production runs on a GCP VM with pm2 (deploy/gcp/ecosystem.config.cjs);
 # this image is for local stacks and any future container deploy.
 #
 #   docker build -t shotline-backend .

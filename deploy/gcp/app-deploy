@@ -5,7 +5,7 @@
 #
 #   app-deploy <backend|frontend> <commit-sha>
 #
-# Same rules as the EC2 script (deploy/ec2/shotline-deploy): code only from
+# Same rules as the old EC2 deploy script: code only from
 # GitHub; refuse commits not on origin/main; (backend) wait for running jobs;
 # check out; install; build; pm2 reload; health check; roll back on failure.
 set -euo pipefail
