@@ -14,6 +14,7 @@ import { startWorkers, gracefulShutdown } from './queues';
 import { closeAllConnections } from './config/redis';
 import { checkMediaTools, initCore, initRedis } from './bootstrap';
 import { logger } from './utils/logger';
+import { closeBrowser, describeRenderSetup } from './services/render.service';
 
 const DRAIN_TIMEOUT_MS = Number(process.env.WORKER_DRAIN_TIMEOUT_MS) || 10 * 60 * 1000;
 const REDIS_WAIT_MS = 30_000;
@@ -31,6 +32,7 @@ async function start(): Promise<void> {
   }
 
   checkMediaTools();
+  await describeRenderSetup();
   startWorkers();
   logger.info('✅ Worker process ready');
 }
@@ -49,6 +51,7 @@ async function shutdown(signal: string): Promise<void> {
 
   try {
     await gracefulShutdown({ workerDrainMs: DRAIN_TIMEOUT_MS });
+    await closeBrowser();
     await closeAllConnections().catch(() => undefined);
     await mongoose.connection.close().catch(() => undefined);
     logger.info('🎉 Worker process stopped cleanly');

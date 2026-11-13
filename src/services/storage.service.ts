@@ -234,15 +234,14 @@ export async function deleteFromS3(key: string) {
 }
 
 /**
- * Deletes every object under `prefix` in the media bucket. Safe to call again
- * after a partial failure. Returns the number of objects deleted.
+ * Deletes every object under `prefix` in the media bucket (or `bucket`). Safe
+ * to call again after a partial failure. Returns the number of objects deleted.
  */
-export async function deleteS3Prefix(prefix: string): Promise<number> {
+export async function deleteS3Prefix(prefix: string, bucket: ReturnType<typeof mediaBucket> = mediaBucket()): Promise<number> {
   if (!prefix || prefix === '/' || !prefix.endsWith('/')) {
     throw new Error(`Refusing to delete unsafe prefix "${prefix}"`);
   }
 
-  const bucket = mediaBucket();
   let deleted = 0;
   let pageToken: string | undefined;
   do {

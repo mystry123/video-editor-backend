@@ -97,8 +97,7 @@ export function isProbeableMedia(mimeType: string | undefined): boolean {
 
 /**
  * URL prefixes media tools may open: our CDN, our GCS buckets (media and
- * renders, both URL styles), Remotion Lambda's S3 bucket (renders made there),
- * plus any extra prefixes in MEDIA_TRUSTED_PREFIXES (comma-separated).
+ * renders, both URL styles), plus any extra prefixes in MEDIA_TRUSTED_PREFIXES (comma-separated).
  * ffmpeg follows playlists and can read local files, so it must never be
  * pointed at a URL a user chose.
  */
@@ -108,14 +107,6 @@ function trustedMediaPrefixes(): string[] {
   for (const bucket of [env.gcsMediaBucket, env.gcsRendersBucket].filter(Boolean)) {
     prefixes.push(`https://storage.googleapis.com/${bucket}/`);
     prefixes.push(`https://${bucket}.storage.googleapis.com/`);
-  }
-  if (env.remotionBucket) {
-    const region = env.awsRegion;
-    const bucket = env.remotionBucket;
-    prefixes.push(`https://${bucket}.s3.${region}.amazonaws.com/`);
-    prefixes.push(`https://${bucket}.s3.amazonaws.com/`);
-    prefixes.push(`https://s3.${region}.amazonaws.com/${bucket}/`);
-    prefixes.push(`https://s3.amazonaws.com/${bucket}/`);
   }
   for (const extra of (process.env.MEDIA_TRUSTED_PREFIXES || '').split(',')) {
     if (extra.trim()) prefixes.push(extra.trim());

@@ -30,10 +30,10 @@ describe('maintenance sweep', () => {
     expect(getRenderQueue().add).toHaveBeenCalledWith('render', { jobId: String(job._id) }, { jobId: `render-${job._id}` });
   });
 
-  it('resumes a recent render whose poller died, and fails an old one', async () => {
+  it('re-queues a recent render whose worker died, and fails an old one', async () => {
     const { user } = await createUser();
-    const resumable = await RenderJob.create({ userId: user._id, inputProps: {}, status: 'rendering', renderId: 'r1', startedAt: minutesAgo(30) });
-    const dead = await RenderJob.create({ userId: user._id, inputProps: {}, status: 'rendering', startedAt: minutesAgo(30) });
+    const resumable = await RenderJob.create({ userId: user._id, inputProps: {}, status: 'rendering', renderId: 'local-1', startedAt: minutesAgo(30) });
+    const dead = await RenderJob.create({ userId: user._id, inputProps: {}, status: 'rendering', renderId: 'local-2', startedAt: minutesAgo(90) });
     await age(RenderJob, resumable._id, { updatedAt: minutesAgo(20) });
     await age(RenderJob, dead._id, { updatedAt: minutesAgo(20) });
 

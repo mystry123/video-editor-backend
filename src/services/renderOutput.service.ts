@@ -7,12 +7,10 @@
 // open it (so links in emails, Zapier and webhooks work); deleting the render
 // deletes the file and the link stops working.
 //
-// Renders still made on Remotion Lambda land in its S3 bucket; those are
-// signed and deleted through Remotion's own AWS client until renders move
-// onto the worker.
+// Renders from before the move to GCP (Nov 2026) point at S3 in an AWS account
+// that no longer exists; they have no stored output here and get no link.
 
 import crypto from 'crypto';
-import { getAwsClient, presignUrl, type AwsRegion } from '@remotion/lambda-client';
 import { RenderJob } from '../models/RenderJob';
 import { env } from '../config/env';
 import { gcs, parseGcsUrl } from '../config/gcs';
@@ -26,34 +24,11 @@ export function newShareToken(): string {
   return crypto.randomBytes(24).toString('base64url');
 }
 
-/** Bucket and key of an S3 object URL (virtual-hosted or path style), or null. */
-export function parseS3Url(url: string | undefined): { bucket: string; key: string } | null {
-  if (!url) return null;
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return null;
-  }
-  const key = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
-  const virtual = parsed.hostname.match(/^(.+)\.s3[.-]([a-z0-9-]+\.)?amazonaws\.com$/);
-  if (virtual && key) return { bucket: virtual[1], key };
-  const pathStyle = parsed.hostname.match(/^s3[.-]([a-z0-9-]+\.)?amazonaws\.com$/);
-  if (pathStyle) {
-    const [bucket, ...rest] = key.split('/');
-    if (bucket && rest.length > 0) return { bucket, key: rest.join('/') };
-  }
-  return null;
-}
+export type StorageLocation = { bucket: string; key: string };
 
-export type StorageLocation = { provider: 'gcs' | 's3'; bucket: string; key: string };
-
-/** Where a stored object lives: a GCS URL (or gs://) or an S3 URL (Remotion Lambda), or null. */
+/** Where a stored render lives (a GCS URL or gs://), or null. */
 export function parseStorageUrl(url: string | undefined): StorageLocation | null {
-  const gcsLocation = parseGcsUrl(url);
-  if (gcsLocation) return { provider: 'gcs', ...gcsLocation };
-  const s3Location = parseS3Url(url);
-  return s3Location ? { provider: 's3', ...s3Location } : null;
+  return parseGcsUrl(url);
 }
 
 // ---------------------------------------------------------------------------
@@ -111,13 +86,10 @@ const presignCache = new Map<string, { url: string; expiresAt: number }>();
 type StoredOutput = { outputUrl?: string; outputBucket?: string; outputKey?: string };
 
 function outputLocation(job: StoredOutput): StorageLocation | null {
-  if (job.outputBucket && job.outputKey) {
-    // Lambda outputs record their S3 bucket too; anything else is ours on GCS.
-    const fromUrl = parseStorageUrl(job.outputUrl);
-    const provider = fromUrl?.bucket === job.outputBucket ? fromUrl.provider : job.outputBucket === env.remotionBucket ? 's3' : 'gcs';
-    return { provider, bucket: job.outputBucket, key: job.outputKey };
-  }
-  return parseStorageUrl(job.outputUrl);
+  // Only GCS outputs are ours; old S3 (Lambda) outputs are gone with that account.
+  const fromUrl = parseStorageUrl(job.outputUrl);
+  if (!fromUrl) return null;
+  return job.outputBucket && job.outputKey ? { bucket: job.outputBucket, key: job.outputKey } : fromUrl;
 }
 
 /** A short-lived URL for the render's file, or null if it has no stored output. */
@@ -133,26 +105,15 @@ export async function presignOutput(
 
   const extension = job.outputFormat || location.key.split('.').pop() || 'mp4';
   const disposition = `attachment; filename="shotline-${job._id}.${extension}"`;
-  let url: string;
-  if (location.provider === 'gcs') {
-    [url] = await gcs()
-      .bucket(location.bucket)
-      .file(location.key)
-      .getSignedUrl({
-        version: 'v4',
-        action: 'read',
-        expires: Date.now() + PRESIGN_TTL_SECONDS * 1000,
-        ...(download ? { responseDisposition: disposition } : {}),
-      });
-  } else {
-    // Remotion Lambda's bucket (no download disposition: Remotion's presigner can't set one)
-    url = await presignUrl({
-      region: env.awsRegion as AwsRegion,
-      bucketName: location.bucket,
-      objectKey: location.key,
-      expiresInSeconds: PRESIGN_TTL_SECONDS,
+  const [url] = await gcs()
+    .bucket(location.bucket)
+    .file(location.key)
+    .getSignedUrl({
+      version: 'v4',
+      action: 'read',
+      expires: Date.now() + PRESIGN_TTL_SECONDS * 1000,
+      ...(download ? { responseDisposition: disposition } : {}),
     });
-  }
   if (presignCache.size > 10_000) presignCache.clear();
   presignCache.set(cacheKey, { url, expiresAt: Date.now() + PRESIGN_TTL_SECONDS * 1000 });
   return url;
@@ -165,12 +126,7 @@ export async function deleteOutput(job: { _id: any } & StoredOutput): Promise<vo
   presignCache.delete(`${job._id}:v`);
   if (!location) return;
   try {
-    if (location.provider === 'gcs') {
-      await gcs().bucket(location.bucket).file(location.key).delete({ ignoreNotFound: true });
-    } else {
-      const { client, sdk } = getAwsClient({ region: env.awsRegion as AwsRegion, service: 's3' });
-      await client.send(new sdk.DeleteObjectCommand({ Bucket: location.bucket, Key: location.key }));
-    }
+    await gcs().bucket(location.bucket).file(location.key).delete({ ignoreNotFound: true });
   } catch (error: any) {
     logger.warn('Failed to delete render output', { jobId: String(job._id), error: error?.message });
   }

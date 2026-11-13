@@ -1,13 +1,12 @@
 // services/renderLifecycle.service.ts
 //
-// The one place a render's outcome is decided. The worker (poll mode), the
-// Remotion webhook, the maintenance sweep and the status endpoint all call
-// these, so every path charges, refunds and notifies the same way. Outcomes
-// are conditional transitions from "rendering": a duplicate webhook, a late
-// poll or a completion after a cancel can't apply twice.
+// The one place a render's outcome is decided. The render worker, the
+// maintenance sweep and the status endpoint all call these, so every path
+// charges, refunds and notifies the same way. Outcomes are conditional
+// transitions from "rendering": a duplicate call, a late check or a
+// completion after a cancel can't apply twice.
 
 import { RenderJob } from '../models/RenderJob';
-import { checkRemotionProgress, type RenderProgress } from './render.service';
 import { generateThumbnailFromVideo } from './thumbnail.service';
 import { notifyRenderEvent } from './webhook.service';
 import { releaseUsage, settleUsage } from './usage.service';
@@ -18,19 +17,13 @@ import { deleteOutput, outputFields, parseStorageUrl, presignOutput } from './re
 
 const ACTIVE_RENDER_STATES = ['pending', 'queued', 'rendering'];
 
-/** A render that hasn't finished this long after starting has failed. */
-export const RENDER_DEADLINE_MS = 30 * 60_000;
+/** A render that hasn't finished this long after starting has failed (RENDER_DEADLINE_MINUTES). */
+export const RENDER_DEADLINE_MS = env.renderDeadlineMs;
+
+/** The worker stops a render at the deadline itself; this extra time is for the backstop in checkRender. */
+const DEADLINE_GRACE_MS = 5 * 60_000;
 
 export const RENDER_TIMEOUT_MESSAGE = 'The render took too long. Try a shorter video or fewer effects.';
-
-/**
- * Webhook mode: Remotion reports completion to us, so the worker only starts
- * renders. Needs a public URL Lambda can reach and a secret to sign with.
- * Otherwise (local development) the worker polls until the render ends.
- */
-export function webhookMode(): boolean {
-  return Boolean(env.remotionWebhookUrl && env.remotionWebhookSecret);
-}
 
 // ---------------------------------------------------------------------------
 // Usage
@@ -51,12 +44,16 @@ export function usageKey(job: { _id: any; renderType?: string; captionProjectId?
 // ---------------------------------------------------------------------------
 
 /**
- * Turns a raw Remotion/Lambda error into something safe and useful to show.
- * Raw messages can contain AWS ARNs and stack frames, so only known patterns
+ * Turns a raw Remotion error into something safe and useful to show.
+ * Raw messages can contain server paths and stack frames, so only known patterns
  * pass through and everything else gets a generic message.
  */
 export function describeRenderError(raw?: string): string {
   const msg = raw || '';
+  // Our side (no composition bundle on this server yet): not the user's project.
+  if (/Remotion bundle not found|REMOTION_SERVE_URL/i.test(msg)) {
+    return 'Rendering is temporarily unavailable. Try again in a few minutes.';
+  }
   if (/404|not found|failed to load|error loading|ERR_NAME_NOT_RESOLVED|could not be loaded/i.test(msg)) {
     return 'A media file in this project could not be loaded. Re-upload it or remove it, then render again.';
   }
@@ -113,7 +110,7 @@ export async function completeRender(
     ...(result.stats || {}),
   });
   if (!job) {
-    // Cancelled (or deleted) while Lambda kept going: nothing is charged, and
+    // Cancelled (or deleted) while the render kept going: nothing is charged, and
     // the file it produced is removed so it can't be fetched later.
     logger.info('Render finished but the job had already ended; not charging', { jobId });
     const ended = await RenderJob.findById(jobId).select('status').lean();
@@ -128,7 +125,7 @@ export async function completeRender(
     const usage = usageKey(full);
     await settleUsage(full.userId, usage.kind, usage.jobId, Number(full.inputProps?.project?.duration) || 0);
     await notify(full, 'render.completed', outputFields(full));
-    // Not awaited: callers that must answer quickly (the webhook) shouldn't wait for ffmpeg.
+    // Not awaited: the worker shouldn't wait for ffmpeg before taking the next render.
     void addThumbnail(full, (job as any).renderId || jobId);
   }
   return true;
@@ -151,58 +148,21 @@ export async function failRender(jobId: string, message: string, reason: string,
 }
 
 // ---------------------------------------------------------------------------
-// Progress
+// Checks
 // ---------------------------------------------------------------------------
 
-function progressFields(progress: RenderProgress): Record<string, unknown> {
-  const fields: Record<string, unknown> = { progress: Math.round((progress.progress || 0) * 100), lastProgressAt: new Date() };
-  const copy = ['framesRendered', 'chunks', 'timeToRenderFrames', 'timeToFinish', 'timeToEncode', 'outputSizeInBytes', 'lambdasInvoked', 'renderMetadata', 'encodingStatus'] as const;
-  for (const key of copy) if (progress[key] !== undefined && progress[key] !== null) fields[key] = progress[key];
-  if (progress.errors?.length) fields.renderErrors = progress.errors;
-  if (progress.costs) {
-    fields.estimatedCost = progress.costs.accruedSoFar;
-    fields.costDisplay = progress.costs.displayCost;
-    fields.currency = progress.costs.currency;
-  }
-  return fields;
-}
-
-export type RenderCheck = 'completed' | 'failed' | 'rendering' | 'ended';
+export type RenderCheck = 'failed' | 'rendering' | 'ended';
 
 /**
- * Asks Lambda how a render is doing, saves the progress and applies the
- * outcome if it has finished (or is past its deadline). Safe to call from
- * anywhere, any number of times.
+ * The render worker saves progress and applies the outcome itself. This is
+ * the backstop for a worker that died: a render still "rendering" well past
+ * its deadline is failed (and refunded). Safe to call any number of times.
  */
-export async function checkRender(job: {
-  _id: any;
-  status: string;
-  renderId?: string;
-  bucketName?: string;
-  startedAt?: Date;
-}): Promise<RenderCheck> {
-  const jobId = String(job._id);
-  if (job.status !== 'rendering' || !job.renderId) return 'ended';
-  if (!job.bucketName) {
-    // bucketName is hidden by default (select: false), so callers often lack it.
-    const withBucket = await RenderJob.findById(jobId).select('status renderId bucketName startedAt').lean();
-    if (!withBucket?.bucketName || withBucket.status !== 'rendering') return 'ended';
-    job = withBucket as typeof job;
-  }
-
-  const progress = await checkRemotionProgress(job.renderId!, job.bucketName!);
-  await RenderJob.updateOne({ _id: jobId, status: 'rendering' }, progressFields(progress));
-
-  if (progress.fatalErrorEncountered) {
-    const fatal = progress.errors?.find((e: any) => e?.isFatal) || progress.errors?.[0];
-    logger.error('Fatal render error', { jobId, error: fatal?.message });
-    return (await failRender(jobId, describeRenderError(fatal?.message), 'render_failed')) ? 'failed' : 'ended';
-  }
-  if (progress.done && progress.outputFile) {
-    return (await completeRender(jobId, { outputUrl: progress.outputFile })) ? 'completed' : 'ended';
-  }
-  if (job.startedAt && Date.now() - new Date(job.startedAt).getTime() > RENDER_DEADLINE_MS) {
-    return (await failRender(jobId, RENDER_TIMEOUT_MESSAGE, 'render_timeout')) ? 'failed' : 'ended';
+export async function checkRender(job: { _id: any; status: string; startedAt?: Date }): Promise<RenderCheck> {
+  if (job.status !== 'rendering') return 'ended';
+  const started = job.startedAt ? new Date(job.startedAt).getTime() : 0;
+  if (started && Date.now() - started > RENDER_DEADLINE_MS + DEADLINE_GRACE_MS) {
+    return (await failRender(String(job._id), RENDER_TIMEOUT_MESSAGE, 'render_timeout')) ? 'failed' : 'ended';
   }
   return 'rendering';
 }
@@ -210,13 +170,12 @@ export async function checkRender(job: {
 const recentChecks = new Map<string, number>();
 
 /**
- * Refreshes a rendering job's progress while someone is watching it (the
- * status endpoint), at most every `minIntervalMs` per job and process. In
- * webhook mode nothing else updates progress, and it also completes a render
- * whose webhook was lost.
+ * Runs checkRender for a rendering job while someone is watching it (the
+ * status endpoint), at most every `minIntervalMs` per job and process.
+ * Returns true when it checked (the caller re-reads the job).
  */
 export async function refreshIfStale(job: any, minIntervalMs = 3000): Promise<boolean> {
-  if (job?.status !== 'rendering' || !job.renderId) return false;
+  if (job?.status !== 'rendering') return false;
   const jobId = String(job._id);
   const last = Math.max(recentChecks.get(jobId) || 0, job.lastProgressAt ? new Date(job.lastProgressAt).getTime() : 0);
   if (Date.now() - last < minIntervalMs) return false;

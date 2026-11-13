@@ -57,11 +57,6 @@ export const env = {
   /** Public base URL of the media bucket (a CDN in front of it, or the bucket itself) */
   cdnUrl: (process.env.CDN_URL || (process.env.GCS_MEDIA_BUCKET ? `https://storage.googleapis.com/${process.env.GCS_MEDIA_BUCKET}` : '')).replace(/\/+$/, ''),
 
-  // AWS: only Remotion Lambda (renders) still runs there, until renders move
-  // onto the worker. Remotion reads REMOTION_AWS_ACCESS_KEY_ID/SECRET itself.
-  awsRegion: process.env.AWS_REGION || 'us-east-1',
-  remotionAwsAccessKeyID: process.env.REMOTION_AWS_ACCESS_KEY_ID || '',
-  remotionAwsSecretAccessKey:process.env.REMOTION_AWS_SECRET_ACCESS_KEY || '',
   apiBaseUrl: process.env.API_BASE_URL || 'http://localhost:3000',
   
   // YOLO Reframe Service
@@ -72,28 +67,29 @@ export const env = {
   // instead of the YOLO service.
   reframeServiceUrl: process.env.REFRAME_SERVICE_URL || '',
   reframeServiceToken: process.env.REFRAME_SERVICE_TOKEN || '',
-  remotionWebhookSecret: process.env.REMOTION_WEBHOOK_SECRET || '',
   // Shared with the Remix server (same name there). When it sends this secret,
   // its X-Shotline-Client-IP header is trusted as the browser's IP for rate
   // limiting; without it, every SSR call looks like it comes from the Remix box.
   internalProxySecret: process.env.INTERNAL_PROXY_SECRET || '',
-  // Public URL of POST /api/v1/webhooks/remotion. With the secret set, renders
-  // complete via Remotion's webhook instead of a worker polling Lambda.
-  remotionWebhookUrl: process.env.REMOTION_WEBHOOK_URL || '',
   // Public base URL of this API; render links are <publicApiUrl>/r/<id>?t=...
   publicApiUrl: process.env.PUBLIC_API_URL || `http://localhost:${process.env.PORT || 3000}`,
 
   
   
-  // Remotion
+  // Remotion: renders run on the worker (@remotion/renderer + headless Chrome).
+  // The composition bundle: a local directory (the frontend deploy writes
+  // /var/www/shotline/remotion-bundles/<sha> and points `current` at it) or an
+  // http(s) URL of a bundle. Resolved once per render, so a deploy never
+  // changes a render that is already running.
   remotionServeUrl: process.env.REMOTION_SERVE_URL || '',
-  remotionFunctionName: process.env.REMOTION_FUNCTION_NAME || '',
-  // Most render Lambdas one render may use at once. Keep it under the AWS
-  // account's Lambda concurrency limit (minus one for the orchestrator), or
-  // long renders fail with "AWS Concurrency limit reached".
-  remotionMaxLambdas: Math.max(1, Number(process.env.REMOTION_MAX_LAMBDAS) || 8),
-  remotionBucket: process.env.REMOTION_BUCKET || '',
-  
+  // Renders one worker runs at once. Each uses every core it is given.
+  renderConcurrency: Math.max(1, Number(process.env.RENDER_CONCURRENCY) || 1),
+  // Browser tabs one render uses (Remotion's `concurrency`); empty = Remotion's
+  // default (half the cores).
+  remotionConcurrency: process.env.REMOTION_CONCURRENCY ? Number(process.env.REMOTION_CONCURRENCY) : null,
+  // A render that hasn't finished this long after starting is stopped and failed.
+  renderDeadlineMs: Math.max(5, Number(process.env.RENDER_DEADLINE_MINUTES) || 45) * 60_000,
+
   // ElevenLabs
   elevenLabsApiKey: process.env.ELEVENLABS_API_KEY || '',
 
@@ -163,11 +159,8 @@ function checkEnvironment(): void {
   if (env.corsOrigin === '*') warnings.push('CORS_ORIGIN is "*"; set it to the frontend origin(s)');
   if (!env.gcsMediaBucket) warnings.push('GCS_MEDIA_BUCKET not set: uploads will fail');
   if (!env.gcsRendersBucket) warnings.push('GCS_RENDERS_BUCKET not set: render links will not work');
-  if (!env.remotionServeUrl || !env.remotionFunctionName) warnings.push('REMOTION_SERVE_URL / REMOTION_FUNCTION_NAME not set: renders will fail');
+  if (!env.remotionServeUrl) warnings.push('REMOTION_SERVE_URL not set (the composition bundle): renders will fail');
   if (env.internalProxySecret && env.internalProxySecret.length < 32) warnings.push('INTERNAL_PROXY_SECRET is shorter than 32 characters; it is ignored');
-  if (Boolean(env.remotionWebhookUrl) !== Boolean(env.remotionWebhookSecret)) {
-    warnings.push('Set both REMOTION_WEBHOOK_URL and REMOTION_WEBHOOK_SECRET to complete renders by webhook; until then workers poll Lambda');
-  }
 
   // The logger imports this module, so report with console here.
   for (const warning of warnings) console.warn(`[env] ${warning}`);

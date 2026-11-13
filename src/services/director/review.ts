@@ -2,14 +2,14 @@
 //
 // The director looks at the draft before the user does. A storyboard of
 // real frames (the hook, the middle of each piece, each title, the end) is
-// rendered on Remotion Lambda with the same composition the export uses,
+// rendered on this server with the same composition the export uses,
 // so what the director judges is what the user would get: unreadable text,
 // a bad crop, a face covered by a title. The director scores it against the
 // brief and, when it isn't good enough, writes notes for the specialists
 // who need to redo their part.
 
-import { getAwsClient, renderStillOnLambda, type AwsRegion } from '@remotion/lambda-client';
 import { env } from '../../config/env';
+import { renderStillFrame } from '../render.service';
 import { logger } from '../../utils/logger';
 import { uploadBufferToS3 } from '../storage.service';
 import { getGeminiClient } from '../ai/gemini';
@@ -64,29 +64,10 @@ export function storyboardTimes(edit: CompiledEdit): StoryboardFrame[] {
 
 export type StillRenderer = (edit: CompiledEdit, frame: number, scale: number) => Promise<Buffer>;
 
-const lambdaStill: StillRenderer = async (edit, frame, scale) => {
-  const out = await renderStillOnLambda({
-    region: env.awsRegion as AwsRegion,
-    functionName: env.remotionFunctionName,
-    serveUrl: env.remotionServeUrl,
-    composition: 'VideoEditor',
-    inputProps: { projectSettings: edit.project, elements: edit.elements },
-    frame,
-    imageFormat: 'jpeg',
-    jpegQuality: 72,
-    scale,
-    privacy: 'private',
-    maxRetries: 1,
-    timeoutInMilliseconds: 90_000,
-  });
-  // The still is in Remotion's S3 bucket; read it with Remotion's own client.
-  const { client, sdk } = getAwsClient({ region: env.awsRegion as AwsRegion, service: 's3' });
-  const object = await client.send(new sdk.GetObjectCommand({ Bucket: out.bucketName, Key: out.outKey }));
-  return Buffer.from(await object.Body!.transformToByteArray());
-};
+const localStill: StillRenderer = (edit, frame, scale) => renderStillFrame(edit.project, edit.elements, frame, scale);
 
 let stillOverride: StillRenderer | null = null;
-/** Tests: render stills with `renderer` instead (null: Lambda) */
+/** Tests: render stills with `renderer` instead (null: the real renderer) */
 export function setStillRenderer(renderer: StillRenderer | null) {
   stillOverride = renderer;
 }
@@ -97,7 +78,7 @@ export async function renderStoryboard(edit: CompiledEdit, userId: string, runId
   const fps = Number(edit.project.fps) || 30;
   const longest = Math.max(Number(edit.project.width) || 1080, Number(edit.project.height) || 1920);
   const scale = Math.min(1, 720 / longest);
-  const render = stillOverride ?? lambdaStill;
+  const render = stillOverride ?? localStill;
   const done = await Promise.all(
     frames.map(async (f, i) => {
       try {

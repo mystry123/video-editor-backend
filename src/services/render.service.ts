@@ -1,117 +1,244 @@
 // services/render.service.ts
+//
+// Renders run on the worker with @remotion/renderer and a headless Chrome
+// (Remotion Lambda went with the AWS account in Nov 2026). The composition
+// ("VideoEditor") comes from a bundle of the frontend's app/remotion entry:
+// the frontend deploy writes it to a versioned directory and points
+// REMOTION_SERVE_URL's `current` link at it. Each render resolves that link
+// once, so a deploy never changes a render that is already running.
+//
+// @remotion/renderer must be the exact version the bundle was built with
+// (the frontend's remotion packages; 4.0.400 now).
 
-import { AwsRegion, getRenderProgress, renderMediaOnLambda } from '@remotion/lambda-client';
+import fs from 'fs/promises';
+import os from 'os';
+import path from 'path';
+import {
+  ensureBrowser,
+  makeCancelSignal,
+  openBrowser,
+  renderMedia,
+  renderStill,
+  selectComposition,
+} from '@remotion/renderer';
 import { env } from '../config/env';
+import { rendersBucket } from '../config/gcs';
 import { logger } from '../utils/logger';
 
-export interface RenderResult {
-  renderId: string;
-  bucketName: string;
-}
+export const COMPOSITION_ID = 'VideoEditor';
 
-export interface RenderProgress {
-  done: boolean;
-  progress: number;
-  outputFile?: string;
-  errors?: any[];
-  fatalErrorEncountered?: boolean;
-  framesRendered?: number;
-  chunks?: number;
-  costs?: {
-    accruedSoFar: number;
-    displayCost: string;
-    currency: string;
-  };
-  encodingStatus?: any;
-  renderMetadata?: any;
-  lambdasInvoked?: number;
-  timeToFinish?: number;
-  timeToRenderFrames?: number;
-  timeToEncode?: number;
-  outputSizeInBytes?: number;
-}
+type Codec = 'h264' | 'vp8' | 'gif';
 
 // Output format (as stored on the template) → Remotion codec. Keep in sync with
 // SUPPORTED_OUTPUT_FORMATS in controllers/render.controller.ts.
-type LambdaCodec = Parameters<typeof renderMediaOnLambda>[0]['codec'];
-
-const CODEC_BY_FORMAT: Record<string, LambdaCodec> = {
+const CODEC_BY_FORMAT: Record<string, Codec> = {
   mp4: 'h264',
   webm: 'vp8',
   gif: 'gif',
 };
 
-const FRAMES_PER_LAMBDA = 60;
+const CONTENT_TYPE_BY_FORMAT: Record<string, string> = {
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  gif: 'image/gif',
+};
 
-/** How to split a render across Lambdas: 60-frame chunks, unless that would
- * need more Lambdas than the account allows at once, then exactly that many
- * (bigger chunks, slower render, but it runs). */
-export function renderChunking(project: any, maxLambdas = env.remotionMaxLambdas): { framesPerLambda: number } | { concurrency: number } {
-  const frames = Math.ceil((Number(project?.duration) || 0) * (Number(project?.fps) || 30));
-  if (Math.ceil(frames / FRAMES_PER_LAMBDA) <= maxLambdas) return { framesPerLambda: FRAMES_PER_LAMBDA };
-  return { concurrency: maxLambdas };
+export function codecFor(outputFormat: string): Codec {
+  const codec = CODEC_BY_FORMAT[outputFormat];
+  if (!codec) throw new Error(`Unsupported output format: ${outputFormat}`);
+  return codec;
 }
 
-export async function startRemotionRender(job: any): Promise<RenderResult> {
-  const codec = CODEC_BY_FORMAT[job.outputFormat];
-  if (!codec) {
-    throw new Error(`Unsupported output format: ${job.outputFormat}`);
+/** The composition's input props, as the frontend's Root.tsx reads them */
+export function compositionProps(project: any, elements: any[] | undefined) {
+  return { projectSettings: project, elements: elements || [] };
+}
+
+// ---------------------------------------------------------------------------
+// Bundle
+// ---------------------------------------------------------------------------
+
+/**
+ * Where this render's composition bundle is: an http(s) URL as is, or a local
+ * directory with symlinks resolved (so later deploys don't swap it mid-render).
+ */
+export async function resolveServeUrl(serveUrl = env.remotionServeUrl): Promise<string> {
+  if (!serveUrl) throw new Error('REMOTION_SERVE_URL is not set');
+  if (/^https?:\/\//i.test(serveUrl)) return serveUrl;
+  try {
+    const dir = await fs.realpath(serveUrl);
+    await fs.access(path.join(dir, 'index.html'));
+    return dir;
+  } catch {
+    throw new Error(`Remotion bundle not found at ${serveUrl} (deploy the frontend to build it)`);
   }
-
-  logger.info('Starting Remotion render', { jobId: job._id });
-
-  const response = await renderMediaOnLambda({
-    region: env.awsRegion as AwsRegion,
-    functionName: env.remotionFunctionName,
-    serveUrl: env.remotionServeUrl,
-    composition: 'VideoEditor',
-    inputProps: {
-      projectSettings: job.inputProps.project,
-      elements: job.inputProps.elements || [],
-    },
-    codec,
-    scale: job.scale || 1,
-    ...renderChunking(job.inputProps.project),
-    outName: `renders/${job.userId}/${job._id}.${job.outputFormat}`,
-    maxRetries: 3,
-    imageFormat: 'png',
-    crf: 18,
-    // yuv420p is only valid for h264; vp8/gif pick their own pixel format.
-    ...(codec === 'h264' ? { pixelFormat: 'yuv420p' as const } : {}),
-    // Private: users get a Shotline link that redirects to a signed URL
-    // (services/renderOutput.service.ts), never the bucket itself.
-    privacy: 'private',
-    // Webhook mode: Remotion calls us when the render ends (signed with the
-    // secret); customData lets us match the job even before renderId is saved.
-    ...(env.remotionWebhookUrl && env.remotionWebhookSecret
-      ? { webhook: { url: env.remotionWebhookUrl, secret: env.remotionWebhookSecret, customData: { jobId: String(job._id) } } }
-      : {}),
-  });
-
-  logger.info('Render started', {
-    jobId: job._id,
-    renderId: response.renderId,
-    codec,
-    scale: job.scale || 1,
-  });
-
-  return { renderId: response.renderId, bucketName: response.bucketName };
 }
 
-// Keep this for manual progress checks if needed
-export async function checkRemotionProgress(
-  renderId: string,
-  bucketName: string
-): Promise<RenderProgress> {
-  const progress = await getRenderProgress({
-    renderId,
-    bucketName,
-    region: env.awsRegion as AwsRegion,
-    functionName: env.remotionFunctionName,
+// ---------------------------------------------------------------------------
+// Browser: one headless Chrome per process, shared by renders and stills
+// ---------------------------------------------------------------------------
+
+type Browser = Awaited<ReturnType<typeof openBrowser>>;
+let browser: Promise<Browser> | null = null;
+
+async function launch(): Promise<Browser> {
+  // Downloads Chrome Headless Shell on first use (into node_modules/.remotion).
+  await ensureBrowser();
+  return openBrowser('chrome', { logLevel: 'warn' });
+}
+
+export function getBrowser(): Promise<Browser> {
+  if (!browser) {
+    browser = launch().catch((error) => {
+      browser = null;
+      throw error;
+    });
+  }
+  return browser;
+}
+
+/** Closes the shared browser (next use opens a fresh one). Never throws. */
+export async function closeBrowser(): Promise<void> {
+  const current = browser;
+  browser = null;
+  if (!current) return;
+  try {
+    await (await current).close({ silent: true });
+  } catch {
+    // already gone
+  }
+}
+
+/** Errors that mean the shared Chrome died, not that the project is broken */
+export function isBrowserCrash(message: string | undefined): boolean {
+  return /Target closed|Session closed|Browser closed|browser has disconnected|Protocol error|ECONNRESET|socket hang up/i.test(message || '');
+}
+
+// ---------------------------------------------------------------------------
+// Video
+// ---------------------------------------------------------------------------
+
+export interface RenderProgressUpdate {
+  /** 0..1 over frames + encoding */
+  progress: number;
+  renderedFrames: number;
+  encodedFrames: number;
+  stage: string;
+}
+
+export interface RenderVideoOptions {
+  serveUrl: string;
+  project: any;
+  elements: any[];
+  outputFormat: string;
+  scale?: number;
+  outputPath: string;
+  onProgress?: (update: RenderProgressUpdate) => void;
+  cancelSignal?: ReturnType<typeof makeCancelSignal>['cancelSignal'];
+}
+
+export interface RenderVideoResult {
+  outputPath: string;
+  frames: number;
+  sizeBytes: number;
+}
+
+export async function renderVideo(options: RenderVideoOptions): Promise<RenderVideoResult> {
+  const codec = codecFor(options.outputFormat);
+  const inputProps = compositionProps(options.project, options.elements);
+  const puppeteerInstance = await getBrowser();
+  const composition = await selectComposition({
+    serveUrl: options.serveUrl,
+    id: COMPOSITION_ID,
+    inputProps,
+    puppeteerInstance,
+    logLevel: 'warn',
   });
 
-  return {
-    ...progress,
-    progress: (progress as any).overallProgress || 0,
-  } as RenderProgress;
+  await fs.mkdir(path.dirname(options.outputPath), { recursive: true });
+  await renderMedia({
+    serveUrl: options.serveUrl,
+    composition,
+    inputProps,
+    codec,
+    outputLocation: options.outputPath,
+    overwrite: true,
+    scale: options.scale || 1,
+    puppeteerInstance,
+    concurrency: env.remotionConcurrency,
+    // Same quality settings the Lambda renders used.
+    crf: codec === 'gif' ? undefined : 18,
+    imageFormat: 'png',
+    ...(codec === 'h264' ? { pixelFormat: 'yuv420p' as const } : {}),
+    // Media comes from GCS; give slow loads time before a frame times out.
+    timeoutInMilliseconds: 60_000,
+    cancelSignal: options.cancelSignal,
+    logLevel: 'warn',
+    onProgress: (p) =>
+      options.onProgress?.({
+        progress: p.progress,
+        renderedFrames: p.renderedFrames,
+        encodedFrames: p.encodedFrames,
+        stage: String(p.stitchStage),
+      }),
+  });
+
+  const stat = await fs.stat(options.outputPath);
+  return { outputPath: options.outputPath, frames: composition.durationInFrames, sizeBytes: stat.size };
+}
+
+/** Where a job's output is written while rendering */
+export function localOutputPath(jobId: string, outputFormat: string): string {
+  return path.join(os.tmpdir(), 'shotline-renders', `${jobId}.${outputFormat}`);
+}
+
+/**
+ * Uploads a finished render to the (private) renders bucket and returns its
+ * storage URL; users only ever get /r/<id> links to it (renderOutput.service).
+ */
+export async function uploadRenderOutput(localPath: string, job: { _id: any; userId: any; outputFormat: string }): Promise<string> {
+  const key = `renders/${job.userId}/${job._id}.${job.outputFormat}`;
+  const bucket = rendersBucket();
+  await bucket.upload(localPath, {
+    destination: key,
+    resumable: true,
+    metadata: { contentType: CONTENT_TYPE_BY_FORMAT[job.outputFormat] || 'application/octet-stream' },
+  });
+  return `https://storage.googleapis.com/${bucket.name}/${key}`;
+}
+
+// ---------------------------------------------------------------------------
+// Stills (the director's storyboard)
+// ---------------------------------------------------------------------------
+
+export async function renderStillFrame(project: any, elements: any[], frame: number, scale: number): Promise<Buffer> {
+  const serveUrl = await resolveServeUrl();
+  const inputProps = compositionProps(project, elements);
+  const puppeteerInstance = await getBrowser();
+  const composition = await selectComposition({ serveUrl, id: COMPOSITION_ID, inputProps, puppeteerInstance, logLevel: 'warn' });
+  const { buffer } = await renderStill({
+    serveUrl,
+    composition,
+    inputProps,
+    frame: Math.max(0, Math.min(composition.durationInFrames - 1, frame)),
+    imageFormat: 'jpeg',
+    jpegQuality: 72,
+    scale,
+    puppeteerInstance,
+    timeoutInMilliseconds: 60_000,
+    logLevel: 'warn',
+  });
+  if (!buffer) throw new Error('renderStill returned no image');
+  return buffer;
+}
+
+export { makeCancelSignal };
+
+/** Logged once at worker start: where renders will read the composition */
+export async function describeRenderSetup(): Promise<void> {
+  try {
+    logger.info('Renders use the composition bundle', { serveUrl: await resolveServeUrl() });
+  } catch (error: any) {
+    logger.warn('Renders will fail until the composition bundle exists', { error: error?.message });
+  }
 }
