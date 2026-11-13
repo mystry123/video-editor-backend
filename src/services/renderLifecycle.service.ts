@@ -14,7 +14,7 @@ import { releaseUsage, settleUsage } from './usage.service';
 import { transition } from '../utils/jobs';
 import { logger } from '../utils/logger';
 import { env } from '../config/env';
-import { deleteOutput, outputFields, parseS3Url, presignOutput } from './renderOutput.service';
+import { deleteOutput, outputFields, parseStorageUrl, presignOutput } from './renderOutput.service';
 
 const ACTIVE_RENDER_STATES = ['pending', 'queued', 'rendering'];
 
@@ -103,7 +103,7 @@ export async function completeRender(
   jobId: string,
   result: { outputUrl: string; stats?: Record<string, unknown> }
 ): Promise<boolean> {
-  const location = parseS3Url(result.outputUrl);
+  const location = parseStorageUrl(result.outputUrl);
   const job = await transition(RenderJob, jobId, ['rendering'], {
     status: 'completed',
     progress: 100,

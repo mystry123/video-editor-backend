@@ -3,27 +3,43 @@ import { api, createUser } from './helpers';
 import { RenderJob } from '../src/models/RenderJob';
 import { CaptionProject } from '../src/models';
 import { completeRender } from '../src/services/renderLifecycle.service';
-import { parseS3Url } from '../src/services/renderOutput.service';
+import { parseS3Url, parseStorageUrl } from '../src/services/renderOutput.service';
 
-const presign = vi.hoisted(() => vi.fn(async (_client: unknown, command: any) => `https://signed.test/${command.input.Key}?disposition=${command.input.ResponseContentDisposition ?? ''}`));
-const s3Send = vi.hoisted(() => vi.fn(async () => ({})));
-vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: presign }));
-vi.mock('@aws-sdk/client-s3', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@aws-sdk/client-s3')>();
-  class FakeS3 {
-    send = s3Send;
+// GCS: signed URLs and deletes of render outputs
+const gcsSign = vi.hoisted(() => vi.fn(async (bucket: string, key: string, config: any) => [`https://signed.test/${bucket}/${key}?disposition=${config.responseDisposition ?? ''}`]));
+const gcsDelete = vi.hoisted(() => vi.fn(async (_bucket: string, _key: string) => [{}]));
+vi.mock('../src/config/gcs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/config/gcs')>();
+  const fake = {
+    bucket: (bucket: string) => ({
+      file: (key: string) => ({
+        getSignedUrl: (config: any) => gcsSign(bucket, key, config),
+        delete: () => gcsDelete(bucket, key),
+      }),
+    }),
+  };
+  return { ...actual, gcs: () => fake };
+});
+// Remotion Lambda's S3 bucket, through Remotion's own client
+const s3Send = vi.hoisted(() => vi.fn(async (_command: any) => ({})));
+const s3Presign = vi.hoisted(() => vi.fn(async (input: any) => `https://s3-signed.test/${input.bucketName}/${input.objectKey}`));
+vi.mock('@remotion/lambda-client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@remotion/lambda-client')>();
+  class DeleteObjectCommand {
+    constructor(public input: unknown) {}
   }
-  return { ...actual, S3Client: FakeS3 };
+  return { ...actual, presignUrl: s3Presign, getAwsClient: () => ({ client: { send: s3Send }, sdk: { DeleteObjectCommand } }) };
 });
 vi.mock('../src/services/thumbnail.service', () => ({
   generateThumbnailFromVideo: vi.fn().mockResolvedValue({ success: false }),
 }));
 
-const OUTPUT = 'https://remotionlambda-test.s3.ap-south-1.amazonaws.com/renders/r1/renders/u/j.mp4';
+const OUTPUT = 'https://storage.googleapis.com/test-renders/renders/r1/u/j.mp4';
+const LAMBDA_OUTPUT = 'https://remotionlambda-test.s3.ap-south-1.amazonaws.com/renders/r1/renders/u/j.mp4';
 
-async function completedRender() {
+async function completedRender(outputUrl = OUTPUT) {
   const { user, auth } = await createUser();
-  const job = await RenderJob.create({ userId: user._id, inputProps: {}, status: 'completed', outputUrl: OUTPUT, outputFormat: 'mp4' });
+  const job = await RenderJob.create({ userId: user._id, inputProps: {}, status: 'completed', outputUrl, outputFormat: 'mp4' });
   const token = ((await RenderJob.findById(job._id).select('+shareToken').lean()) as any).shareToken as string;
   return { user, auth, job, token };
 }
@@ -36,7 +52,7 @@ describe('render links', () => {
     expect(res.body.downloadUrl).toBe(`${res.body.outputUrl}&download=1`);
     const list = await api().get('/api/v1/render').set(auth);
     const body = JSON.stringify(list.body);
-    expect(body).not.toContain('amazonaws.com');
+    expect(body).not.toContain('storage.googleapis.com');
     expect(body).not.toContain('shareToken');
   });
 
@@ -44,7 +60,7 @@ describe('render links', () => {
     const { job, token } = await completedRender();
     const ok = await api().get(`/r/${job._id}?t=${encodeURIComponent(token)}`);
     expect(ok.status).toBe(302);
-    expect(ok.headers.location).toMatch(/^https:\/\/signed\.test\/renders\/r1\/renders\/u\/j\.mp4/);
+    expect(ok.headers.location).toMatch(/^https:\/\/signed\.test\/test-renders\/renders\/r1\/u\/j\.mp4/);
 
     const download = await api().get(`/r/${job._id}?t=${encodeURIComponent(token)}&download=1`);
     expect(decodeURIComponent(download.headers.location)).toContain('attachment; filename="shotline-');
@@ -52,6 +68,13 @@ describe('render links', () => {
     expect((await api().get(`/r/${job._id}?t=wrong`)).status).toBe(404);
     expect((await api().get(`/r/${job._id}`)).status).toBe(404);
     expect((await api().get('/r/not-an-id?t=x')).status).toBe(404);
+  });
+
+  it('still signs renders made on Remotion Lambda (S3) through Remotion', async () => {
+    const { job, token } = await completedRender(LAMBDA_OUTPUT);
+    const ok = await api().get(`/r/${job._id}?t=${encodeURIComponent(token)}`);
+    expect(ok.status).toBe(302);
+    expect(ok.headers.location).toBe('https://s3-signed.test/remotionlambda-test/renders/r1/renders/u/j.mp4');
   });
 
   it('gives renders made before links existed a token on first read', async () => {
@@ -66,8 +89,14 @@ describe('render links', () => {
   it('deletes the file of a render that finishes after it was cancelled', async () => {
     const { user } = await createUser();
     const job = await RenderJob.create({ userId: user._id, inputProps: {}, status: 'cancelled' });
-    s3Send.mockClear();
+    gcsDelete.mockClear();
     expect(await completeRender(String(job._id), { outputUrl: OUTPUT })).toBe(false);
+    expect(gcsDelete).toHaveBeenCalledTimes(1);
+    expect(gcsDelete).toHaveBeenCalledWith('test-renders', 'renders/r1/u/j.mp4');
+
+    const lambdaJob = await RenderJob.create({ userId: user._id, inputProps: {}, status: 'cancelled' });
+    s3Send.mockClear();
+    expect(await completeRender(String(lambdaJob._id), { outputUrl: LAMBDA_OUTPUT })).toBe(false);
     expect(s3Send).toHaveBeenCalledTimes(1);
     expect((s3Send.mock.calls[0] as any[])[0].input).toEqual({ Bucket: 'remotionlambda-test', Key: 'renders/r1/renders/u/j.mp4' });
   });
@@ -85,8 +114,13 @@ describe('render links', () => {
     expect(one.body).toMatchObject({ name: 'My captions', outputUrl: link });
   });
 
-  it('parses both S3 URL styles', () => {
-    expect(parseS3Url(OUTPUT)).toEqual({ bucket: 'remotionlambda-test', key: 'renders/r1/renders/u/j.mp4' });
+  it('parses GCS and both S3 URL styles', () => {
+    expect(parseStorageUrl(OUTPUT)).toEqual({ provider: 'gcs', bucket: 'test-renders', key: 'renders/r1/u/j.mp4' });
+    expect(parseStorageUrl('https://test-renders.storage.googleapis.com/a/b.mp4')).toEqual({ provider: 'gcs', bucket: 'test-renders', key: 'a/b.mp4' });
+    expect(parseStorageUrl('gs://test-renders/a/b.mp4')).toEqual({ provider: 'gcs', bucket: 'test-renders', key: 'a/b.mp4' });
+    expect(parseStorageUrl('https://storage.googleapis.com/only-bucket')).toBeNull();
+    expect(parseStorageUrl(LAMBDA_OUTPUT)).toEqual({ provider: 's3', bucket: 'remotionlambda-test', key: 'renders/r1/renders/u/j.mp4' });
+    expect(parseS3Url(LAMBDA_OUTPUT)).toEqual({ bucket: 'remotionlambda-test', key: 'renders/r1/renders/u/j.mp4' });
     expect(parseS3Url('https://s3.ap-south-1.amazonaws.com/b/k/x.mp4')).toEqual({ bucket: 'b', key: 'k/x.mp4' });
     expect(parseS3Url('https://cdn.test/x.mp4')).toBeNull();
   });

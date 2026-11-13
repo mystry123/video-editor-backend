@@ -46,14 +46,22 @@ export const env = {
   facebookAppSecret: process.env.FACEBOOK_APP_SECRET || '',
   facebookCallbackUrl: process.env.FACEBOOK_CALLBACK_URL || 'http://localhost:3000/api/v1/auth/facebook/callback',
   
-  // AWS
+  // Google Cloud Storage. Credentials come from Application Default
+  // Credentials (the VM's service account; locally `gcloud auth
+  // application-default login --impersonate-service-account=...`), never keys.
+  gcpProjectId: process.env.GCP_PROJECT_ID || process.env.VERTEX_PROJECT || 'shotline-511017',
+  /** Uploads, imports, generated media. Publicly readable. */
+  gcsMediaBucket: process.env.GCS_MEDIA_BUCKET || '',
+  /** Render outputs. Private: served through signed URLs only. */
+  gcsRendersBucket: process.env.GCS_RENDERS_BUCKET || '',
+  /** Public base URL of the media bucket (a CDN in front of it, or the bucket itself) */
+  cdnUrl: (process.env.CDN_URL || (process.env.GCS_MEDIA_BUCKET ? `https://storage.googleapis.com/${process.env.GCS_MEDIA_BUCKET}` : '')).replace(/\/+$/, ''),
+
+  // AWS: only Remotion Lambda (renders) still runs there, until renders move
+  // onto the worker. Remotion reads REMOTION_AWS_ACCESS_KEY_ID/SECRET itself.
   awsRegion: process.env.AWS_REGION || 'us-east-1',
-  awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-  awsSecretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
   remotionAwsAccessKeyID: process.env.REMOTION_AWS_ACCESS_KEY_ID || '',
   remotionAwsSecretAccessKey:process.env.REMOTION_AWS_SECRET_ACCESS_KEY || '',
-  s3Bucket: process.env.S3_BUCKET || '',
-  cdnUrl: process.env.CDN_URL || '',
   apiBaseUrl: process.env.API_BASE_URL || 'http://localhost:3000',
   
   // YOLO Reframe Service
@@ -153,7 +161,8 @@ function checkEnvironment(): void {
 
   if (env.jwtSecret.length < 32 || env.jwtRefreshSecret.length < 32) warnings.push('JWT secrets should be at least 32 characters');
   if (env.corsOrigin === '*') warnings.push('CORS_ORIGIN is "*"; set it to the frontend origin(s)');
-  if (!env.s3Bucket || !env.cdnUrl) warnings.push('S3_BUCKET / CDN_URL not set: uploads will fail');
+  if (!env.gcsMediaBucket) warnings.push('GCS_MEDIA_BUCKET not set: uploads will fail');
+  if (!env.gcsRendersBucket) warnings.push('GCS_RENDERS_BUCKET not set: render links will not work');
   if (!env.remotionServeUrl || !env.remotionFunctionName) warnings.push('REMOTION_SERVE_URL / REMOTION_FUNCTION_NAME not set: renders will fail');
   if (env.internalProxySecret && env.internalProxySecret.length < 32) warnings.push('INTERNAL_PROXY_SECRET is shorter than 32 characters; it is ignored');
   if (Boolean(env.remotionWebhookUrl) !== Boolean(env.remotionWebhookSecret)) {

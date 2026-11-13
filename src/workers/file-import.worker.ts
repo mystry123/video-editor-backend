@@ -2,14 +2,12 @@ import { Job, Worker } from 'bullmq';
 import { probeMedia, summarizeProbe } from '../utils/media';
 import { limitStream, safeRequest } from '../utils/safeRequest';
 import { isFinalAttempt } from '../utils/jobs';
-import { contentDispositionFor, getObjectSize } from '../services/storage.service';
+import { getObjectSize, uploadStreamToS3 } from '../services/storage.service';
 
 // Largest file a URL import may download (bytes). Overridable for bigger plans later.
 const MAX_IMPORT_BYTES = Number(process.env.MAX_IMPORT_BYTES) || 5 * 1024 * 1024 * 1024;
 import axios from 'axios';
 import { Readable } from 'stream';
-import { S3Client } from '@aws-sdk/client-s3';
-import { Upload } from '@aws-sdk/lib-storage';
 import { File } from '../models/File';
 import { quotaService } from '../services/quota.service';
 import { env } from '../config/env';
@@ -18,14 +16,6 @@ import { redisConnectionOptions } from '../config/redis';
 import { registerWorker } from '../queues';
 
 
-// S3 Client
-const s3Client = new S3Client({
-  region: env.awsRegion,
-  credentials: {
-    accessKeyId: env.awsAccessKeyId,
-    secretAccessKey: env.awsSecretAccessKey,
-  },
-});
 
 // ============================================================================
 // Job Processors
@@ -62,21 +52,12 @@ async function processUrlImport(job: Job): Promise<void> {
     const totalSize = contentLength || parseInt(response.headers['content-length'] || '0', 10);
     const finalContentType = contentType || response.headers['content-type'] || 'video/mp4';
 
-    // Upload to S3 with progress tracking
+    // Upload to storage with progress tracking
     let uploadedBytes = 0;
-    const upload = createS3Upload(key, stream, finalContentType);
-
-    upload.on('httpUploadProgress', async (progress) => {
-      if (totalSize > 0 && progress.loaded) {
-        uploadedBytes = progress.loaded;
-        const percent = calculateProgress(progress.loaded, totalSize);
-        await updateFileProgress(fileId, percent);
-        await job.updateProgress(percent);
-      }
-    });
-
-    await upload.done();
-    logger.info(`[file-import] S3 upload completed`, { fileId });
+    await uploadStreamToS3(stream, key, finalContentType, reportProgress(job, fileId, totalSize, (loaded) => {
+      uploadedBytes = loaded;
+    }));
+    logger.info(`[file-import] Storage upload completed`, { fileId });
 
     // Extract metadata and finalize
     await finalizeImport(fileId, key, userId, totalSize || uploadedBytes);
@@ -121,21 +102,12 @@ async function processGoogleDriveImport(job: Job): Promise<void> {
     const totalSize = contentLength || parseInt(response.headers['content-length'] || '0', 10);
     const finalContentType = contentType || 'video/mp4';
 
-    // Upload to S3 with progress tracking
+    // Upload to storage with progress tracking
     let uploadedBytes = 0;
-    const upload = createS3Upload(key, stream, finalContentType);
-
-    upload.on('httpUploadProgress', async (progress) => {
-      if (totalSize > 0 && progress.loaded) {
-        uploadedBytes = progress.loaded;
-        const percent = calculateProgress(progress.loaded, totalSize);
-        await updateFileProgress(fileId, percent);
-        await job.updateProgress(percent);
-      }
-    });
-
-    await upload.done();
-    logger.info(`[file-import] S3 upload completed`, { fileId });
+    await uploadStreamToS3(stream, key, finalContentType, reportProgress(job, fileId, totalSize, (loaded) => {
+      uploadedBytes = loaded;
+    }));
+    logger.info(`[file-import] Storage upload completed`, { fileId });
 
     // Extract metadata and finalize
     await finalizeImport(fileId, key, userId, totalSize || uploadedBytes);
@@ -154,17 +126,21 @@ async function processGoogleDriveImport(job: Job): Promise<void> {
 // Helper Functions
 // ============================================================================
 
-function createS3Upload(key: string, stream: Readable, contentType: string): Upload {
-  return new Upload({
-    client: s3Client,
-    params: {
-      Bucket: env.s3Bucket,
-      Key: key,
-      Body: stream,
-      ContentType: contentType,
-      ContentDisposition: contentDispositionFor(contentType),
-    },
-  });
+/**
+ * A progress callback for uploadStreamToS3 that records progress only when
+ * the percentage changes (it's called for every chunk).
+ */
+function reportProgress(job: Job, fileId: string, totalSize: number, onBytes: (loaded: number) => void): (loaded: number) => void {
+  let lastPercent = -1;
+  return (loaded) => {
+    onBytes(loaded);
+    if (totalSize <= 0) return;
+    const percent = calculateProgress(loaded, totalSize);
+    if (percent === lastPercent) return;
+    lastPercent = percent;
+    void updateFileProgress(fileId, percent);
+    void job.updateProgress(percent).catch(() => undefined);
+  };
 }
 
 function calculateProgress(loaded: number, total: number): number {
@@ -204,7 +180,7 @@ async function finalizeImport(
   const cdnUrl = `${env.cdnUrl}/${key}`;
   const metadata = await extractMetadata(cdnUrl);
 
-  // Charge the bytes that actually landed in S3 (the HEAD size or a
+  // Charge the bytes that actually landed in storage (the HEAD size or a
   // client-supplied Drive size is only a claim), once, on processing → ready.
   const actualSize = (await getObjectSize(key).catch(() => null)) ?? fileSize;
   const finished = await File.findOneAndUpdate(

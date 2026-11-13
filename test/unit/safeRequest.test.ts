@@ -57,7 +57,12 @@ describe('safeRequest', () => {
 describe('isTrustedMediaUrl', () => {
   it('only trusts our CDN and buckets', () => {
     expect(isTrustedMediaUrl('https://cdn.test/users/1/uploads/a.mp4')).toBe(true);
-    expect(isTrustedMediaUrl('https://test-bucket.s3.us-east-1.amazonaws.com/a.mp4')).toBe(true);
+    expect(isTrustedMediaUrl('https://storage.googleapis.com/test-bucket/users/1/a.mp4')).toBe(true);
+    expect(isTrustedMediaUrl('https://test-bucket.storage.googleapis.com/a.mp4')).toBe(true);
+    expect(isTrustedMediaUrl('https://storage.googleapis.com/test-renders/renders/j.mp4')).toBe(true);
+    expect(isTrustedMediaUrl('https://storage.googleapis.com/other-bucket/a.mp4')).toBe(false);
+    expect(isTrustedMediaUrl('https://storage.googleapis.com/test-bucket-evil/a.mp4')).toBe(false);
+    expect(isTrustedMediaUrl('https://test-bucket.s3.us-east-1.amazonaws.com/a.mp4')).toBe(false);
     expect(isTrustedMediaUrl('https://cdn.test.evil.com/a.mp4')).toBe(false);
     expect(isTrustedMediaUrl('https://evil.com/https://cdn.test/a.mp4')).toBe(false);
     expect(isTrustedMediaUrl('http://169.254.169.254/latest/')).toBe(false);
