@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Root-owned entry point for deploys on the shotline-app VM
+# (/usr/local/bin/shotline-deploy). The CI deployer may run only this via sudo.
+#
+#   shotline-deploy <backend|frontend> <sha>            deploy a commit of main
+#   shotline-deploy --status <backend|frontend> <sha>   0 deployed, 20 failed
+#                                                        (rolled back), 10 running
+#
+# The deploy runs as its own systemd job (as `shotline`), so it finishes even
+# if the SSH connection that started it drops; --status checks it later.
+set -euo pipefail
+LOG=/var/www/shotline/deploys.log
+
+usage() { echo "usage: shotline-deploy [--status] <backend|frontend> <commit-sha>" >&2; exit 2; }
+check() {
+  case "${1:-}" in backend|frontend) ;; *) usage ;; esac
+  [[ "${2:-}" =~ ^[0-9a-f]{7,40}$ ]] || usage
+}
+
+if [[ "${1:-}" == "--status" ]]; then
+  app="${2:-}"; sha="${3:-}"; check "$app" "$sha"
+  if systemctl is-active --quiet "shotline-deploy-$app"; then echo "running"; exit 10; fi
+  last="$(grep -E "\[$app\] (deployed|refused|health check failed for|ROLLBACK FAILED)" "$LOG" 2>/dev/null | grep -E "$sha" | tail -1 || true)"
+  echo "${last:-no record for $app $sha}"
+  [[ "$last" == *" deployed $sha"* ]] && exit 0
+  exit 20
+fi
+
+app="${1:-}"; sha="${2:-}"; check "$app" "$sha"
+unit="shotline-deploy-$app"
+if systemctl is-active --quiet "$unit"; then echo "Another $app deploy is running" >&2; exit 3; fi
+systemctl reset-failed "$unit" 2>/dev/null || true
+exec systemd-run --quiet --unit "$unit" --uid shotline --gid shotline \
+  --setenv HOME=/home/shotline --setenv PM2_HOME=/home/shotline/.pm2 \
+  --setenv PATH=/usr/local/bin:/usr/bin:/bin \
+  --setenv COREPACK_HOME=/usr/local/share/corepack \
+  --working-directory /var/www/shotline \
+  --pipe --wait --collect /usr/local/lib/shotline/app-deploy "$app" "$sha"

@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# Deploy one shotline app on the shotline-app VM, rolling back if unhealthy.
+# Installed root-owned at /usr/local/lib/shotline/app-deploy (via instance
+# metadata); started by /usr/local/bin/shotline-deploy as user `shotline`.
+#
+#   app-deploy <backend|frontend> <commit-sha>
+#
+# Same rules as the EC2 script (deploy/ec2/shotline-deploy): code only from
+# GitHub; refuse commits not on origin/main; (backend) wait for running jobs;
+# check out; install; build; pm2 reload; health check; roll back on failure.
+set -euo pipefail
+
+app="${1:-}"; sha="${2:-}"
+case "$app" in backend|frontend) ;; *) echo "usage: app-deploy <backend|frontend> <sha>" >&2; exit 2 ;; esac
+[[ "$sha" =~ ^[0-9a-f]{7,40}$ ]] || { echo "not a commit sha: $sha" >&2; exit 2; }
+
+ROOT=/var/www/shotline
+DIR="$ROOT/$app"
+LOG="$ROOT/deploys.log"
+ECOSYSTEM="$ROOT/ecosystem.config.cjs"
+HEALTH_TRIES="${HEALTH_TRIES:-60}"            # × 2 s
+QUEUE_WAIT_S="${QUEUE_WAIT_S:-600}"
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+if [[ "$app" == backend ]]; then
+  HEALTH_URL=http://127.0.0.1:4000/health
+  apps="shotline-backend,shotline-worker"
+else
+  HEALTH_URL=http://127.0.0.1:3000/
+  apps="shotline-frontend"
+fi
+
+log() { echo "$(date -u +%FT%TZ) [$app] $*" | tee -a "$LOG"; }
+
+[[ -d "$DIR/.git" ]] || { log "refused $sha: $DIR is not cloned yet (see deploy/gcp/README.md)"; exit 5; }
+[[ -f "$DIR/.env" ]] || { log "refused $sha: $DIR/.env is missing"; exit 5; }
+
+exec 9>"$ROOT/.deploy-$app.lock"
+flock -n 9 || { echo "Another $app deploy is running" >&2; exit 3; }
+
+cd "$DIR"
+git fetch --quiet --prune origin
+target="$(git rev-parse --verify "${sha}^{commit}")"
+if ! git merge-base --is-ancestor "$target" origin/main; then
+  log "refused $target: not on origin/main"; exit 4
+fi
+previous="$(git rev-parse HEAD)"
+
+# Reloading the worker interrupts running render/reframe/transcription jobs:
+# wait (up to QUEUE_WAIT_S) until no BullMQ job is active.
+wait_for_idle_jobs() {
+  [[ "$app" == backend ]] || return 0
+  local waited=0 active key
+  while :; do
+    active=0
+    while read -r key; do
+      [[ -n "$key" ]] && active=$((active + $(redis-cli LLEN "$key" 2>/dev/null || echo 0)))
+    done < <(redis-cli --scan --pattern 'bull:*:active' 2>/dev/null)
+    (( active == 0 )) && return 0
+    (( waited >= QUEUE_WAIT_S )) && { log "still $active active job(s) after ${QUEUE_WAIT_S}s; deploying anyway"; return 0; }
+    (( waited == 0 )) && log "waiting for $active active job(s) to finish"
+    sleep 15; waited=$((waited + 15))
+  done
+}
+
+# The Remotion composition the worker renders with (frontend app/remotion).
+# Each frontend commit gets its own bundle; `current` points at the live one.
+# The worker resolves `current` once per render, so switching it never
+# changes a render in progress; older bundles stay for those renders.
+BUNDLES="$ROOT/remotion-bundles"
+KEEP_BUNDLES=4
+
+bundle_composition() {
+  local sha="$1" dir="$BUNDLES/$1"
+  mkdir -p "$BUNDLES"
+  if [[ ! -f "$dir/index.html" ]]; then
+    rm -rf "$dir.tmp"
+    pnpm exec remotion bundle app/remotion/index.tsx --out-dir "$dir.tmp" --log=warn
+    mv "$dir.tmp" "$dir"
+  fi
+  ln -sfn "$dir" "$BUNDLES/current.new" && mv -T "$BUNDLES/current.new" "$BUNDLES/current"
+  log "remotion bundle -> $sha"
+  # Prune: keep the newest KEEP_BUNDLES (never the one `current` points at).
+  local live; live="$(readlink -f "$BUNDLES/current")"
+  ls -1dt "$BUNDLES"/*/ 2>/dev/null | sed 's:/$::' | grep -v -e '/current$' -e '\.tmp$' | tail -n +$((KEEP_BUNDLES + 1)) | while read -r old; do
+    [[ "$(readlink -f "$old")" == "$live" ]] || rm -rf "$old"
+  done
+}
+
+install_commit() {
+  # -B keeps the checkout on `main` (pointing at the deployed commit).
+  git checkout --quiet --force -B main "$1"
+  pnpm install --frozen-lockfile
+  if [[ "$app" == frontend ]]; then
+    NODE_OPTIONS=--max-old-space-size=3072 pnpm run build
+    bundle_composition "$(git rev-parse HEAD)"
+  else
+    pnpm run build
+    # Renders need Chrome Headless Shell; fetch it now, not on the first render.
+    node -e "require('@remotion/renderer').ensureBrowser().then(() => process.exit(0), (e) => { console.error(e.message); process.exit(1); })"
+  fi
+  # startOrReload also starts the apps on the very first deploy.
+  pm2 startOrReload "$ECOSYSTEM" --only "$apps" --update-env
+  pm2 save >/dev/null
+}
+
+healthy() {
+  for _ in $(seq "$HEALTH_TRIES"); do
+    curl -fsS --max-time 3 -o /dev/null "$HEALTH_URL" && return 0
+    sleep 2
+  done
+  return 1
+}
+
+wait_for_idle_jobs
+log "deploying $target (was $previous)"
+if install_commit "$target" && healthy; then
+  log "deployed $target"
+  exit 0
+fi
+
+if [[ "$previous" == "$target" ]]; then
+  log "health check failed for $target; nothing older to roll back to"
+  exit 1
+fi
+log "health check failed for $target; rolling back to $previous"
+pm2 logs "${apps%%,*}" --nostream --lines 30 2>&1 | tail -30 || true
+if install_commit "$previous" && healthy; then
+  log "rolled back to $previous"
+else
+  log "ROLLBACK FAILED: $previous is not healthy either"
+fi
+exit 1
