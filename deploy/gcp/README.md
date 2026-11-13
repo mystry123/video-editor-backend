@@ -66,7 +66,13 @@ sudo -u shotline -H bash -c '
 Write `/var/www/shotline/backend/.env` and `/var/www/shotline/frontend/.env`
 (owner `shotline`, mode 600). Changes from the EC2 values: GCS bucket vars
 instead of `AWS_*`/`S3_BUCKET` (see the backend's `.env.example`),
-`REDIS_HOST=127.0.0.1`, and the reframe URL stays `https://reframe.shotline.in`.
+`REDIS_HOST=127.0.0.1`, the reframe URL stays `https://reframe.shotline.in`,
+and renders run on the worker: `REMOTION_SERVE_URL=/var/www/shotline/remotion-bundles/current`
+(no `REMOTION_AWS_*`, `REMOTION_FUNCTION_NAME` or webhook vars any more).
+
+Deploy the **frontend first**: its deploy builds the Remotion bundle that
+renders use (`remotion-bundles/<sha>`, `current` → the live one; the last 4 are
+kept so running renders keep theirs). Backend deploys pre-download Chrome.
 
 First deploy of each app (also what CI runs):
 

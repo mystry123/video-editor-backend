@@ -62,14 +62,41 @@ wait_for_idle_jobs() {
   done
 }
 
+# The Remotion composition the worker renders with (frontend app/remotion).
+# Each frontend commit gets its own bundle; `current` points at the live one.
+# The worker resolves `current` once per render, so switching it never
+# changes a render in progress; older bundles stay for those renders.
+BUNDLES="$ROOT/remotion-bundles"
+KEEP_BUNDLES=4
+
+bundle_composition() {
+  local sha="$1" dir="$BUNDLES/$1"
+  mkdir -p "$BUNDLES"
+  if [[ ! -f "$dir/index.html" ]]; then
+    rm -rf "$dir.tmp"
+    pnpm exec remotion bundle app/remotion/index.tsx --out-dir "$dir.tmp" --log=warn
+    mv "$dir.tmp" "$dir"
+  fi
+  ln -sfn "$dir" "$BUNDLES/current.new" && mv -T "$BUNDLES/current.new" "$BUNDLES/current"
+  log "remotion bundle -> $sha"
+  # Prune: keep the newest KEEP_BUNDLES (never the one `current` points at).
+  local live; live="$(readlink -f "$BUNDLES/current")"
+  ls -1dt "$BUNDLES"/*/ 2>/dev/null | sed 's:/$::' | grep -v -e '/current$' -e '\.tmp$' | tail -n +$((KEEP_BUNDLES + 1)) | while read -r old; do
+    [[ "$(readlink -f "$old")" == "$live" ]] || rm -rf "$old"
+  done
+}
+
 install_commit() {
   # -B keeps the checkout on `main` (pointing at the deployed commit).
   git checkout --quiet --force -B main "$1"
   pnpm install --frozen-lockfile
   if [[ "$app" == frontend ]]; then
     NODE_OPTIONS=--max-old-space-size=3072 pnpm run build
+    bundle_composition "$(git rev-parse HEAD)"
   else
     pnpm run build
+    # Renders need Chrome Headless Shell; fetch it now, not on the first render.
+    node -e "require('@remotion/renderer').ensureBrowser().then(() => process.exit(0), (e) => { console.error(e.message); process.exit(1); })"
   fi
   # startOrReload also starts the apps on the very first deploy.
   pm2 startOrReload "$ECOSYSTEM" --only "$apps" --update-env
