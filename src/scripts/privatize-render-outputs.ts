@@ -5,30 +5,27 @@
 //   pnpm renders:privatize --apply    # does it
 //
 // For every completed render whose file was stored publicly it:
-//   1. sets the S3 object's ACL to private (its old raw link stops working;
-//      the Shotline link keeps working through a signed URL), and
+//   1. makes the object private (its old raw link stops working; the
+//      Shotline link keeps working through a signed URL): an S3 ACL for
+//      Remotion Lambda outputs, the object ACL on GCS (buckets with uniform
+//      access already control this per bucket and are reported as skipped), and
 //   2. records the file's bucket/key so links no longer depend on the URL.
 // Caption projects that stored the raw render URL get the Shotline link.
 // Safe to run more than once.
 import mongoose from 'mongoose';
-import { PutObjectAclCommand, S3Client } from '@aws-sdk/client-s3';
+import { getAwsClient, type AwsRegion } from '@remotion/lambda-client';
 import { connectDatabase } from '../config/database';
 import { env } from '../config/env';
+import { gcs } from '../config/gcs';
 import { RenderJob } from '../models/RenderJob';
 import { CaptionProject } from '../models/Caption';
-import { ensureShareTokens, outputFields, parseS3Url } from '../services/renderOutput.service';
+import { ensureShareTokens, outputFields, parseStorageUrl } from '../services/renderOutput.service';
 import { logger } from '../utils/logger';
 
 const BATCH = 200;
 
 async function main(): Promise<void> {
   const apply = process.argv.includes('--apply');
-  const accessKeyId = env.remotionAwsAccessKeyID || env.awsAccessKeyId;
-  const secretAccessKey = env.remotionAwsSecretAccessKey || env.awsSecretAccessKey;
-  const s3 = new S3Client({
-    region: env.awsRegion,
-    ...(accessKeyId && secretAccessKey ? { credentials: { accessKeyId, secretAccessKey } } : {}),
-  });
 
   await connectDatabase();
   const counts = { renders: 0, madePrivate: 0, alreadyGoneOrFailed: 0, unparseable: 0, captions: 0 };
@@ -41,14 +38,19 @@ async function main(): Promise<void> {
 
     for await (const job of cursor) {
       counts.renders++;
-      const location = parseS3Url(job.outputUrl);
+      const location = parseStorageUrl(job.outputUrl);
       if (!location) {
         counts.unparseable++;
         continue;
       }
       if (!apply) continue;
       try {
-        await s3.send(new PutObjectAclCommand({ Bucket: location.bucket, Key: location.key, ACL: 'private' }));
+        if (location.provider === 'gcs') {
+          await gcs().bucket(location.bucket).file(location.key).makePrivate();
+        } else {
+          const { client, sdk } = getAwsClient({ region: env.awsRegion as AwsRegion, service: 's3' });
+          await client.send(new sdk.PutObjectAclCommand({ Bucket: location.bucket, Key: location.key, ACL: 'private' }));
+        }
         counts.madePrivate++;
       } catch (error: any) {
         // Deleted by a lifecycle rule, or no permission: report and move on.
@@ -59,7 +61,7 @@ async function main(): Promise<void> {
     }
 
     // Caption projects that kept the raw render URL.
-    const captions = await CaptionProject.find({ renderJobId: { $exists: true }, outputUrl: /amazonaws\.com/ })
+    const captions = await CaptionProject.find({ renderJobId: { $exists: true }, outputUrl: /amazonaws\.com|storage\.googleapis\.com/ })
       .select('_id renderJobId')
       .lean();
     for (const project of captions) {

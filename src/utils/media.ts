@@ -96,16 +96,22 @@ export function isProbeableMedia(mimeType: string | undefined): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * URL prefixes media tools may open: our CDN and our two buckets (both S3 URL
- * styles), plus any extra prefixes in MEDIA_TRUSTED_PREFIXES (comma-separated).
+ * URL prefixes media tools may open: our CDN, our GCS buckets (media and
+ * renders, both URL styles), Remotion Lambda's S3 bucket (renders made there),
+ * plus any extra prefixes in MEDIA_TRUSTED_PREFIXES (comma-separated).
  * ffmpeg follows playlists and can read local files, so it must never be
  * pointed at a URL a user chose.
  */
 function trustedMediaPrefixes(): string[] {
-  const region = env.awsRegion;
   const prefixes: string[] = [];
   if (env.cdnUrl) prefixes.push(`${env.cdnUrl.replace(/\/$/, '')}/`);
-  for (const bucket of [env.s3Bucket, env.remotionBucket].filter(Boolean)) {
+  for (const bucket of [env.gcsMediaBucket, env.gcsRendersBucket].filter(Boolean)) {
+    prefixes.push(`https://storage.googleapis.com/${bucket}/`);
+    prefixes.push(`https://${bucket}.storage.googleapis.com/`);
+  }
+  if (env.remotionBucket) {
+    const region = env.awsRegion;
+    const bucket = env.remotionBucket;
     prefixes.push(`https://${bucket}.s3.${region}.amazonaws.com/`);
     prefixes.push(`https://${bucket}.s3.amazonaws.com/`);
     prefixes.push(`https://s3.${region}.amazonaws.com/${bucket}/`);

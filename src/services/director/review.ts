@@ -8,8 +8,7 @@
 // brief and, when it isn't good enough, writes notes for the specialists
 // who need to redo their part.
 
-import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { renderStillOnLambda, type AwsRegion } from '@remotion/lambda-client';
+import { getAwsClient, renderStillOnLambda, type AwsRegion } from '@remotion/lambda-client';
 import { env } from '../../config/env';
 import { logger } from '../../utils/logger';
 import { uploadBufferToS3 } from '../storage.service';
@@ -63,16 +62,6 @@ export function storyboardTimes(edit: CompiledEdit): StoryboardFrame[] {
   return merged.filter((_, i) => keep.has(i));
 }
 
-let remotionS3: S3Client | null = null;
-function bucketClient(): S3Client {
-  if (!remotionS3) {
-    const accessKeyId = env.remotionAwsAccessKeyID || env.awsAccessKeyId;
-    const secretAccessKey = env.remotionAwsSecretAccessKey || env.awsSecretAccessKey;
-    remotionS3 = new S3Client({ region: env.awsRegion, ...(accessKeyId && secretAccessKey ? { credentials: { accessKeyId, secretAccessKey } } : {}) });
-  }
-  return remotionS3;
-}
-
 export type StillRenderer = (edit: CompiledEdit, frame: number, scale: number) => Promise<Buffer>;
 
 const lambdaStill: StillRenderer = async (edit, frame, scale) => {
@@ -90,7 +79,9 @@ const lambdaStill: StillRenderer = async (edit, frame, scale) => {
     maxRetries: 1,
     timeoutInMilliseconds: 90_000,
   });
-  const object = await bucketClient().send(new GetObjectCommand({ Bucket: out.bucketName, Key: out.outKey }));
+  // The still is in Remotion's S3 bucket; read it with Remotion's own client.
+  const { client, sdk } = getAwsClient({ region: env.awsRegion as AwsRegion, service: 's3' });
+  const object = await client.send(new sdk.GetObjectCommand({ Bucket: out.bucketName, Key: out.outKey }));
   return Buffer.from(await object.Body!.transformToByteArray());
 };
 

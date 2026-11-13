@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { findSvgActiveContent, matchesDeclaredType, sniffKind } from '../../src/utils/fileSniff';
+import { generateKeyPairSync } from 'crypto';
+import { Storage } from '@google-cloud/storage';
 import { contentDispositionFor, createPresignedUpload } from '../../src/services/storage.service';
+import { setGcsClient } from '../../src/config/gcs';
 
 const hex = (h: string) => Buffer.from(h.replace(/\s/g, ''), 'hex');
 
@@ -50,13 +53,24 @@ describe('SVG Content-Disposition', () => {
   });
 
   it('is signed into the presigned POST, so the browser must send it', async () => {
+    // Sign locally with a throwaway key (the VM signs through IAM signBlob).
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
+    setGcsClient(new Storage({ projectId: 'test', credentials: { client_email: 'signer@test.iam.gserviceaccount.com', private_key: privateKey } }));
+    try {
     const svg = await createPresignedUpload({ key: 'users/u/uploads/a.svg', contentType: 'image/svg+xml', maxSize: 10 });
     expect(svg.fields['Content-Disposition']).toBe('attachment');
-    const policy = JSON.parse(Buffer.from(svg.fields.Policy, 'base64').toString('utf8'));
+    expect(svg.url).toBe('https://storage.googleapis.com/test-bucket/');
+    expect(svg.fields.key).toBe('users/u/uploads/a.svg');
+    expect(svg.fields['x-goog-signature']).toMatch(/^[0-9a-f]+$/);
+    const policy = JSON.parse(Buffer.from(svg.fields.policy, 'base64').toString('utf8'));
     expect(policy.conditions).toContainEqual({ 'Content-Disposition': 'attachment' });
     expect(policy.conditions).toContainEqual({ 'Content-Type': 'image/svg+xml' });
+    expect(policy.conditions).toContainEqual(['content-length-range', 0, 10]);
 
     const png = await createPresignedUpload({ key: 'users/u/uploads/a.png', contentType: 'image/png', maxSize: 10 });
     expect(png.fields['Content-Disposition']).toBeUndefined();
+    } finally {
+      setGcsClient(null);
+    }
   });
 });
