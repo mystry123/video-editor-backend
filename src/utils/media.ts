@@ -96,18 +96,35 @@ export function isProbeableMedia(mimeType: string | undefined): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * URL prefixes media tools may open: our CDN, our GCS buckets (media and
- * renders, both URL styles), plus any extra prefixes in MEDIA_TRUSTED_PREFIXES (comma-separated).
+ * URL prefixes media tools may open: our CDN, the active storage provider's
+ * buckets (media and renders: GCS or S3, every URL style), Remotion Lambda's
+ * bucket when renders run there, plus any extra prefixes in
+ * MEDIA_TRUSTED_PREFIXES (comma-separated).
  * ffmpeg follows playlists and can read local files, so it must never be
  * pointed at a URL a user chose.
  */
+function s3Prefixes(bucket: string): string[] {
+  const region = env.awsRegion;
+  return [
+    `https://${bucket}.s3.${region}.amazonaws.com/`,
+    `https://${bucket}.s3.amazonaws.com/`,
+    `https://s3.${region}.amazonaws.com/${bucket}/`,
+    `https://s3.amazonaws.com/${bucket}/`,
+  ];
+}
+
 function trustedMediaPrefixes(): string[] {
   const prefixes: string[] = [];
   if (env.cdnUrl) prefixes.push(`${env.cdnUrl.replace(/\/$/, '')}/`);
-  for (const bucket of [env.gcsMediaBucket, env.gcsRendersBucket].filter(Boolean)) {
-    prefixes.push(`https://storage.googleapis.com/${bucket}/`);
-    prefixes.push(`https://${bucket}.storage.googleapis.com/`);
+  if (env.storageProvider === 's3') {
+    for (const bucket of [env.s3Bucket, env.s3RendersBucket].filter(Boolean)) prefixes.push(...s3Prefixes(bucket));
+  } else {
+    for (const bucket of [env.gcsMediaBucket, env.gcsRendersBucket].filter(Boolean)) {
+      prefixes.push(`https://storage.googleapis.com/${bucket}/`);
+      prefixes.push(`https://${bucket}.storage.googleapis.com/`);
+    }
   }
+  if (env.renderProvider === 'lambda' && env.remotionBucket) prefixes.push(...s3Prefixes(env.remotionBucket));
   for (const extra of (process.env.MEDIA_TRUSTED_PREFIXES || '').split(',')) {
     if (extra.trim()) prefixes.push(extra.trim());
   }

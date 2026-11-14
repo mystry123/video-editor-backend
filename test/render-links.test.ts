@@ -101,10 +101,10 @@ describe('render links', () => {
     expect(one.body).toMatchObject({ name: 'My captions', outputUrl: link });
   });
 
-  it('parses GCS URLs; S3 ones are not ours any more', () => {
-    expect(parseStorageUrl(OUTPUT)).toEqual({ bucket: 'test-renders', key: 'renders/r1/u/j.mp4' });
-    expect(parseStorageUrl('https://test-renders.storage.googleapis.com/a/b.mp4')).toEqual({ bucket: 'test-renders', key: 'a/b.mp4' });
-    expect(parseStorageUrl('gs://test-renders/a/b.mp4')).toEqual({ bucket: 'test-renders', key: 'a/b.mp4' });
+  it('parses GCS URLs; S3 ones in buckets this deploy does not have are not ours', () => {
+    expect(parseStorageUrl(OUTPUT)).toEqual({ provider: 'gcs', bucket: 'test-renders', key: 'renders/r1/u/j.mp4' });
+    expect(parseStorageUrl('https://test-renders.storage.googleapis.com/a/b.mp4')).toEqual({ provider: 'gcs', bucket: 'test-renders', key: 'a/b.mp4' });
+    expect(parseStorageUrl('gs://test-renders/a/b.mp4')).toEqual({ provider: 'gcs', bucket: 'test-renders', key: 'a/b.mp4' });
     expect(parseStorageUrl('https://storage.googleapis.com/only-bucket')).toBeNull();
     expect(parseStorageUrl(LAMBDA_OUTPUT)).toBeNull();
   });

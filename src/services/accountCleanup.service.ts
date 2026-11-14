@@ -20,8 +20,8 @@ import { UserLoginHistory } from '../models/UserLoginHistory';
 import { Session } from '../models/Session';
 import { Webhook } from '../models/Webhook';
 import { WebhookLog } from '../models/WebhookLog';
-import { deleteS3Prefix } from './storage.service';
-import { rendersBucket } from '../config/gcs';
+import { deleteS3Prefix, hasStorageBucket } from './storage.service';
+import { deleteLambdaRender, isLambdaRenderId } from './lambdaRender.service';
 import { logger } from '../utils/logger';
 import { getTtsProviderById, type TtsProviderId } from './tts';
 
@@ -44,8 +44,22 @@ export async function purgeUserData(
   // 1. Files in storage first, while the documents that point at them still exist.
   const s3Objects = await deleteS3Prefix(`users/${userId}/`);
 
-  // Their renders: every output is at renders/<userId>/ in the renders bucket.
-  const renderOutputs = env.gcsRendersBucket ? await deleteS3Prefix(`renders/${userId}/`, rendersBucket()) : 0;
+  // Their renders: every worker-made output is at renders/<userId>/ in the
+  // renders bucket; Lambda renders are deleted one by one (output and
+  // Remotion's working files) when this deploy can reach Lambda.
+  let renderOutputs = hasStorageBucket('renders') ? await deleteS3Prefix(`renders/${userId}/`, 'renders') : 0;
+  if (env.renderProvider === 'lambda') {
+    const lambdaRenders = await RenderJob.find({ userId: owner, renderId: { $exists: true, $ne: null } })
+      .select('renderId bucketName')
+      .lean();
+    for (const render of lambdaRenders) {
+      const bucketName = render.bucketName || env.remotionBucket;
+      if (!isLambdaRenderId(render.renderId) || !bucketName) continue;
+      // Anything but "already gone" fails the job so it retries.
+      await deleteLambdaRender(render.renderId, bucketName);
+      renderOutputs++;
+    }
+  }
 
   // 2. Documents. Children before parents so a crash mid-way leaves nothing orphaned
   //    that the next attempt can't find.
