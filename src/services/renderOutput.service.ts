@@ -1,19 +1,26 @@
 // services/renderOutput.service.ts
 //
-// Render outputs are private objects in the renders bucket (GCS_RENDERS_BUCKET).
+// Render outputs are private objects in a renders bucket: GCS_RENDERS_BUCKET
+// or S3_RENDERS_BUCKET for renders made on the worker, REMOTION_BUCKET (S3)
+// for renders made on Remotion Lambda.
 // Users never see the bucket: every API response carries a stable Shotline link,
 //   <PUBLIC_API_URL>/r/<jobId>?t=<shareToken>
 // which redirects to a short-lived signed URL. Anyone with the link can
 // open it (so links in emails, Zapier and webhooks work); deleting the render
 // deletes the file and the link stops working.
 //
-// Renders from before the move to GCP (Nov 2026) point at S3 in an AWS account
-// that no longer exists; they have no stored output here and get no link.
+// Each output is signed and deleted where it lives, whatever the providers are
+// now, so renders keep their links after a provider switch. S3 outputs count
+// only in buckets this deploy is configured with: renders from before the move
+// to GCP (Nov 2026) point at an AWS account that no longer exists and get no link.
 
 import crypto from 'crypto';
+import { DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { RenderJob } from '../models/RenderJob';
 import { env } from '../config/env';
 import { gcs, parseGcsUrl } from '../config/gcs';
+import { ownS3Buckets, parseS3Url, s3ForBucket } from '../config/aws';
 import { logger } from '../utils/logger';
 
 const PRESIGN_TTL_SECONDS = 60 * 60;
@@ -24,11 +31,15 @@ export function newShareToken(): string {
   return crypto.randomBytes(24).toString('base64url');
 }
 
-export type StorageLocation = { bucket: string; key: string };
+export type StorageLocation = { provider: 'gcs' | 's3'; bucket: string; key: string };
 
-/** Where a stored render lives (a GCS URL or gs://), or null. */
+/** Where a stored render lives: a GCS URL (or gs://), or an S3 URL in one of our buckets; else null. */
 export function parseStorageUrl(url: string | undefined): StorageLocation | null {
-  return parseGcsUrl(url);
+  const onGcs = parseGcsUrl(url);
+  if (onGcs) return { provider: 'gcs', ...onGcs };
+  const onS3 = parseS3Url(url);
+  if (onS3 && ownS3Buckets().includes(onS3.bucket)) return { provider: 's3', ...onS3 };
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -86,10 +97,10 @@ const presignCache = new Map<string, { url: string; expiresAt: number }>();
 type StoredOutput = { outputUrl?: string; outputBucket?: string; outputKey?: string };
 
 function outputLocation(job: StoredOutput): StorageLocation | null {
-  // Only GCS outputs are ours; old S3 (Lambda) outputs are gone with that account.
+  // The URL says which cloud; the stored bucket/key (when present) say where.
   const fromUrl = parseStorageUrl(job.outputUrl);
   if (!fromUrl) return null;
-  return job.outputBucket && job.outputKey ? { bucket: job.outputBucket, key: job.outputKey } : fromUrl;
+  return job.outputBucket && job.outputKey ? { provider: fromUrl.provider, bucket: job.outputBucket, key: job.outputKey } : fromUrl;
 }
 
 /** A short-lived URL for the render's file, or null if it has no stored output. */
@@ -105,15 +116,28 @@ export async function presignOutput(
 
   const extension = job.outputFormat || location.key.split('.').pop() || 'mp4';
   const disposition = `attachment; filename="shotline-${job._id}.${extension}"`;
-  const [url] = await gcs()
-    .bucket(location.bucket)
-    .file(location.key)
-    .getSignedUrl({
-      version: 'v4',
-      action: 'read',
-      expires: Date.now() + PRESIGN_TTL_SECONDS * 1000,
-      ...(download ? { responseDisposition: disposition } : {}),
-    });
+  let url: string;
+  if (location.provider === 's3') {
+    url = await getSignedUrl(
+      s3ForBucket(location.bucket),
+      new GetObjectCommand({
+        Bucket: location.bucket,
+        Key: location.key,
+        ...(download ? { ResponseContentDisposition: disposition } : {}),
+      }),
+      { expiresIn: PRESIGN_TTL_SECONDS }
+    );
+  } else {
+    [url] = await gcs()
+      .bucket(location.bucket)
+      .file(location.key)
+      .getSignedUrl({
+        version: 'v4',
+        action: 'read',
+        expires: Date.now() + PRESIGN_TTL_SECONDS * 1000,
+        ...(download ? { responseDisposition: disposition } : {}),
+      });
+  }
   if (presignCache.size > 10_000) presignCache.clear();
   presignCache.set(cacheKey, { url, expiresAt: Date.now() + PRESIGN_TTL_SECONDS * 1000 });
   return url;
@@ -126,7 +150,11 @@ export async function deleteOutput(job: { _id: any } & StoredOutput): Promise<vo
   presignCache.delete(`${job._id}:v`);
   if (!location) return;
   try {
-    await gcs().bucket(location.bucket).file(location.key).delete({ ignoreNotFound: true });
+    if (location.provider === 's3') {
+      await s3ForBucket(location.bucket).send(new DeleteObjectCommand({ Bucket: location.bucket, Key: location.key }));
+    } else {
+      await gcs().bucket(location.bucket).file(location.key).delete({ ignoreNotFound: true });
+    }
   } catch (error: any) {
     logger.warn('Failed to delete render output', { jobId: String(job._id), error: error?.message });
   }

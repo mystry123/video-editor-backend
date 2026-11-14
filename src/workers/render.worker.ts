@@ -1,6 +1,11 @@
 // workers/render.worker.ts
 //
-// Renders a video here, on the worker (see services/render.service.ts):
+// RENDER_PROVIDER=lambda: starts the render on Remotion Lambda
+// (services/lambdaRender.service.ts), then either returns (webhook mode:
+// Remotion calls us when it ends) or polls Lambda until it ends.
+//
+// RENDER_PROVIDER=local (default): renders the video here, on the worker
+// (see services/render.service.ts):
 // claim the job, render to a temp file while saving progress, upload it to the
 // renders bucket, then complete it through the lifecycle service, which
 // charges, notifies and makes the link. Cancelling the job (or passing the
@@ -22,11 +27,14 @@ import {
 import {
   RENDER_DEADLINE_MS,
   RENDER_TIMEOUT_MESSAGE,
+  checkRender,
   completeRender,
   describeRenderError,
   failRender,
 } from '../services/renderLifecycle.service';
-import { createWorker, createJobLogger } from '../utils/worker.utils';
+import { isLambdaRenderId, startLambdaRender, webhookMode } from '../services/lambdaRender.service';
+import { createWorker, createJobLogger, retryWithBackoff, sleep } from '../utils/worker.utils';
+import { isFinalAttempt } from '../utils/jobs';
 import { env } from '../config/env';
 
 interface RenderJobData {
@@ -34,9 +42,109 @@ interface RenderJobData {
 }
 
 /** How often progress is saved, cancel/deadline are checked, and the deadline (tests shorten them) */
-export const renderTimings = { progressEveryMs: 2000, watchEveryMs: 5000, deadlineMs: RENDER_DEADLINE_MS };
+export const renderTimings = { progressEveryMs: 2000, watchEveryMs: 5000, deadlineMs: RENDER_DEADLINE_MS, lambdaPollEveryMs: 2000 };
 
 export async function processRenderJob(job: Job<RenderJobData>) {
+  return env.renderProvider === 'lambda' ? processLambdaRender(job) : processLocalRender(job);
+}
+
+// ============================================================================
+// Remotion Lambda
+// ============================================================================
+
+/** Poll mode: wait here until Lambda reports the render ended (or the deadline passes). */
+async function pollUntilDone(jobId: string, log: ReturnType<typeof createJobLogger>) {
+  const deadline = Date.now() + RENDER_DEADLINE_MS + 60_000;
+  while (Date.now() < deadline) {
+    await sleep(renderTimings.lambdaPollEveryMs);
+    const job = await RenderJob.findById(jobId).select('status renderId bucketName startedAt').lean();
+    if (!job || job.status !== 'rendering') {
+      log.info(`Stopped polling: ${job?.status ?? 'deleted'}`);
+      return { ended: job?.status ?? 'deleted' };
+    }
+    try {
+      const outcome = await checkRender(job);
+      if (outcome !== 'rendering') {
+        log.info(`Render ${outcome}`);
+        return { ended: outcome };
+      }
+    } catch (err: any) {
+      log.warn(`Poll error: ${err.message}`);
+      await sleep(renderTimings.lambdaPollEveryMs);
+    }
+  }
+  await failRender(jobId, RENDER_TIMEOUT_MESSAGE, 'render_timeout');
+  return { ended: 'timeout' };
+}
+
+export async function processLambdaRender(job: Job<RenderJobData>) {
+  const { jobId } = job.data;
+  const log = createJobLogger('Render', jobId);
+
+  const dbJob = await RenderJob.findById(jobId).select('status renderId bucketName startedAt');
+  if (!dbJob) {
+    log.warn('Not found');
+    return { skipped: true, reason: 'not_found' };
+  }
+  if (['completed', 'failed', 'cancelled'].includes(dbJob.status)) {
+    return { skipped: true, reason: dbJob.status };
+  }
+
+  // Already started on Lambda (a resumed job): check on it instead of starting again.
+  if (dbJob.status === 'rendering' && isLambdaRenderId(dbJob.renderId) && dbJob.bucketName) {
+    log.info(`Resuming: ${dbJob.renderId}`);
+    if (webhookMode()) return { checked: await checkRender(dbJob) };
+    return await pollUntilDone(jobId, log);
+  }
+
+  // Claim it. "rendering" without a Lambda renderId means an earlier attempt
+  // died while starting the render (or it was rendering locally before a
+  // provider switch): take it over instead of leaving it stuck.
+  const claimed = await RenderJob.findOneAndUpdate(
+    {
+      _id: jobId,
+      $or: [
+        { status: { $in: ['pending', 'queued'] } },
+        { status: 'rendering', renderId: null },
+        { status: 'rendering', renderId: { $regex: /^local-/ } },
+      ],
+    },
+    { status: 'rendering', startedAt: new Date(), renderId: null, progress: 0 },
+    { new: true, select: '+inputProps +webhookUrl' }
+  );
+  if (!claimed) {
+    log.warn('Claim failed');
+    return { skipped: true, reason: 'claim_failed' };
+  }
+
+  try {
+    const { renderId, bucketName } = await retryWithBackoff(() => startLambdaRender(claimed), {
+      maxRetries: 3,
+      initialDelay: 2000,
+      onRetry: (err, attempt) => log.warn(`Start retry ${attempt}: ${err.message}`),
+    });
+    log.info(`Started on Lambda: ${renderId}`);
+    await RenderJob.updateOne(
+      { _id: jobId, status: 'rendering' },
+      { renderId, bucketName, serveUrl: env.remotionServeUrl, lastProgressAt: new Date() }
+    );
+  } catch (err: any) {
+    log.error(`Error (attempt ${job.attemptsMade + 1}): ${err.message}`);
+    // Earlier attempts leave the job "rendering" (no renderId) so the retry takes it over.
+    if (isFinalAttempt(job)) await failRender(jobId, describeRenderError(err.message), 'render_failed');
+    throw err;
+  }
+
+  // Webhook mode: Remotion tells us when it's done; free this slot now.
+  if (webhookMode()) return { started: true };
+  return await pollUntilDone(jobId, log);
+}
+
+// ============================================================================
+// Local (@remotion/renderer on this worker)
+// ============================================================================
+
+export async function processLocalRender(job: Job<RenderJobData>) {
   const { jobId } = job.data;
   const log = createJobLogger('Render', jobId);
 
@@ -147,8 +255,10 @@ const renderWorker = createWorker({
   onFinalFailure: async (job) => {
     await failRender(job.data.jobId, 'The render stopped unexpectedly. Try again.', 'render_crashed');
   },
-  // A render uses every core it gets; run them one (or a few) at a time.
-  concurrency: env.renderConcurrency,
+  // Local: a render uses every core it gets; run them one (or a few) at a
+  // time. Lambda: webhook mode only holds a slot while starting a render;
+  // poll mode holds it for the whole render.
+  concurrency: env.renderProvider === 'lambda' ? (webhookMode() ? 20 : 3) : env.renderConcurrency,
   lockDuration: 180000,
 });
 

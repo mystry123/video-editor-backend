@@ -1,7 +1,9 @@
 // services/render.service.ts
 //
-// Renders run on the worker with @remotion/renderer and a headless Chrome
-// (Remotion Lambda went with the AWS account in Nov 2026). The composition
+// RENDER_PROVIDER=local (the default): renders run on the worker with
+// @remotion/renderer and a headless Chrome. (RENDER_PROVIDER=lambda runs them
+// on Remotion Lambda instead: services/lambdaRender.service.ts; the director's
+// storyboard stills still render here.) The composition
 // ("VideoEditor") comes from a bundle of the frontend's app/remotion entry:
 // the frontend deploy writes it to a versioned directory and points
 // REMOTION_SERVE_URL's `current` link at it. Each render resolves that link
@@ -22,7 +24,7 @@ import {
   selectComposition,
 } from '@remotion/renderer';
 import { env } from '../config/env';
-import { rendersBucket } from '../config/gcs';
+import { uploadRenderFile } from './storage.service';
 import { logger } from '../utils/logger';
 
 export const COMPOSITION_ID = 'VideoEditor';
@@ -193,18 +195,13 @@ export function localOutputPath(jobId: string, outputFormat: string): string {
 }
 
 /**
- * Uploads a finished render to the (private) renders bucket and returns its
+ * Uploads a finished render to the (private) renders bucket of the active
+ * storage provider and returns its
  * storage URL; users only ever get /r/<id> links to it (renderOutput.service).
  */
 export async function uploadRenderOutput(localPath: string, job: { _id: any; userId: any; outputFormat: string }): Promise<string> {
   const key = `renders/${job.userId}/${job._id}.${job.outputFormat}`;
-  const bucket = rendersBucket();
-  await bucket.upload(localPath, {
-    destination: key,
-    resumable: true,
-    metadata: { contentType: CONTENT_TYPE_BY_FORMAT[job.outputFormat] || 'application/octet-stream' },
-  });
-  return `https://storage.googleapis.com/${bucket.name}/${key}`;
+  return uploadRenderFile(localPath, key, CONTENT_TYPE_BY_FORMAT[job.outputFormat] || 'application/octet-stream');
 }
 
 // ---------------------------------------------------------------------------

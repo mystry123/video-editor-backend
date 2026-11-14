@@ -2,11 +2,16 @@ import { Router, type Router as ExpressRouter } from 'express';
 import { requireAuth } from '../middleware/auth.middleware';
 import { validate } from '../middleware/validate.middleware';
 import * as webhookController from '../controllers/webhook.controller';
+import { handleRemotionWebhook } from '../controllers/remotionWebhook.controller';
 import { createWebhookSchema, updateWebhookSchema } from '../validators/webhook.validator';
 
 const router: ExpressRouter = Router();
 
-// All webhook routes require authentication
+// Remotion Lambda's render webhook: no user auth, verified by its signature
+// (404 unless RENDER_PROVIDER=lambda with REMOTION_WEBHOOK_URL/SECRET set).
+router.post('/remotion', handleRemotionWebhook);
+
+// All other webhook routes require authentication
 router.use(requireAuth);
 
 // Secret that signs deliveries to a render's own webhookUrl (before /:id).

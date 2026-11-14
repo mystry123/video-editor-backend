@@ -12,7 +12,9 @@ import { Transcription } from '../models/Transcription';
 import { ACTIVE_CAPTION_STATES, CaptionProject } from '../models/Caption';
 import { UsageEntry } from '../models/Usage';
 import { releaseUsage, settleUsage } from './usage.service';
-import { failRender } from './renderLifecycle.service';
+import { checkRender, failRender } from './renderLifecycle.service';
+import { isLambdaRenderId, webhookMode } from './lambdaRender.service';
+import { env } from '../config/env';
 import { File } from '../models/File';
 import {
   getCaptionQueue,
@@ -37,6 +39,8 @@ const LOST_ENQUEUE_AFTER_MS = 2 * MINUTE;
 const ABANDONED_AFTER_MS = 2 * 60 * MINUTE;
 /** Renders started this recently are worth starting over after a worker died. */
 const RESUMABLE_RENDER_MS = 60 * MINUTE;
+/** Lambda renders that can still be checked on (Remotion keeps progress this long). */
+const RESUMABLE_LAMBDA_RENDER_MS = 2 * 60 * MINUTE;
 /** Max records handled per category per run, so one run stays short. */
 const BATCH = 50;
 
@@ -67,17 +71,46 @@ async function sweepRenders(counts: Record<string, number>) {
     counts.rendersRequeued = (counts.rendersRequeued || 0) + 1;
   }
 
-  // "rendering" but nothing has updated it for a while: the worker saves
-  // progress every few seconds, so the worker rendering it died. BullMQ
-  // usually re-runs it by itself; if it didn't, queue it again (the worker
-  // starts the render over), or fail it when it's too old to be worth it.
-  const stale = await RenderJob.find({ status: 'rendering', updatedAt: { $lt: ago(STUCK_AFTER_MS) } })
-    .select('_id status startedAt')
+  // "rendering" but nothing has updated it for a while.
+  // - Local renders: the worker saves progress every few seconds, so the
+  //   worker rendering it died. BullMQ usually re-runs it by itself; if it
+  //   didn't, queue it again (the worker starts the render over), or fail it
+  //   when it's too old to be worth it.
+  // - Lambda renders in webhook mode: quiet between progress reads is normal,
+  //   so ask Lambda directly after 2 minutes (covers a lost webhook). In poll
+  //   mode the worker polling it died: queue it again to resume polling.
+  const lambda = env.renderProvider === 'lambda';
+  const viaWebhook = webhookMode();
+  const stale = await RenderJob.find({ status: 'rendering', updatedAt: { $lt: ago(viaWebhook ? 2 * MINUTE : STUCK_AFTER_MS) } })
+    .select('_id status renderId bucketName startedAt updatedAt')
     .limit(BATCH)
     .lean();
   for (const r of stale) {
     const id = String(r._id);
     if (await hasLiveJob(queue, `render-${id}`)) continue;
+    if (lambda && isLambdaRenderId(r.renderId)) {
+      const resumable = r.startedAt && r.startedAt > ago(RESUMABLE_LAMBDA_RENDER_MS);
+      if (resumable && viaWebhook) {
+        try {
+          await checkRender(r);
+          counts.rendersChecked = (counts.rendersChecked || 0) + 1;
+        } catch (error: any) {
+          logger.warn('[Maintenance] Render check failed', { jobId: id, error: error.message });
+        }
+        continue;
+      }
+      if (resumable) {
+        await enqueueJob(queue, 'render', { jobId: id }, { jobId: `render-${id}` });
+        counts.rendersResumed = (counts.rendersResumed || 0) + 1;
+        continue;
+      }
+      await failRender(id, 'The render stopped unexpectedly. Try again.', 'render_lost');
+      counts.rendersFailed = (counts.rendersFailed || 0) + 1;
+      continue;
+    }
+    // Local renders (and Lambda renders that never got a render id) are only
+    // stuck after the usual quiet time.
+    if (r.updatedAt && r.updatedAt > ago(STUCK_AFTER_MS)) continue;
     const resumable = r.startedAt && r.startedAt > ago(RESUMABLE_RENDER_MS);
     if (resumable) {
       await enqueueJob(queue, 'render', { jobId: id }, { jobId: `render-${id}` });

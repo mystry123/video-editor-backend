@@ -112,7 +112,7 @@ export function prepareLottie(bytes: Buffer): LottieInfo {
   if (bytes[0] === 0x50 && bytes[1] === 0x4b) ({ data, name } = fromDotLottie(new Uint8Array(bytes)));
   else {
     try {
-      data = JSON.parse(bytes.toString('utf8').replace(/^﻿/, ''));
+      data = JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/, ''));
     } catch {
       throw bad();
     }

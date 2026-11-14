@@ -293,7 +293,7 @@ export async function directEdit(ctx: EditContext) {
     if (Date.now() - watchedAt > (round === 1 ? HARD_STOP_MS : REVIEW_BUDGET_MS)) break;
     await report('reviewing', round === 1 ? 'Director is watching the draft' : `Director is checking revision ${round - 1}`);
     let review: Review;
-    let frames: StoryboardFrame[] = [];
+    let frames: StoryboardFrame[];
     try {
       frames = await renderStoryboard(edit, String(user._id), key, round);
       review = await reviewDraft({ brief, request: input.request, edit, frames, problems, round });

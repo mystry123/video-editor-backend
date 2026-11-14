@@ -7,6 +7,21 @@ if (process.env.NODE_ENV !== 'test') dotenv.config();
 const DEV_JWT_SECRET = 'your-super-secret-jwt-key-change-in-production';
 const DEV_JWT_REFRESH_SECRET = 'your-super-secret-refresh-key-change-in-production';
 
+export const STORAGE_PROVIDERS = ['gcs', 's3'] as const;
+export const RENDER_PROVIDERS = ['local', 'lambda'] as const;
+export type StorageProvider = (typeof STORAGE_PROVIDERS)[number];
+export type RenderProvider = (typeof RENDER_PROVIDERS)[number];
+
+/** The media bucket's public URL when CDN_URL isn't set */
+function defaultCdnUrl(source: NodeJS.ProcessEnv = process.env): string {
+  if (source.CDN_URL) return source.CDN_URL.replace(/\/+$/, '');
+  const provider = (source.STORAGE_PROVIDER || 'gcs').trim().toLowerCase();
+  if (provider === 's3') {
+    return source.S3_BUCKET && source.AWS_REGION ? `https://${source.S3_BUCKET}.s3.${source.AWS_REGION}.amazonaws.com` : '';
+  }
+  return source.GCS_MEDIA_BUCKET ? `https://storage.googleapis.com/${source.GCS_MEDIA_BUCKET}` : '';
+}
+
 export const env = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: parseInt(process.env.PORT || '3000', 10),
@@ -46,16 +61,34 @@ export const env = {
   facebookAppSecret: process.env.FACEBOOK_APP_SECRET || '',
   facebookCallbackUrl: process.env.FACEBOOK_CALLBACK_URL || 'http://localhost:3000/api/v1/auth/facebook/callback',
   
-  // Google Cloud Storage. Credentials come from Application Default
-  // Credentials (the VM's service account; locally `gcloud auth
-  // application-default login --impersonate-service-account=...`), never keys.
+  // Which cloud holds media and render outputs, and where renders run.
+  // Defaults: Google Cloud Storage and the in-process renderer on the worker.
+  // See checkProviders() below for what each choice needs.
+  storageProvider: (process.env.STORAGE_PROVIDER || 'gcs').trim().toLowerCase() as StorageProvider,
+  renderProvider: (process.env.RENDER_PROVIDER || 'local').trim().toLowerCase() as RenderProvider,
+
+  // Google Cloud Storage (STORAGE_PROVIDER=gcs). Credentials come from
+  // Application Default Credentials (the VM's service account; locally `gcloud
+  // auth application-default login --impersonate-service-account=...`), never keys.
   gcpProjectId: process.env.GCP_PROJECT_ID || process.env.VERTEX_PROJECT || 'shotline-511017',
   /** Uploads, imports, generated media. Publicly readable. */
   gcsMediaBucket: process.env.GCS_MEDIA_BUCKET || '',
   /** Render outputs. Private: served through signed URLs only. */
   gcsRendersBucket: process.env.GCS_RENDERS_BUCKET || '',
+
+  // AWS (STORAGE_PROVIDER=s3 and/or RENDER_PROVIDER=lambda). Keys are
+  // optional: without them the AWS SDK's default credential chain is used
+  // (an instance role, AWS_PROFILE, ...).
+  awsRegion: process.env.AWS_REGION || '',
+  awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
+  awsSecretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
+  /** S3: uploads, imports, generated media. Publicly readable (or behind CDN_URL). */
+  s3Bucket: process.env.S3_BUCKET || '',
+  /** S3: render outputs made on the worker (RENDER_PROVIDER=local). Private. */
+  s3RendersBucket: process.env.S3_RENDERS_BUCKET || '',
+
   /** Public base URL of the media bucket (a CDN in front of it, or the bucket itself) */
-  cdnUrl: (process.env.CDN_URL || (process.env.GCS_MEDIA_BUCKET ? `https://storage.googleapis.com/${process.env.GCS_MEDIA_BUCKET}` : '')).replace(/\/+$/, ''),
+  cdnUrl: defaultCdnUrl(),
 
   apiBaseUrl: process.env.API_BASE_URL || 'http://localhost:3000',
   
@@ -76,19 +109,39 @@ export const env = {
 
   
   
-  // Remotion: renders run on the worker (@remotion/renderer + headless Chrome).
-  // The composition bundle: a local directory (the frontend deploy writes
-  // /var/www/shotline/remotion-bundles/<sha> and points `current` at it) or an
-  // http(s) URL of a bundle. Resolved once per render, so a deploy never
-  // changes a render that is already running.
+  // Remotion. The composition bundle ("VideoEditor", from the frontend's
+  // app/remotion entry):
+  // - RENDER_PROVIDER=local: a local directory (the frontend deploy writes
+  //   /var/www/shotline/remotion-bundles/<sha> and points `current` at it) or
+  //   an http(s) URL of a bundle. Resolved once per render, so a deploy never
+  //   changes a render that is already running.
+  // - RENDER_PROVIDER=lambda: the URL of a Remotion site deployed to S3.
   remotionServeUrl: process.env.REMOTION_SERVE_URL || '',
-  // Renders one worker runs at once. Each uses every core it is given.
+  // Renders one worker runs at once (local). Each uses every core it is given.
   renderConcurrency: Math.max(1, Number(process.env.RENDER_CONCURRENCY) || 1),
   // Browser tabs one render uses (Remotion's `concurrency`); empty = Remotion's
   // default (half the cores).
   remotionConcurrency: process.env.REMOTION_CONCURRENCY ? Number(process.env.REMOTION_CONCURRENCY) : null,
   // A render that hasn't finished this long after starting is stopped and failed.
   renderDeadlineMs: Math.max(5, Number(process.env.RENDER_DEADLINE_MINUTES) || 45) * 60_000,
+
+  // Remotion Lambda (RENDER_PROVIDER=lambda). Remotion reads
+  // REMOTION_AWS_ACCESS_KEY_ID/SECRET (or AWS_ACCESS_KEY_ID/SECRET) itself.
+  remotionAwsAccessKeyID: process.env.REMOTION_AWS_ACCESS_KEY_ID || '',
+  remotionAwsSecretAccessKey: process.env.REMOTION_AWS_SECRET_ACCESS_KEY || '',
+  /** An AWS profile Remotion may use instead of keys (REMOTION_AWS_PROFILE or AWS_PROFILE) */
+  remotionAwsProfile: process.env.REMOTION_AWS_PROFILE || process.env.AWS_PROFILE || '',
+  remotionFunctionName: process.env.REMOTION_FUNCTION_NAME || '',
+  /** The bucket Remotion renders into (outputs are private objects there) */
+  remotionBucket: process.env.REMOTION_BUCKET || '',
+  // Most render Lambdas one render may use at once. Keep it under the AWS
+  // account's Lambda concurrency limit (minus one for the orchestrator), or
+  // long renders fail with "AWS Concurrency limit reached".
+  remotionMaxLambdas: Math.max(1, Number(process.env.REMOTION_MAX_LAMBDAS) || 8),
+  // Public URL of POST /api/v1/webhooks/remotion. With the secret set, Lambda
+  // renders complete via Remotion's signed webhook instead of a worker polling.
+  remotionWebhookUrl: process.env.REMOTION_WEBHOOK_URL || '',
+  remotionWebhookSecret: process.env.REMOTION_WEBHOOK_SECRET || '',
 
   // ElevenLabs
   elevenLabsApiKey: process.env.ELEVENLABS_API_KEY || '',
@@ -157,13 +210,20 @@ function checkEnvironment(): void {
 
   if (env.jwtSecret.length < 32 || env.jwtRefreshSecret.length < 32) warnings.push('JWT secrets should be at least 32 characters');
   if (env.corsOrigin === '*') warnings.push('CORS_ORIGIN is "*"; set it to the frontend origin(s)');
-  if (!env.gcsMediaBucket) warnings.push('GCS_MEDIA_BUCKET not set: uploads will fail');
-  if (!env.gcsRendersBucket) warnings.push('GCS_RENDERS_BUCKET not set: render links will not work');
-  if (!env.remotionServeUrl) warnings.push('REMOTION_SERVE_URL not set (the composition bundle): renders will fail');
   if (env.internalProxySecret && env.internalProxySecret.length < 32) warnings.push('INTERNAL_PROXY_SECRET is shorter than 32 characters; it is ignored');
+
+  const providers = checkProviders(env);
+  warnings.push(...providers.warnings);
 
   // The logger imports this module, so report with console here.
   for (const warning of warnings) console.warn(`[env] ${warning}`);
+
+  // A provider that was chosen but can't work stops every environment: there
+  // is no useful way to run with half an AWS setup.
+  if (providers.fatal.length > 0) {
+    console.error(`[env] Refusing to start: storage/render provider settings are incomplete:\n  - ${providers.fatal.join('\n  - ')}`);
+    process.exit(1);
+  }
   if (fatal.length === 0) return;
 
   if (isProduction) {
@@ -171,6 +231,75 @@ function checkEnvironment(): void {
     process.exit(1);
   }
   for (const problem of fatal) console.warn(`[env] ${problem} (allowed outside production)`);
+}
+
+/**
+ * What the chosen storage and render providers are missing. AWS choices
+ * (s3, lambda) fail fast: they are opt-in, so nothing that runs today
+ * depends on them starting with gaps. The defaults (gcs, local) keep warning
+ * only, as they always have, so an existing deploy is never blocked by this.
+ */
+export function checkProviders(e: Pick<
+  typeof env,
+  | 'storageProvider'
+  | 'renderProvider'
+  | 'gcsMediaBucket'
+  | 'gcsRendersBucket'
+  | 'awsRegion'
+  | 'awsAccessKeyId'
+  | 'awsSecretAccessKey'
+  | 's3Bucket'
+  | 's3RendersBucket'
+  | 'remotionServeUrl'
+  | 'remotionFunctionName'
+  | 'remotionBucket'
+  | 'remotionAwsAccessKeyID'
+  | 'remotionAwsSecretAccessKey'
+  | 'remotionAwsProfile'
+  | 'remotionWebhookUrl'
+  | 'remotionWebhookSecret'
+>): { fatal: string[]; warnings: string[] } {
+  const fatal: string[] = [];
+  const warnings: string[] = [];
+  const storageOk = (STORAGE_PROVIDERS as readonly string[]).includes(e.storageProvider);
+  const renderOk = (RENDER_PROVIDERS as readonly string[]).includes(e.renderProvider);
+  if (!storageOk) fatal.push(`STORAGE_PROVIDER must be one of ${STORAGE_PROVIDERS.join(', ')} (got "${e.storageProvider}")`);
+  if (!renderOk) fatal.push(`RENDER_PROVIDER must be one of ${RENDER_PROVIDERS.join(', ')} (got "${e.renderProvider}")`);
+  const local = e.renderProvider === 'local';
+  const usesAws = e.storageProvider === 's3' || e.renderProvider === 'lambda';
+
+  if (usesAws && !e.awsRegion) fatal.push('AWS_REGION is not set');
+  if (e.awsAccessKeyId && !e.awsSecretAccessKey) fatal.push('AWS_ACCESS_KEY_ID is set without AWS_SECRET_ACCESS_KEY');
+  if (!e.awsAccessKeyId && e.awsSecretAccessKey) fatal.push('AWS_SECRET_ACCESS_KEY is set without AWS_ACCESS_KEY_ID');
+
+  if (e.storageProvider === 'gcs') {
+    if (!e.gcsMediaBucket) warnings.push('GCS_MEDIA_BUCKET not set: uploads will fail');
+    if (local && !e.gcsRendersBucket) warnings.push('GCS_RENDERS_BUCKET not set: render links will not work');
+  } else if (e.storageProvider === 's3') {
+    if (!e.s3Bucket) fatal.push('S3_BUCKET is not set (STORAGE_PROVIDER=s3)');
+    if (local && !e.s3RendersBucket) fatal.push('S3_RENDERS_BUCKET is not set (STORAGE_PROVIDER=s3 with RENDER_PROVIDER=local)');
+    if (!e.awsAccessKeyId) warnings.push('AWS_ACCESS_KEY_ID not set: S3 uses the default AWS credential chain');
+  }
+
+  if (e.renderProvider === 'local') {
+    if (!e.remotionServeUrl) warnings.push('REMOTION_SERVE_URL not set (the composition bundle): renders will fail');
+  } else if (e.renderProvider === 'lambda') {
+    if (!e.remotionFunctionName) fatal.push('REMOTION_FUNCTION_NAME is not set (RENDER_PROVIDER=lambda)');
+    if (!e.remotionBucket) fatal.push('REMOTION_BUCKET is not set (RENDER_PROVIDER=lambda)');
+    if (!/^https:\/\//i.test(e.remotionServeUrl)) {
+      fatal.push('REMOTION_SERVE_URL must be the https URL of a Remotion site on S3 (RENDER_PROVIDER=lambda)');
+    }
+    // Remotion's client takes keys or a profile, not the full AWS credential chain.
+    const remotionKeys = Boolean(e.remotionAwsAccessKeyID && e.remotionAwsSecretAccessKey);
+    const appKeys = Boolean(e.awsAccessKeyId && e.awsSecretAccessKey);
+    if (!remotionKeys && !appKeys && !e.remotionAwsProfile) {
+      fatal.push('Remotion Lambda needs REMOTION_AWS_ACCESS_KEY_ID/SECRET, AWS_ACCESS_KEY_ID/SECRET or AWS_PROFILE');
+    }
+    if (Boolean(e.remotionWebhookUrl) !== Boolean(e.remotionWebhookSecret)) {
+      warnings.push('Set both REMOTION_WEBHOOK_URL and REMOTION_WEBHOOK_SECRET to complete renders by webhook; until then workers poll Lambda');
+    }
+  }
+  return { fatal, warnings };
 }
 
 if (process.env.NODE_ENV !== 'test') checkEnvironment();

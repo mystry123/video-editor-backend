@@ -1,12 +1,14 @@
 // services/renderLifecycle.service.ts
 //
-// The one place a render's outcome is decided. The render worker, the
-// maintenance sweep and the status endpoint all call these, so every path
-// charges, refunds and notifies the same way. Outcomes are conditional
+// The one place a render's outcome is decided. The render worker (local
+// renders, and Lambda renders in poll mode), the Remotion webhook (Lambda
+// renders in webhook mode), the maintenance sweep and the status endpoint all
+// call these, so every path charges, refunds and notifies the same way. Outcomes are conditional
 // transitions from "rendering": a duplicate call, a late check or a
 // completion after a cancel can't apply twice.
 
 import { RenderJob } from '../models/RenderJob';
+import { getLambdaRenderProgress, isLambdaRenderId, type LambdaRenderProgress } from './lambdaRender.service';
 import { generateThumbnailFromVideo } from './thumbnail.service';
 import { notifyRenderEvent } from './webhook.service';
 import { releaseUsage, settleUsage } from './usage.service';
@@ -151,20 +153,83 @@ export async function failRender(jobId: string, message: string, reason: string,
 // Checks
 // ---------------------------------------------------------------------------
 
-export type RenderCheck = 'failed' | 'rendering' | 'ended';
+function lambdaProgressFields(progress: LambdaRenderProgress): Record<string, unknown> {
+  // Never 100 while rendering: that's "done".
+  const fields: Record<string, unknown> = { progress: Math.min(99, Math.round((progress.progress || 0) * 100)), lastProgressAt: new Date() };
+  const copy = ['framesRendered', 'chunks', 'timeToRenderFrames', 'timeToFinish', 'timeToEncode', 'outputSizeInBytes', 'lambdasInvoked', 'renderMetadata', 'encodingStatus'] as const;
+  for (const key of copy) if (progress[key] !== undefined && progress[key] !== null) fields[key] = progress[key];
+  if (progress.errors?.length) fields.renderErrors = progress.errors;
+  if (progress.costs) {
+    fields.estimatedCost = progress.costs.accruedSoFar;
+    fields.costDisplay = progress.costs.displayCost;
+    fields.currency = progress.costs.currency;
+  }
+  return fields;
+}
+
+export type RenderCheck = 'completed' | 'failed' | 'rendering' | 'ended';
+
+type CheckableJob = { _id: any; status: string; renderId?: string | null; bucketName?: string | null; startedAt?: Date };
 
 /**
- * The render worker saves progress and applies the outcome itself. This is
- * the backstop for a worker that died: a render still "rendering" well past
- * its deadline is failed (and refunded). Safe to call any number of times.
+ * Asks Remotion Lambda how a render is doing, saves the progress and applies
+ * the outcome if it has finished (or is past its deadline). This completes a
+ * render whose webhook was lost, and is how poll mode finishes renders.
  */
-export async function checkRender(job: { _id: any; status: string; startedAt?: Date }): Promise<RenderCheck> {
-  if (job.status !== 'rendering') return 'ended';
+async function checkLambdaRender(job: CheckableJob): Promise<RenderCheck> {
+  const jobId = String(job._id);
+  if (!job.bucketName) {
+    // bucketName is hidden by default (select: false), so callers often lack it.
+    const withBucket = await RenderJob.findById(jobId).select('status renderId bucketName startedAt').lean();
+    if (!withBucket || withBucket.status !== 'rendering') return 'ended';
+    job = withBucket as CheckableJob;
+  }
+  if (!job.bucketName || !isLambdaRenderId(job.renderId)) return checkDeadline(job);
+
+  const progress = await getLambdaRenderProgress(job.renderId, job.bucketName);
+  await RenderJob.updateOne({ _id: jobId, status: 'rendering' }, lambdaProgressFields(progress));
+
+  if (progress.fatalErrorEncountered) {
+    const fatal = progress.errors?.find((e: any) => e?.isFatal) || progress.errors?.[0];
+    logger.error('Fatal render error', { jobId, error: fatal?.message });
+    return (await failRender(jobId, describeRenderError(fatal?.message), 'render_failed')) ? 'failed' : 'ended';
+  }
+  if (progress.done && progress.outputFile) {
+    return (await completeRender(jobId, { outputUrl: progress.outputFile })) ? 'completed' : 'ended';
+  }
+  // Lambda can't be stopped from here, so the deadline is applied as is.
+  if (job.startedAt && Date.now() - new Date(job.startedAt).getTime() > RENDER_DEADLINE_MS) {
+    return (await failRender(jobId, RENDER_TIMEOUT_MESSAGE, 'render_timeout')) ? 'failed' : 'ended';
+  }
+  return 'rendering';
+}
+
+/**
+ * The backstop for a worker that died mid-render: a render still
+ * "rendering" well past its deadline is failed (and refunded).
+ */
+async function checkDeadline(job: CheckableJob): Promise<RenderCheck> {
   const started = job.startedAt ? new Date(job.startedAt).getTime() : 0;
   if (started && Date.now() - started > RENDER_DEADLINE_MS + DEADLINE_GRACE_MS) {
     return (await failRender(String(job._id), RENDER_TIMEOUT_MESSAGE, 'render_timeout')) ? 'failed' : 'ended';
   }
   return 'rendering';
+}
+
+/**
+ * Checks on a rendering job. Local renders: the worker saves progress and
+ * applies the outcome itself, so this is only the deadline backstop. Lambda
+ * renders (RENDER_PROVIDER=lambda): asks Lambda and applies its outcome.
+ * Safe to call from anywhere, any number of times.
+ */
+export async function checkRender(job: CheckableJob): Promise<RenderCheck> {
+  if (job.status !== 'rendering') return 'ended';
+  // A Lambda job may not have its renderId yet (it's still starting); a local
+  // renderId means it's rendering on a worker, whatever the provider is now.
+  if (env.renderProvider === 'lambda' && (job.renderId === undefined || isLambdaRenderId(job.renderId))) {
+    return checkLambdaRender(job);
+  }
+  return checkDeadline(job);
 }
 
 const recentChecks = new Map<string, number>();
